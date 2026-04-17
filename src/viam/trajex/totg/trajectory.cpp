@@ -1207,12 +1207,13 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                 const auto current_segment = *path_cursor;
 
                 // Select acceleration for this integration step based on local situation.
-                const auto [s_ddot_desired, following] = [&]() -> std::pair<arc_acceleration, bool> {
+                const auto [s_ddot_desired,
+                            s_ddot_bounds] = [&]() -> std::tuple<arc_acceleration, std::optional<trajectory::acceleration_bounds>> {
                     if (std::exchange(current_kind, std::nullopt)) {
                         if (where.forward_accel) {
                             // A velocity switching point will never contain a forward acceleration value
                             // More information found in the find_switching_point function.
-                            return {*where.forward_accel, false};
+                            return {*where.forward_accel, std::nullopt};
                         }
                     }
 
@@ -1229,29 +1230,30 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         q_prime, q_double_prime, traj.options_.max_velocity, traj.options_.max_acceleration, traj.options_.epsilon);
 
                     // Find the upper limit for acceleration at this phase point.
-                    const auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds(
+                    const auto s_ddot_bounds = compute_acceleration_bounds(
                         q_prime, q_double_prime, current_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
 
-                    // If we are at the velocity limit, clamp our acceleration to follow it.
-                    const bool at_velocity_limit =
-                        traj.options_.epsilon.wrap(current_point.s_dot) == traj.options_.epsilon.wrap(s_dot_max_vel);
-
-                    if (at_velocity_limit) {
+                    // If we are at the velocity limit, evaluate acceleration bounds to see if we can follow it.
+                    if (traj.options_.epsilon.wrap(current_point.s_dot) == traj.options_.epsilon.wrap(s_dot_max_vel)) {
                         const auto vel_curve_slope =
                             compute_velocity_limit_derivative(q_prime, q_double_prime, traj.options_.max_velocity, traj.options_.epsilon);
 
-                        // The velocity curve could be moving up more steeply than our acceleration
-                        // bounds allow, so we need to take the smaller value. We don't need to
-                        // worry about the lower bound, because that condition should have been
-                        // handled as the "trapped" condition below and forced a switching point
-                        // search.
-                        assert(vel_curve_slope > s_ddot_min);
-                        const auto s_ddot_tangent = std::min(vel_curve_slope * current_point.s_dot, s_ddot_max);
+                        const auto s_ddot_tangent = vel_curve_slope * current_point.s_dot;
 
-                        return {s_ddot_tangent, true};
+                        // We're trapped. This isn't following, so, don't mark it as following. We will intersect the
+                        // limit curve and bisect, then try again.
+                        if (s_ddot_tangent < s_ddot_bounds.s_ddot_min) {
+                            return {s_ddot_bounds.s_ddot_min, std::nullopt};
+                        }
+
+                        // We can't escape either, so we should follow.
+                        if (s_ddot_tangent < s_ddot_bounds.s_ddot_max) {
+                            return {s_ddot_tangent, s_ddot_bounds};
+                        }
                     }
 
-                    return {s_ddot_max, false};
+                    // Either we aren't in a following case, or it looks like we can escape from here at max accel.
+                    return {s_ddot_bounds.s_ddot_max, std::nullopt};
                 }();
 
                 // Compute candidate next point via Euler integration with desired acceleration
@@ -1285,12 +1287,25 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                 auto [next_s_dot_max_acc, next_s_dot_max_vel] = compute_velocity_limits(
                     next_q_prime, next_q_double_prime, traj.options_.max_velocity, traj.options_.max_acceleration, traj.options_.epsilon);
 
-                // If we got here by following, but we clipped past the velocity limit curve, then
-                // clamp to it so we don't bisect.
-                //
-                // TODO: Do we need to check against accel bounds to do this safely? Is it still worth it if we need to?
-                if (following && next_point.s_dot > next_s_dot_max_vel) {
-                    next_point.s_dot = next_s_dot_max_vel;
+                // If bounds were returned, we are following the limit curve. Try to get on the curve, if we can.
+                if (s_ddot_bounds) {
+                    if (traj.options_.epsilon.wrap(next_point.s_dot) == traj.options_.epsilon.wrap(next_s_dot_max_vel)) {
+                        // Tangent following gave us a good estimate, clamp to the curve to avoid bisection in case of trivial overshoot.
+                        next_point.s_dot = next_s_dot_max_vel;
+                    } else {
+                        // Tangent following didn't work well. The velocity limit curve is itself curvy here. See if this s value but
+                        // clamped to the limit curve was reachable within the acceleration bounds.
+                        const auto clamped = phase_point{next_point.s, next_s_dot_max_vel};
+                        const auto slope = (clamped.s_dot - current_point.s_dot) / (clamped.s - current_point.s);
+                        const auto s_ddot_to_clamped = slope * midpoint(current_point.s_dot, clamped.s_dot);
+
+                        // If the point clamped to the velocity limit curve was reachable within the acceleration bounds, then
+                        // take that as our next integration point. Otherwise, this is true overshoot or undershoot; just let
+                        // either bisection or normal integration handle it.
+                        if (s_ddot_to_clamped >= s_ddot_bounds->s_ddot_min && s_ddot_to_clamped <= s_ddot_bounds->s_ddot_max) {
+                            next_point = clamped;
+                        }
+                    }
                 }
 
                 // If we hit the a limit curve, bisect until we have `next_point` in bounds,

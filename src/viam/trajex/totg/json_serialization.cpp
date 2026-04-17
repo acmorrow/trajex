@@ -1,5 +1,6 @@
 #include <viam/trajex/totg/json_serialization.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <ostream>
 #include <stdexcept>
@@ -255,16 +256,42 @@ std::string serialize_trajectory_to_json(const trajectory_integration_event_coll
 
     root["events"] = serialize_events(collector.events());
 
-    // When events exist beyond the last integration point (which happens on failure),
-    // sample the limit curves densely through the gap so the visualizer can show
-    // where the trajectory ran into trouble. On success all events fall within the
-    // confirmed integration range and this block is a no-op.
+    // Collect extra limit curve samples: one at each pruned point's s (so the visualizer
+    // can render them against the correct limit curve value rather than interpolating from
+    // the sparser integration point samples), plus a dense run through the gap beyond the
+    // last integration point for failed trajectories.
     if (effective && !effective->get_integration_points().empty()) {
         const auto& points = effective->get_integration_points();
         const arc_length last_s = points.back().s;
 
-        // Find the farthest s across all event types - backward starts can be well
-        // ahead of limit hits.
+        struct limit_sample {
+            arc_length s;
+            arc_velocity acc;
+            arc_velocity vel;
+        };
+        std::vector<limit_sample> samples;
+
+        auto cursor = effective->path().create_cursor();
+        auto add_sample = [&](arc_length s) {
+            cursor.seek(s);
+            const auto lim = effective->get_velocity_limits(cursor);
+            samples.push_back({s, lim.s_dot_max_acc, lim.s_dot_max_vel});
+        };
+
+        for (const auto& ev : collector) {
+            std::visit(
+                [&](auto&& e) {
+                    using T = std::decay_t<decltype(e)>;
+                    if constexpr (std::is_same_v<T, trajectory::integration_observer::splice_event>) {
+                        for (const auto& pt : e.pruned) {
+                            add_sample(pt.s);
+                        }
+                    }
+                },
+                ev);
+        }
+
+        // Find the farthest s across all event types to cover the gap region on failure.
         arc_length farthest_s = last_s;
         for (const auto& ev : collector) {
             std::visit(
@@ -298,29 +325,27 @@ std::string serialize_trajectory_to_json(const trajectory_integration_event_coll
             if (points.size() < 2 || delta <= 0.0) {
                 delta = (static_cast<double>(farthest_s) - static_cast<double>(last_s)) / 20.0;
             }
+            for (arc_length s = last_s; s < farthest_s; s += arc_length{delta}) {
+                add_sample(s);
+            }
+            add_sample(farthest_s);
+        }
+
+        if (!samples.empty()) {
+            std::ranges::sort(samples, {}, &limit_sample::s);
 
             Json::Value limit_curve_samples(Json::objectValue);
             Json::Value lcs_s(Json::arrayValue);
             Json::Value lcs_s_dot_max_acc(Json::arrayValue);
             Json::Value lcs_s_dot_max_vel(Json::arrayValue);
 
-            auto cursor = effective->path().create_cursor();
-            auto emit = [&](arc_length s) {
-                cursor.seek(s);
-                const auto limits = effective->get_velocity_limits(cursor);
-                lcs_s.append(static_cast<double>(s));
-                lcs_s_dot_max_acc.append(std::isinf(static_cast<double>(limits.s_dot_max_acc))
-                                             ? Json::Value::null
-                                             : Json::Value{static_cast<double>(limits.s_dot_max_acc)});
-                lcs_s_dot_max_vel.append(std::isinf(static_cast<double>(limits.s_dot_max_vel))
-                                             ? Json::Value::null
-                                             : Json::Value{static_cast<double>(limits.s_dot_max_vel)});
-            };
-
-            for (arc_length s = last_s; s < farthest_s; s += arc_length{delta}) {
-                emit(s);
+            for (const auto& sample : samples) {
+                lcs_s.append(static_cast<double>(sample.s));
+                lcs_s_dot_max_acc.append(std::isinf(static_cast<double>(sample.acc)) ? Json::Value::null
+                                                                                     : Json::Value{static_cast<double>(sample.acc)});
+                lcs_s_dot_max_vel.append(std::isinf(static_cast<double>(sample.vel)) ? Json::Value::null
+                                                                                     : Json::Value{static_cast<double>(sample.vel)});
             }
-            emit(farthest_s);
 
             limit_curve_samples["s"] = std::move(lcs_s);
             limit_curve_samples["s_dot_max_acc"] = std::move(lcs_s_dot_max_acc);

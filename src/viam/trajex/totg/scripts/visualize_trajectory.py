@@ -52,10 +52,33 @@ def plot_phase_plane(data, ax):
 
     ax.plot(s, s_dot, 'g-', linewidth=2, label='Trajectory', zorder=3)
 
-    # Limit curves at each integration point.
-    s_for_limits = data['integration_points']['s']
-    s_dot_max_acc = data['integration_points']['s_dot_max_acc']
-    s_dot_max_vel = data['integration_points']['s_dot_max_vel']
+    # Build limit curve data by merging integration point samples with any within-range
+    # limit_curve_samples (e.g. at pruned point s-values). Points beyond the last
+    # integration point s form the gap overlay, rendered dashed.
+    last_s = float(s[-1]) if len(s) > 0 else float('inf')
+
+    lcs = data.get('limit_curve_samples')
+    lcs_gap_s, lcs_gap_acc, lcs_gap_vel = [], [], []
+
+    merged = list(zip(
+        [float(x) for x in data['integration_points']['s']],
+        data['integration_points']['s_dot_max_acc'],
+        data['integration_points']['s_dot_max_vel'],
+    ))
+    if lcs:
+        for s_val, acc_val, vel_val in zip(lcs['s'], lcs['s_dot_max_acc'], lcs['s_dot_max_vel']):
+            s_f = float(s_val)
+            if s_f <= last_s:
+                merged.append((s_f, acc_val, vel_val))
+            else:
+                lcs_gap_s.append(s_f)
+                lcs_gap_acc.append(acc_val)
+                lcs_gap_vel.append(vel_val)
+
+    merged.sort(key=lambda x: x[0])
+    s_for_limits = [x[0] for x in merged]
+    s_dot_max_acc = [x[1] for x in merged]
+    s_dot_max_vel = [x[2] for x in merged]
 
     # Calculate y-axis limits ensuring trajectory visibility:
     # - Trajectory should occupy at least 60% of vertical space
@@ -66,8 +89,7 @@ def plot_phase_plane(data, ax):
     finite_s_dot = s_dot[np.isfinite(s_dot)]
     max_traj_velocity = max(finite_s_dot) if len(finite_s_dot) > 0 else 0.0
 
-    # Collect all limit curve values (from integration points and, for failed trajectories,
-    # from limit_curve_samples at the hit positions)
+    # Collect all limit curve values (merged main data plus gap samples)
     limit_values = []
     for val in s_dot_max_acc:
         if val is not None:
@@ -75,15 +97,12 @@ def plot_phase_plane(data, ax):
     for val in s_dot_max_vel:
         if val is not None:
             limit_values.append(float(val))
-
-    lcs = data.get('limit_curve_samples')
-    if lcs:
-        for val in lcs['s_dot_max_acc']:
-            if val is not None:
-                limit_values.append(float(val))
-        for val in lcs['s_dot_max_vel']:
-            if val is not None:
-                limit_values.append(float(val))
+    for val in lcs_gap_acc:
+        if val is not None:
+            limit_values.append(float(val))
+    for val in lcs_gap_vel:
+        if val is not None:
+            limit_values.append(float(val))
 
     if limit_values:
         max_limit = max(limit_values)
@@ -182,15 +201,12 @@ def plot_phase_plane(data, ax):
         label = 'Velocity Limit' if i == 0 else None
         ax.plot(seg_s, seg_v, 'orange', linewidth=1.5, label=label, zorder=2)
 
-    # For failed trajectories: extend limit curve lines through the gap between the last
-    # integration point and the farthest limit hit position. Dashed to distinguish from
-    # the confirmed limit curve region sampled at integration points.
-    if lcs:
-        lcs_s_vals = [float(x) for x in lcs['s']]
-
+    # For failed trajectories: extend limit curve lines through the gap beyond the last
+    # integration point. Dashed to distinguish from the confirmed region.
+    if lcs_gap_s:
         def build_gap_segments(v_vals):
             segs, curr_s, curr_v = [], [], []
-            for s_val, v in zip(lcs_s_vals, v_vals):
+            for s_val, v in zip(lcs_gap_s, v_vals):
                 if v is not None:
                     curr_s.append(s_val)
                     curr_v.append(float(v))
@@ -201,9 +217,9 @@ def plot_phase_plane(data, ax):
                 segs.append((curr_s, curr_v))
             return segs
 
-        for seg_s, seg_v in build_gap_segments(lcs['s_dot_max_acc']):
+        for seg_s, seg_v in build_gap_segments(lcs_gap_acc):
             ax.plot(seg_s, seg_v, 'r--', linewidth=1.5, alpha=0.6, zorder=2)
-        for seg_s, seg_v in build_gap_segments(lcs['s_dot_max_vel']):
+        for seg_s, seg_v in build_gap_segments(lcs_gap_vel):
             ax.plot(seg_s, seg_v, color='orange', linestyle='--', linewidth=1.5, alpha=0.6, zorder=2)
 
     # Interior switching points (not start/end)
