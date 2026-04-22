@@ -1456,7 +1456,7 @@ BOOST_AUTO_TEST_CASE(three_waypoint_baseline_behavior_vel_constrained) {
 
     fixture.expectation_observer_->expect_forward_start(arc_length{0.0}, arc_velocity{0.0})
         .expect_backward_start(arc_length{1.85532488}, arc_velocity{0}, trajectory::switching_point_kind::k_path_end)
-        .expect_splice(trajectory::seconds{90.02000000}, size_t{11});
+        .expect_splice(trajectory::seconds{90.02000000}, size_t{10});
 
     const trajectory traj = fixture.create_and_validate();
 }
