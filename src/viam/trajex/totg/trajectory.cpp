@@ -527,7 +527,7 @@ std::optional<switching_point> find_acceleration_switching_point(path::cursor cu
 
             // If we found a valid extremum switching point, return it
             if (extremal_switching_point) {
-                return *extremal_switching_point;
+                return extremal_switching_point;
             }
         }
 
@@ -658,11 +658,10 @@ std::optional<switching_point> find_acceleration_switching_point(path::cursor cu
 
 // Selects between two optional switching points: returns the earlier one, or if at the same
 // location (within epsilon), returns the one with lower velocity (more conservative). If only
-// one is engaged, returns it. If neither is engaged, returns nullopt. Returns a reference to
-// one of its arguments.
-const std::optional<switching_point>& select_switching_point(const std::optional<switching_point>& sp1,
-                                                             const std::optional<switching_point>& sp2,
-                                                             class epsilon epsilon) {
+// one is engaged, returns it. If neither is engaged, returns nullopt.
+std::optional<switching_point> select_switching_point(const std::optional<switching_point>& sp1,
+                                                      const std::optional<switching_point>& sp2,
+                                                      class epsilon epsilon) {
     if (!sp1) {
         return sp2;
     }
