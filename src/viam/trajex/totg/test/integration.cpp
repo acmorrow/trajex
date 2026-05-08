@@ -2573,6 +2573,10 @@ BOOST_AUTO_TEST_CASE(gp12_splice_point_infeasible_acceleration) {
     generate_trajectory_from_replay_file("gp12_splice_point_infeasible-20260305.trajex-totg-replay.json");
 }
 
+BOOST_AUTO_TEST_CASE(lab_sander_05072026_backward_integration_exceeded_limit_curve) {
+    generate_trajectory_from_replay_file("lab_sander_backward_integration_exceeded-20260507.trajex-totg-replay.json");
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // replay_regression_tests
 
 BOOST_AUTO_TEST_SUITE(random_trajectory_tests)
