@@ -38,6 +38,13 @@ option(VIAM_TRAJEX_ENABLE_TOOLS "Enable the planner, replay, and serialization t
 # Defaults ON for standalone builds, OFF for FetchContent consumers.
 option(VIAM_TRAJEX_ENABLE_SERVICE "Enable the Viam MLModel service layer (requires VIAM_TRAJEX_ENABLE_TOOLS)" ${VIAM_TRAJEX_STANDALONE_BUILD})
 
+# Enable the trajex C ABI shim layer (`viam::trajex::capi`): library `viam-trajex-capi`
+# plus header `src/viam/trajex/capi/capi.h`. Provides stable, language-agnostic entry
+# points to the TOTG generator for non-C++ callers (cgo, FFI, etc.). Links only against
+# the core TOTG library; no additional dependencies beyond what trajex core already
+# pulls in. Defaults ON in all configurations so CI exercises the surface continuously.
+option(VIAM_TRAJEX_ENABLE_CAPI "Enable the C ABI shim" ON)
+
 # Compile trajex targets with `-Wall -Werror` (and the rest of the project's strict
 # warning set) on supported compilers. Defaults ON for standalone builds, OFF for
 # FetchContent consumers so a parent project's looser warning posture isn't broken by
@@ -382,6 +389,34 @@ endif()
 add_library(viam::trajex::service ALIAS viam-trajex-service)
 
 
+# C ABI shim layer: language-agnostic boundary for non-C++ callers (cgo / FFI). Only
+# contains meaningful content if `VIAM_TRAJEX_ENABLE_CAPI` is truthy. Links only the
+# core TOTG library; no fallback/orchestration is needed (TOTG handles reversals
+# natively), so the planner abstraction is sidestepped and the tools layer is not a
+# dependency.
+if (VIAM_TRAJEX_ENABLE_CAPI)
+  add_library(viam-trajex-capi)
+  target_sources(viam-trajex-capi
+    PRIVATE
+      src/viam/trajex/capi/capi.cpp
+  )
+  target_include_directories(viam-trajex-capi
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+      $<INSTALL_INTERFACE:include>
+  )
+  target_link_libraries(viam-trajex-capi
+    PRIVATE
+      viam::trajex::totg
+  )
+  apply_wall_werror(viam-trajex-capi)
+else()
+  add_library(viam-trajex-capi INTERFACE)
+endif()
+
+add_library(viam::trajex::capi ALIAS viam-trajex-capi)
+
+
 #
 # Service executable target
 #
@@ -590,6 +625,16 @@ if (VIAM_TRAJEX_ENABLE_SERVICE)
   install(
     TARGETS
     viam-trajex-service
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
+if (VIAM_TRAJEX_ENABLE_CAPI)
+  install(
+    TARGETS
+    viam-trajex-capi
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
