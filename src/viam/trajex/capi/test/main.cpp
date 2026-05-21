@@ -96,9 +96,9 @@ void populate_simple_totg_inputs(viam_trajex_tensor_map_t* inputs) {
     const std::vector<std::size_t> dof_dims = {2};
     BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_f64(
                            inputs, viam_trajex_totg_key_velocity_limits_rads_per_sec, 1, dof_dims.data(), velocity_limits.data()) == 0);
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_f64(
-                           inputs, viam_trajex_totg_key_acceleration_limits_rads_per_sec2, 1, dof_dims.data(), acceleration_limits.data()) ==
-                       0);
+    BOOST_TEST_REQUIRE(
+        viam_trajex_tensor_map_insert_f64(
+            inputs, viam_trajex_totg_key_acceleration_limits_rads_per_sec2, 1, dof_dims.data(), acceleration_limits.data()) == 0);
 
     BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs, viam_trajex_totg_key_path_tolerance_delta_rads, 0.01) == 0);
 }
@@ -404,7 +404,8 @@ BOOST_AUTO_TEST_CASE(totg_generate_wrong_dtype_on_required_input) {
     populate_simple_totg_inputs(inputs.get());
     const std::vector<std::int64_t> bad = {0, 1, 2, 3};
     const std::vector<std::size_t> dims = {2, 2};
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_i64(inputs.get(), viam_trajex_totg_key_waypoints_rads, 2, dims.data(), bad.data()) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_i64(inputs.get(), viam_trajex_totg_key_waypoints_rads, 2, dims.data(), bad.data()) ==
+                       0);
 
     const auto outputs = make_map();
     const auto result = run_totg(inputs.get(), outputs.get());
@@ -422,8 +423,8 @@ BOOST_AUTO_TEST_CASE(totg_generate_wrong_shape_on_velocity_limits) {
     populate_simple_totg_inputs(inputs.get());
     const std::vector<double> bad = {1.0, 1.0, 1.0};
     const std::vector<std::size_t> dims = {3};
-    BOOST_TEST_REQUIRE(
-        viam_trajex_tensor_map_insert_f64(inputs.get(), viam_trajex_totg_key_velocity_limits_rads_per_sec, 1, dims.data(), bad.data()) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_f64(
+                           inputs.get(), viam_trajex_totg_key_velocity_limits_rads_per_sec, 1, dims.data(), bad.data()) == 0);
 
     const auto outputs = make_map();
     const auto result = run_totg(inputs.get(), outputs.get());
