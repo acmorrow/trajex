@@ -173,6 +173,7 @@ if (VIAM_TRAJEX_ENABLE_SERVICE)
     PATCH_COMMAND find ./src/viam/api -name "*.pb.h" -type f -exec rm {} +
     FIND_PACKAGE_ARGS ${VIAM_TRAJEX_VIAMCPPSDK_VERSION_MINIMUM} CONFIG COMPONENTS viamsdk
   )
+  set(VIAMCPPSDK_USE_WALL_WERROR OFF)
   FetchContent_MakeAvailable(viam-cpp-sdk)
 endif()
 
