@@ -10,8 +10,8 @@ import (
 
 	"go.viam.com/test"
 
-	trajex "github.com/viamrobotics/trajex/go"
-	"github.com/viamrobotics/trajex/go/totg"
+	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/totg"
 )
 
 func TestSchemaKeysMatchABI(t *testing.T) {

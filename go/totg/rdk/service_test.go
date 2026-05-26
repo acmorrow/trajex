@@ -16,8 +16,8 @@ import (
 	"go.viam.com/test"
 	"gorgonia.org/tensor"
 
-	"github.com/viamrobotics/trajex/go/totg"
-	trajexrdk "github.com/viamrobotics/trajex/go/totg/rdk"
+	"github.com/viam-modules/trajex/go/totg"
+	trajexrdk "github.com/viam-modules/trajex/go/totg/rdk"
 )
 
 func newTestService(t *testing.T) *trajexrdk.Service {

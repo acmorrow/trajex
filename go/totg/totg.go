@@ -1,7 +1,7 @@
 //go:build !windows && !no_cgo
 
 // Package totg exposes the trajex TOTG (time-optimal trajectory generation)
-// algorithm as a Go API, layered on top of github.com/viamrobotics/trajex's
+// algorithm as a Go API, layered on top of github.com/viam-modules/trajex's
 // TensorMap.
 package totg
 
@@ -18,7 +18,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	trajex "github.com/viamrobotics/trajex/go"
+	trajex "github.com/viam-modules/trajex/go"
 )
 
 // cStr converts the address of a cgo-exposed `extern const char foo[]`

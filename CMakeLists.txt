@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(trajex VERSION 0.1.0
   DESCRIPTION "Viam trajectory execution library"
-  HOMEPAGE_URL https://github.com/viamrobotics/trajex
+  HOMEPAGE_URL https://github.com/viam-modules/trajex
   LANGUAGES C CXX
 )
 

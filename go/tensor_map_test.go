@@ -7,7 +7,7 @@ import (
 
 	"go.viam.com/test"
 
-	"github.com/viamrobotics/trajex/go"
+	"github.com/viam-modules/trajex/go"
 )
 
 func TestNewCloseRoundTrip(t *testing.T) {
