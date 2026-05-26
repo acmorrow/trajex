@@ -19,15 +19,8 @@ import (
 	"github.com/pkg/errors"
 
 	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/internal/capi"
 )
-
-// cStr converts the address of a cgo-exposed `extern const char foo[]`
-// symbol into a Go string. cgo declares such externs as zero-length arrays
-// (`[0]C.char`), so direct indexing fails at compile time; reading them as
-// C strings requires reinterpreting their address as `*C.char`.
-func cStr(p unsafe.Pointer) string {
-	return C.GoString((*C.char)(p))
-}
 
 // Schema key string constants for inputs and outputs honored by Generate.
 // Initialized at package init from the cgo-exposed viam_trajex_totg_key_*
@@ -48,17 +41,17 @@ var (
 )
 
 func init() {
-	KeyWaypointsRads = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_waypoints_rads))
-	KeyVelocityLimitsRadsPerSec = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocity_limits_rads_per_sec))
-	KeyAccelerationLimitsRadsPerSec2 = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_acceleration_limits_rads_per_sec2))
-	KeyPathToleranceDeltaRads = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_path_tolerance_delta_rads))
-	KeyPathColinearizationRatio = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_path_colinearization_ratio))
-	KeyWaypointDeduplicationToleranceRads = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_waypoint_deduplication_tolerance_rads))
-	KeyTrajectorySamplingFreqHz = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_trajectory_sampling_freq_hz))
-	KeySampleTimesSec = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_sample_times_sec))
-	KeyConfigurationsRads = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_configurations_rads))
-	KeyVelocitiesRadsPerSec = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocities_rads_per_sec))
-	KeyAccelerationsRadsPerSec2 = cStr(unsafe.Pointer(&C.viam_trajex_totg_key_accelerations_rads_per_sec2))
+	KeyWaypointsRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_waypoints_rads))
+	KeyVelocityLimitsRadsPerSec = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocity_limits_rads_per_sec))
+	KeyAccelerationLimitsRadsPerSec2 = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_acceleration_limits_rads_per_sec2))
+	KeyPathToleranceDeltaRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_path_tolerance_delta_rads))
+	KeyPathColinearizationRatio = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_path_colinearization_ratio))
+	KeyWaypointDeduplicationToleranceRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_waypoint_deduplication_tolerance_rads))
+	KeyTrajectorySamplingFreqHz = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_trajectory_sampling_freq_hz))
+	KeySampleTimesSec = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_sample_times_sec))
+	KeyConfigurationsRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_configurations_rads))
+	KeyVelocitiesRadsPerSec = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocities_rads_per_sec))
+	KeyAccelerationsRadsPerSec2 = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_accelerations_rads_per_sec2))
 }
 
 // Generate computes a time-parameterized trajectory from the named-tensor

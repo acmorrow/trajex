@@ -8,8 +8,6 @@ package trajex
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../src/viam/trajex/capi
-#cgo darwin LDFLAGS: -L${SRCDIR}/../build/local -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../build/local
-#cgo linux  LDFLAGS: -L${SRCDIR}/../build/local -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../build/local
 
 #include <stdlib.h>
 #include "capi.h"
@@ -20,18 +18,8 @@ import (
 	"unsafe"
 
 	"github.com/pkg/errors"
-)
 
-// Dtype is the element type carried in a TensorMap value. Integer values
-// match the VIAM_TRAJEX_DTYPE_* constants in the C ABI and are stable
-// across releases.
-type Dtype int
-
-const (
-	// DtypeF64 represents IEEE 754 double-precision floating point.
-	DtypeF64 Dtype = 1
-	// DtypeI64 represents signed 64-bit two's-complement integer.
-	DtypeI64 Dtype = 2
+	"github.com/viam-modules/trajex/go/internal/capi"
 )
 
 // TensorMap is a Go-owned handle to a CAPI tensor map. The underlying C
@@ -174,7 +162,7 @@ func (m *TensorMap) ViewFloat64s(key string) (shape []uint64, data []float64, ok
 	default:
 		return nil, nil, false, errors.Errorf("trajex: view %q failed", key)
 	}
-	if Dtype(dtype) != DtypeF64 {
+	if capi.Dtype(dtype) != capi.DtypeF64 {
 		return nil, nil, false, errors.Errorf(
 			"trajex: view %q: expected dtype f64, got dtype %d", key, int(dtype))
 	}
@@ -209,7 +197,7 @@ func (m *TensorMap) ViewInt64s(key string) (shape []uint64, data []int64, ok boo
 	default:
 		return nil, nil, false, errors.Errorf("trajex: view %q failed", key)
 	}
-	if Dtype(dtype) != DtypeI64 {
+	if capi.Dtype(dtype) != capi.DtypeI64 {
 		return nil, nil, false, errors.Errorf(
 			"trajex: view %q: expected dtype i64, got dtype %d", key, int(dtype))
 	}
