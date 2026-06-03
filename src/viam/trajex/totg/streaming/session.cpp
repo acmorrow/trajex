@@ -17,9 +17,10 @@ namespace viam::trajex::totg::streaming {
 
 namespace {
 
-// Materializes a row-view of a waypoint as a freshly-allocated 1D xarray. Used to hold
-// onto the session's "last received waypoint" (for seam validation) and the rebase seed
-// pose, both of which need stable storage independent of the source accumulator.
+// These helpers materialize accumulator row-views and 2D-xarray slices into owned xarrays.
+// The session needs stable storage independent of caller-provided accumulators because
+// waypoint_accumulator holds row-views into source arrays it does not own.
+
 xt::xarray<double> view_to_xarray_(const waypoint_accumulator::value_type& row) {
     const std::size_t dof = row.shape(0);
     xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
@@ -29,7 +30,6 @@ xt::xarray<double> view_to_xarray_(const waypoint_accumulator::value_type& row) 
     return result;
 }
 
-// Copies the row at `row` of a 2D xarray into a freshly-allocated 1D xarray.
 xt::xarray<double> row_to_xarray_(const xt::xarray<double>& arr, std::size_t row) {
     const std::size_t dof = arr.shape(1);
     xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
@@ -39,8 +39,6 @@ xt::xarray<double> row_to_xarray_(const xt::xarray<double>& arr, std::size_t row
     return result;
 }
 
-// Returns true iff the row-view `a` and 1D xarray `b` have the same shape and every
-// element compares bit-exactly equal.
 bool rows_bit_exact_(const waypoint_accumulator::value_type& a, const xt::xarray<double>& b) {
     if (a.shape(0) != b.shape(0)) {
         return false;
@@ -53,7 +51,6 @@ bool rows_bit_exact_(const waypoint_accumulator::value_type& a, const xt::xarray
     return true;
 }
 
-// Copies an entire waypoint accumulator into a freshly-allocated (size, dof) xarray.
 xt::xarray<double> accumulator_to_xarray_(const waypoint_accumulator& batch) {
     const std::size_t count = batch.size();
     const std::size_t dof = batch.dof();
@@ -67,7 +64,6 @@ xt::xarray<double> accumulator_to_xarray_(const waypoint_accumulator& batch) {
     return result;
 }
 
-// Copies rows [from .. batch.size()) of `batch` into a freshly-allocated 2D xarray.
 // Caller must ensure batch.size() > from.
 xt::xarray<double> accumulator_tail_to_xarray_(const waypoint_accumulator& batch, std::size_t from) {
     const std::size_t count = batch.size() - from;
@@ -82,8 +78,6 @@ xt::xarray<double> accumulator_tail_to_xarray_(const waypoint_accumulator& batch
     return result;
 }
 
-// Returns a fresh xarray formed by appending rows [batch_from .. batch.size()) of `batch`
-// after all rows of `base`. Result has shape (base.shape(0) + batch.size() - batch_from, dof).
 xt::xarray<double> concat_active_with_batch_tail_(const xt::xarray<double>& base,
                                                   const waypoint_accumulator& batch,
                                                   std::size_t batch_from) {
@@ -105,8 +99,6 @@ xt::xarray<double> concat_active_with_batch_tail_(const xt::xarray<double>& base
     return result;
 }
 
-// Returns a fresh xarray formed by stacking the terminal pose (a 1D xarray of length dof)
-// as the first row, followed by the rows of every staged batch in order.
 xt::xarray<double> stack_terminal_and_staged_(const xt::xarray<double>& terminal_pose, const std::vector<xt::xarray<double>>& staged) {
     const std::size_t dof = terminal_pose.shape(0);
     std::size_t total_rows = 1;
@@ -264,15 +256,15 @@ std::optional<struct trajectory::sample> session::sample_one_() {
 
     auto local_sample = sampler_->next(*cursor_);
     if (!local_sample) {
-        // Active's sampler is exhausted. Rebase if there is staged work; otherwise the
-        // session has drained and the caller sees a short return.
         if (staged_batches_.empty()) {
             return std::nullopt;
         }
         rebase_();
         local_sample = sampler_->next(*cursor_);
         if (!local_sample) {
-            // Pathological: the freshly-built sampler immediately exhausts. Treat as drained.
+            // Defensive: the freshly-built sampler should always have at least one sample
+            // to emit, but if a degenerate trajectory somehow has none, treat as drained
+            // rather than infinite-looping.
             return std::nullopt;
         }
     }
