@@ -495,7 +495,6 @@ if (VIAM_TRAJEX_BUILD_TESTS)
       src/viam/trajex/totg/test/uniform_sampler.cpp
       src/viam/trajex/totg/test/integration.cpp
       src/viam/trajex/totg/test/observers.cpp
-      src/viam/trajex/totg/test/streaming_session.cpp
     )
 
     target_link_libraries(viam-trajex-totg-test
@@ -514,6 +513,30 @@ if (VIAM_TRAJEX_BUILD_TESTS)
     add_test(
       NAME viam-trajex-totg-test
       COMMAND viam-trajex-totg-test
+    )
+
+
+    # Separate binary for streaming session tests so they can be looped fast
+    # without paying the integration suite's runtime.
+    add_executable(viam-trajex-totg-streaming-test)
+
+    target_sources(viam-trajex-totg-streaming-test
+      PRIVATE
+      src/viam/trajex/totg/streaming/test/main.cpp
+      src/viam/trajex/totg/streaming/test/session.cpp
+    )
+
+    target_link_libraries(viam-trajex-totg-streaming-test
+      PRIVATE
+      viam::trajex::totg
+      Boost::boost
+    )
+
+    apply_wall_werror(viam-trajex-totg-streaming-test)
+
+    add_test(
+      NAME viam-trajex-totg-streaming-test
+      COMMAND viam-trajex-totg-streaming-test
     )
 
 

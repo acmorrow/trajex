@@ -32,4 +32,8 @@ trajectory::seconds session::active_epoch() const noexcept {
     return trajectory::seconds{0.0};
 }
 
+std::size_t session::trajectory_generation_count() const noexcept {
+    return 0;
+}
+
 }  // namespace viam::trajex::totg::streaming

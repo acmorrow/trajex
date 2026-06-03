@@ -130,6 +130,22 @@ class session {
     ///
     trajectory::seconds active_epoch() const noexcept;
 
+    ///
+    /// Returns the cumulative number of trajectories the session has produced.
+    ///
+    /// Increments by one each time a new trajectory becomes active: at the first
+    /// successful `extend()`, on each pivot, and on each rebase. Stays unchanged on
+    /// stage (no new active is produced), on failed extends, and on sampling calls
+    /// that do not cross a chain boundary. Returns zero for a fresh session.
+    ///
+    /// @note This is an internal implementation detail exposed for testing. The
+    ///       counter exists so tests can witness pivot and rebase transitions
+    ///       without relying on object-address comparisons of `active_trajectory()`,
+    ///       which need not change across a transition.
+    /// @return Number of trajectories the session has built
+    ///
+    std::size_t trajectory_generation_count() const noexcept;
+
    private:
     // Stub members. Full storage shape is settled during implementation.
     path::options path_options_;
