@@ -159,7 +159,7 @@ streaming::session fresh_session() {
 
 BOOST_AUTO_TEST_SUITE(streaming_session_tests)
 
-// === A. Empty session behavior ===
+BOOST_AUTO_TEST_SUITE(empty_session)
 
 BOOST_AUTO_TEST_CASE(fresh_session_has_zero_current_time) {
     auto sess = fresh_session();
@@ -185,7 +185,9 @@ BOOST_AUTO_TEST_CASE(fresh_session_sample_at_least_returns_empty) {
     BOOST_CHECK(samples.empty());
 }
 
-// === B. First extend & construction error paths ===
+BOOST_AUTO_TEST_SUITE_END()  // empty_session
+
+BOOST_AUTO_TEST_SUITE(first_extend)
 
 BOOST_AUTO_TEST_CASE(first_extend_with_valid_batch_creates_active_trajectory) {
     auto sess = fresh_session();
@@ -224,7 +226,9 @@ BOOST_AUTO_TEST_CASE(first_extend_with_dof_mismatch_against_options_propagates_i
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0u);
 }
 
-// === C. Sampling primitives ===
+BOOST_AUTO_TEST_SUITE_END()  // first_extend
+
+BOOST_AUTO_TEST_SUITE(sampling_primitives)
 
 BOOST_AUTO_TEST_CASE(sample_next_default_emits_one_sample) {
     auto sess = fresh_session();
@@ -276,7 +280,9 @@ BOOST_AUTO_TEST_CASE(current_time_tracks_last_emitted_sample) {
     BOOST_CHECK_EQUAL(sess.current_time().count(), samples.back().time.count());
 }
 
-// === D. Single-trajectory equivalence (cornerstone) ===
+BOOST_AUTO_TEST_SUITE_END()  // sampling_primitives
+
+BOOST_AUTO_TEST_SUITE(single_trajectory_equivalence)
 
 BOOST_AUTO_TEST_CASE(session_with_one_extend_matches_direct_trajectory) {
     auto sess = fresh_session();
@@ -291,7 +297,9 @@ BOOST_AUTO_TEST_CASE(session_with_one_extend_matches_direct_trajectory) {
     check_samples_match_reference(samples, reference);
 }
 
-// === E. Seam validation ===
+BOOST_AUTO_TEST_SUITE_END()  // single_trajectory_equivalence
+
+BOOST_AUTO_TEST_SUITE(seam_validation)
 
 BOOST_AUTO_TEST_CASE(second_extend_with_seam_mismatch_throws_invalid_argument) {
     auto sess = fresh_session();
@@ -332,7 +340,9 @@ BOOST_AUTO_TEST_CASE(second_extend_with_bit_exact_seam_matches_merged_reference)
     check_samples_match_reference(samples, reference);
 }
 
-// === F. Pivot semantics ===
+BOOST_AUTO_TEST_SUITE_END()  // seam_validation
+
+BOOST_AUTO_TEST_SUITE(pivot)
 
 BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_watermark_pivots) {
     auto sess = fresh_session();
@@ -382,7 +392,9 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_current_time) {
     BOOST_CHECK_EQUAL(sess.current_time().count(), pre_extend_time.count());
 }
 
-// === G. Stage and rebase ===
+BOOST_AUTO_TEST_SUITE_END()  // pivot
+
+BOOST_AUTO_TEST_SUITE(stage_and_rebase)
 
 BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
     // Sampling all the way to the active trajectory's terminal pushes the watermark
@@ -451,14 +463,18 @@ BOOST_AUTO_TEST_CASE(rebase_seam_configuration_is_continuous) {
     // Confirm rebase actually happened.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
 
-    // TODO(empirical-timing): The first post-rebase sample lives a partial dt into the new
-    // trajectory, so the configuration won't equal the terminal pose exactly -- it sits
-    // within an integration step of it. Use a coarse tolerance here until the implementation
-    // settles and we can dial this in empirically.
-    BOOST_CHECK(configs_match(post_rebase_samples.front().configuration, terminal_sample.configuration, 0.05));
+    // The first post-rebase sample lives exactly one sample period into the new trajectory
+    // by construction of quantized_starting_at(new_active, rate, sample_period_). So its
+    // configuration differs from the terminal pose by the motion the trajectory plans over
+    // one sample period starting from rest: bounded above by 0.5 * max_accel * sample_period_^2
+    // = 0.5 * 5.0 * 0.01^2 = 2.5e-4 rad per joint, with blend curvature potentially adding
+    // a bit. 1e-3 leaves an order of magnitude of margin; tighter would be brittle.
+    BOOST_CHECK(configs_match(post_rebase_samples.front().configuration, terminal_sample.configuration, 1e-3));
 }
 
-// === H. Multi-extend stress ===
+BOOST_AUTO_TEST_SUITE_END()  // stage_and_rebase
+
+BOOST_AUTO_TEST_SUITE(multi_extend)
 
 BOOST_AUTO_TEST_CASE(repeated_admissible_extends_compose_into_long_trajectory) {
     // Three extends in a row, each issued while the watermark is at zero (so each pivots).
@@ -524,7 +540,9 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), duration_before_stage.count());
 }
 
-// === I. End-of-stream behavior ===
+BOOST_AUTO_TEST_SUITE_END()  // multi_extend
+
+BOOST_AUTO_TEST_SUITE(end_of_stream)
 
 BOOST_AUTO_TEST_CASE(sample_next_after_exhaustion_returns_empty) {
     auto sess = fresh_session();
@@ -565,5 +583,71 @@ BOOST_AUTO_TEST_CASE(extend_after_exhaustion_eventually_starts_new_chain) {
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_GE(sess.active_epoch().count(), initial_duration.count());
 }
+
+BOOST_AUTO_TEST_SUITE_END()  // end_of_stream
+
+// These tests pin down a property that uniform_sampler's quantized-for-duration mode is
+// supposed to give us at the trajectory level, and that the session needs to preserve
+// across rebases: the last emitted sample lands exactly at the active trajectory's
+// terminal, with zero joint velocity and zero joint acceleration by the rest-to-rest
+// invariant.
+BOOST_AUTO_TEST_SUITE(terminal_sampling)
+
+BOOST_AUTO_TEST_CASE(final_emitted_sample_in_single_trajectory_lies_at_terminal_at_rest) {
+    auto sess = fresh_session();
+    const pinned_waypoints wp(six_waypoints());
+    sess.extend(wp.accumulator());
+
+    const auto duration = sess.active_trajectory()->duration();
+    const auto samples = sess.sample_at_least(duration);
+    BOOST_REQUIRE(!samples.empty());
+
+    const auto& last = samples.back();
+
+    BOOST_CHECK_EQUAL(last.time.count(), duration.count());
+    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2u);
+    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2u);
+    for (std::size_t i = 0; i < last.velocity.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(last.velocity(i), 0.0);
+    }
+    for (std::size_t i = 0; i < last.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(last.acceleration(i), 0.0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(final_emitted_sample_after_rebase_lies_at_rebased_terminal_at_rest) {
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_at_least(initial_duration);  // drain the initial chain through its terminal
+
+    // Stage an extension by extending while the watermark sits at the terminal.
+    const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(extension.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+
+    // Drain the rest with a generous horizon to fire the rebase and run out the new chain.
+    const auto post_rebase_samples = sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_REQUIRE(!post_rebase_samples.empty());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+
+    const auto& last = post_rebase_samples.back();
+    const auto rebased_duration = sess.active_trajectory()->duration();
+    const auto rebased_epoch = sess.active_epoch();
+
+    BOOST_CHECK_EQUAL(last.time.count(), (rebased_epoch + rebased_duration).count());
+    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2u);
+    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2u);
+    for (std::size_t i = 0; i < last.velocity.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(last.velocity(i), 0.0);
+    }
+    for (std::size_t i = 0; i < last.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(last.acceleration(i), 0.0);
+    }
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // terminal_sampling
 
 BOOST_AUTO_TEST_SUITE_END()  // streaming_session_tests

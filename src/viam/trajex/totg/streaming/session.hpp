@@ -12,6 +12,7 @@
 
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
+#include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/hertz.hpp>
 
@@ -43,8 +44,11 @@ class session {
     ///
     /// @param path_options Path-construction options (used for every trajectory built by the session)
     /// @param trajectory_options Trajectory-construction options (used for every trajectory built by the session)
-    /// @param sample_rate Target sample rate. Currently consumed by an internal `uniform_sampler`;
-    ///                    the parameter shape is expected to evolve when sampler injection is added.
+    /// @param sample_rate Nominal sample rate. Each underlying trajectory's sampler is
+    ///                    quantized to land its last sample exactly on the trajectory's
+    ///                    duration, so per-sample spacing approximates 1 / sample_rate
+    ///                    with small per-trajectory drift. The parameter shape may
+    ///                    change when sampler injection lands.
     ///
     session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate);
 
@@ -159,7 +163,8 @@ class session {
     trajectory::options trajectory_options_;
     types::hertz sample_rate_;
 
-    // Derived from sample_rate_, cached at construction.
+    // Nominal sample period, derived once from sample_rate_. Used to compute the
+    // per-trajectory starting offset at pivot and rebase transitions.
     trajectory::seconds sample_period_;
 
     // The waypoint set that built `active_`. Stable owned storage required because
@@ -174,17 +179,26 @@ class session {
     // transitions instead of comparing pointers.
     std::optional<trajectory> active_;
 
+    // Per-trajectory uniform sampler and cursor. Reconstructed at every transition
+    // (first build, pivot, rebase) so each new active is sampled on a fresh grid
+    // aligned to its own duration. Both reference active_; reconstruction order is
+    // always (assign active_) -> (emplace sampler_/cursor_) so the cursor points at
+    // the freshly-installed trajectory.
+    std::optional<uniform_sampler> sampler_;
+    std::optional<trajectory::cursor> cursor_;
+
     // Global time at which active_'s local t=0 sits. Pivots leave this unchanged; rebases
     // advance it by the prior active's duration.
     trajectory::seconds epoch_{0.0};
 
-    // Index of the next sample to produce. Sample N is emitted at global time
-    // N * sample_period_. Initialized to zero; advances on every successful sample.
-    std::size_t next_sample_index_{0};
-
     // Global time of the most recently emitted sample, or zero if no sample has been
     // emitted yet. Cached for the current_time() accessor.
     trajectory::seconds current_time_{0.0};
+
+    // Cumulative count of samples emitted. Used at pivot time to distinguish "no
+    // samples yet" (start new sampler at offset 0) from "samples emitted" (start at
+    // current local time + one sample period).
+    std::size_t emitted_sample_count_{0};
 
     // Batches received while locked-out, each pre-stripped of its seam point. Drained
     // into the new active during the next rebase.

@@ -167,9 +167,15 @@ void session::extend(const waypoint_accumulator& batch) {
         auto new_waypoints = accumulator_to_xarray_(batch);
         auto new_active = build_trajectory_from_(new_waypoints);  // throws on validation failure
 
+        // Build the sampler for the new active before committing any moves so the throw
+        // contract (state unchanged on failure) is preserved.
+        uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, trajectory::seconds{0.0});
+
         last_waypoint_ = row_to_xarray_(new_waypoints, new_waypoints.shape(0) - 1);
         active_waypoints_ = std::move(new_waypoints);
         active_ = std::move(new_active);
+        cursor_.emplace(active_->create_cursor());
+        sampler_.emplace(std::move(new_sampler));
         generation_count_ = 1;
         return;
     }
@@ -206,11 +212,21 @@ void session::extend(const waypoint_accumulator& batch) {
     const auto branch_local = find_branch_local_time_(*active_, candidate);
     const auto branch_global = epoch_ + branch_local;
 
-    const bool can_pivot = (next_sample_index_ == 0) || (branch_global > current_time_);
+    const bool can_pivot = (emitted_sample_count_ == 0) || (branch_global > current_time_);
     if (can_pivot) {
+        // Compute where the new sampler should start. If no samples have been emitted, the
+        // new sampler picks up at local time zero (same as the first build). Otherwise it
+        // picks up one sample period past the last emitted sample's local time, so the
+        // sample grid stays approximately uniform across the pivot.
+        const auto starting_local_time =
+            (emitted_sample_count_ == 0) ? trajectory::seconds{0.0} : (current_time_ - epoch_) + sample_period_;
+        uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
+
         last_waypoint_ = row_to_xarray_(new_waypoints, new_waypoints.shape(0) - 1);
         active_waypoints_ = std::move(new_waypoints);
         active_ = std::move(candidate);
+        cursor_.emplace(active_->create_cursor());
+        sampler_.emplace(std::move(new_sampler));
         ++generation_count_;
     } else {
         staged_batches_.push_back(accumulator_tail_to_xarray_(batch, 1));
@@ -226,40 +242,45 @@ void session::rebase_() {
     auto new_waypoints = stack_terminal_and_staged_(terminal_sample.configuration, staged_batches_);
     auto new_active = build_trajectory_from_(new_waypoints);
 
+    // The previous chain's terminal was emitted as its last sample at global time
+    // (epoch_ + old_duration). Start the new sampler one nominal sample period past that
+    // so the seam shows no duplicate sample and the inter-trajectory gap is exactly
+    // sample_period_.
+    uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, sample_period_);
+
     active_waypoints_ = std::move(new_waypoints);
     active_ = std::move(new_active);
+    cursor_.emplace(active_->create_cursor());
+    sampler_.emplace(std::move(new_sampler));
     epoch_ = epoch_ + old_duration;
     staged_batches_.clear();
     ++generation_count_;
 }
 
 std::optional<struct trajectory::sample> session::sample_one_() {
-    if (!active_) {
+    if (!sampler_ || !cursor_) {
         return std::nullopt;
     }
 
-    const auto candidate_global = sample_period_ * static_cast<double>(next_sample_index_);
-    auto candidate_local = candidate_global - epoch_;
-
-    if (candidate_local > active_->duration()) {
-        // Active is exhausted at this index. Rebase if there is staged work; otherwise
-        // the session has drained and the caller sees a short return.
+    auto local_sample = sampler_->next(*cursor_);
+    if (!local_sample) {
+        // Active's sampler is exhausted. Rebase if there is staged work; otherwise the
+        // session has drained and the caller sees a short return.
         if (staged_batches_.empty()) {
             return std::nullopt;
         }
         rebase_();
-        candidate_local = candidate_global - epoch_;
-        if (candidate_local > active_->duration()) {
-            // Pathological case: the new trajectory does not cover the requested index.
-            // Treat as drained; the caller will see fewer samples than requested.
+        local_sample = sampler_->next(*cursor_);
+        if (!local_sample) {
+            // Pathological: the freshly-built sampler immediately exhausts. Treat as drained.
             return std::nullopt;
         }
     }
 
-    auto sample = active_->sample(candidate_local);
-    sample.time = candidate_global;
-    ++next_sample_index_;
-    current_time_ = candidate_global;
+    auto sample = std::move(*local_sample);
+    sample.time = sample.time + epoch_;
+    ++emitted_sample_count_;
+    current_time_ = sample.time;
     return sample;
 }
 
