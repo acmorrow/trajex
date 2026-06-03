@@ -262,6 +262,7 @@ target_sources(viam-trajex-totg
     src/viam/trajex/trajex.cpp
     src/viam/trajex/totg/observers.cpp
     src/viam/trajex/totg/path.cpp
+    src/viam/trajex/totg/streaming/session.cpp
     src/viam/trajex/totg/trajectory.cpp
     src/viam/trajex/totg/uniform_sampler.cpp
     src/viam/trajex/totg/waypoint_accumulator.cpp
@@ -494,6 +495,7 @@ if (VIAM_TRAJEX_BUILD_TESTS)
       src/viam/trajex/totg/test/uniform_sampler.cpp
       src/viam/trajex/totg/test/integration.cpp
       src/viam/trajex/totg/test/observers.cpp
+      src/viam/trajex/totg/test/streaming_session.cpp
     )
 
     target_link_libraries(viam-trajex-totg-test
