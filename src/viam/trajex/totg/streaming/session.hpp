@@ -1,7 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <vector>
+
+#if __has_include(<xtensor/containers/xarray.hpp>)
+#include <xtensor/containers/xarray.hpp>
+#else
+#include <xtensor/xarray.hpp>
+#endif
 
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
@@ -147,10 +154,65 @@ class session {
     std::size_t trajectory_generation_count() const noexcept;
 
    private:
-    // Stub members. Full storage shape is settled during implementation.
+    // Construction-time configuration. Reused for every trajectory the session builds.
     path::options path_options_;
     trajectory::options trajectory_options_;
     types::hertz sample_rate_;
+
+    // Derived from sample_rate_, cached at construction.
+    trajectory::seconds sample_period_;
+
+    // The waypoint set that built `active_`. Stable owned storage required because
+    // waypoint_accumulator stores row-views into the array it was constructed over.
+    // Empty (shape (0,)) until the first successful extend; thereafter shape (N, dof).
+    xt::xarray<double> active_waypoints_;
+
+    // The currently active trajectory, or nullopt before the first successful extend.
+    // Storage in std::optional is in-place, so `&*active_` is a stable address across
+    // pivot and rebase (which both proceed by move-assigning a freshly-built trajectory
+    // into this optional). Tests must use trajectory_generation_count() to witness
+    // transitions instead of comparing pointers.
+    std::optional<trajectory> active_;
+
+    // Global time at which active_'s local t=0 sits. Pivots leave this unchanged; rebases
+    // advance it by the prior active's duration.
+    trajectory::seconds epoch_{0.0};
+
+    // Index of the next sample to produce. Sample N is emitted at global time
+    // N * sample_period_. Initialized to zero; advances on every successful sample.
+    std::size_t next_sample_index_{0};
+
+    // Global time of the most recently emitted sample, or zero if no sample has been
+    // emitted yet. Cached for the current_time() accessor.
+    trajectory::seconds current_time_{0.0};
+
+    // Batches received while locked-out, each pre-stripped of its seam point. Drained
+    // into the new active during the next rebase.
+    std::vector<xt::xarray<double>> staged_batches_;
+
+    // The most recently received waypoint, against which the next extend's seam is
+    // bit-exactly validated. Empty (shape (0,)) before the first extend.
+    xt::xarray<double> last_waypoint_;
+
+    // Cumulative count of trajectories the session has installed as active. Increments
+    // on first build, on each pivot, and on each rebase.
+    std::size_t generation_count_{0};
+
+    // Builds a trajectory from the given waypoints xarray, threading through path::options
+    // and trajectory::options. Throws on validation failure inside path::create or
+    // trajectory::create; the session's state is unaffected because this is called before
+    // any member is mutated.
+    trajectory build_trajectory_from_(const xt::xarray<double>& waypoints) const;
+
+    // Emits a single sample, advancing the cursor. Triggers a rebase if the active is
+    // exhausted at the next-sample index and staging is non-empty. Returns nullopt when
+    // the session is fully drained.
+    std::optional<struct trajectory::sample> sample_one_();
+
+    // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, advances
+    // the epoch by the prior active's duration, clears staging, and increments the
+    // generation count. Preconditions: active_ holds a value, staged_batches_ is non-empty.
+    void rebase_();
 };
 
 }  // namespace viam::trajex::totg::streaming

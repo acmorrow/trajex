@@ -1,39 +1,311 @@
 #include <viam/trajex/totg/streaming/session.hpp>
 
+#include <algorithm>
+#include <cstddef>
+#include <ranges>
 #include <stdexcept>
 #include <utility>
+#include <vector>
+
+#if __has_include(<xtensor/views/xview.hpp>)
+#include <xtensor/views/xview.hpp>
+#else
+#include <xtensor/xview.hpp>
+#endif
 
 namespace viam::trajex::totg::streaming {
 
-session::session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate)
-    : path_options_(std::move(path_options)), trajectory_options_(std::move(trajectory_options)), sample_rate_(sample_rate) {}
+namespace {
 
-void session::extend(const waypoint_accumulator& /*batch*/) {
-    throw std::logic_error("viam::trajex::totg::streaming::session::extend is not yet implemented");
+// Materializes a row-view of a waypoint as a freshly-allocated 1D xarray. Used to hold
+// onto the session's "last received waypoint" (for seam validation) and the rebase seed
+// pose, both of which need stable storage independent of the source accumulator.
+xt::xarray<double> view_to_xarray_(const waypoint_accumulator::value_type& row) {
+    const std::size_t dof = row.shape(0);
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
+    for (std::size_t j = 0; j < dof; ++j) {
+        result(j) = row(j);
+    }
+    return result;
+}
+
+// Copies the row at `row` of a 2D xarray into a freshly-allocated 1D xarray.
+xt::xarray<double> row_to_xarray_(const xt::xarray<double>& arr, std::size_t row) {
+    const std::size_t dof = arr.shape(1);
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
+    for (std::size_t j = 0; j < dof; ++j) {
+        result(j) = arr(row, j);
+    }
+    return result;
+}
+
+// Returns true iff the row-view `a` and 1D xarray `b` have the same shape and every
+// element compares bit-exactly equal.
+bool rows_bit_exact_(const waypoint_accumulator::value_type& a, const xt::xarray<double>& b) {
+    if (a.shape(0) != b.shape(0)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < b.shape(0); ++i) {
+        if (a(i) != b(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Copies an entire waypoint accumulator into a freshly-allocated (size, dof) xarray.
+xt::xarray<double> accumulator_to_xarray_(const waypoint_accumulator& batch) {
+    const std::size_t count = batch.size();
+    const std::size_t dof = batch.dof();
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{count, dof});
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& row = batch.at(i);
+        for (std::size_t j = 0; j < dof; ++j) {
+            result(i, j) = row(j);
+        }
+    }
+    return result;
+}
+
+// Copies rows [from .. batch.size()) of `batch` into a freshly-allocated 2D xarray.
+// Caller must ensure batch.size() > from.
+xt::xarray<double> accumulator_tail_to_xarray_(const waypoint_accumulator& batch, std::size_t from) {
+    const std::size_t count = batch.size() - from;
+    const std::size_t dof = batch.dof();
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{count, dof});
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& row = batch.at(from + i);
+        for (std::size_t j = 0; j < dof; ++j) {
+            result(i, j) = row(j);
+        }
+    }
+    return result;
+}
+
+// Returns a fresh xarray formed by appending rows [batch_from .. batch.size()) of `batch`
+// after all rows of `base`. Result has shape (base.shape(0) + batch.size() - batch_from, dof).
+xt::xarray<double> concat_active_with_batch_tail_(const xt::xarray<double>& base,
+                                                  const waypoint_accumulator& batch,
+                                                  std::size_t batch_from) {
+    const std::size_t n_base = base.shape(0);
+    const std::size_t n_add = batch.size() - batch_from;
+    const std::size_t dof = base.shape(1);
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{n_base + n_add, dof});
+    for (std::size_t i = 0; i < n_base; ++i) {
+        for (std::size_t j = 0; j < dof; ++j) {
+            result(i, j) = base(i, j);
+        }
+    }
+    for (std::size_t i = 0; i < n_add; ++i) {
+        const auto& row = batch.at(batch_from + i);
+        for (std::size_t j = 0; j < dof; ++j) {
+            result(n_base + i, j) = row(j);
+        }
+    }
+    return result;
+}
+
+// Returns a fresh xarray formed by stacking the terminal pose (a 1D xarray of length dof)
+// as the first row, followed by the rows of every staged batch in order.
+xt::xarray<double> stack_terminal_and_staged_(const xt::xarray<double>& terminal_pose, const std::vector<xt::xarray<double>>& staged) {
+    const std::size_t dof = terminal_pose.shape(0);
+    std::size_t total_rows = 1;
+    for (const auto& s : staged) {
+        total_rows += s.shape(0);
+    }
+    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{total_rows, dof});
+    for (std::size_t j = 0; j < dof; ++j) {
+        result(0, j) = terminal_pose(j);
+    }
+    std::size_t row = 1;
+    for (const auto& s : staged) {
+        for (std::size_t i = 0; i < s.shape(0); ++i) {
+            for (std::size_t j = 0; j < dof; ++j) {
+                result(row, j) = s(i, j);
+            }
+            ++row;
+        }
+    }
+    return result;
+}
+
+// Returns the local time of the first divergence between `active`'s integration points
+// and `candidate`'s integration points, walking them in lockstep. If `active`'s entire
+// integration-point sequence is a prefix of `candidate`'s, returns the active's duration
+// (the branch effectively sits at the end of active).
+trajectory::seconds find_branch_local_time_(const trajectory& active, const trajectory& candidate) {
+    const auto& active_pts = active.get_integration_points();
+    const auto& candidate_pts = candidate.get_integration_points();
+    const auto result = std::ranges::mismatch(active_pts, candidate_pts);
+    if (result.in1 == active_pts.end()) {
+        return active.duration();
+    }
+    return result.in1->time;
+}
+
+}  // namespace
+
+session::session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate)
+    : path_options_(std::move(path_options)),
+      trajectory_options_(std::move(trajectory_options)),
+      sample_rate_(sample_rate),
+      sample_period_(1.0 / sample_rate.value) {}
+
+trajectory session::build_trajectory_from_(const xt::xarray<double>& waypoints) const {
+    const waypoint_accumulator acc(waypoints);
+    path p = path::create(acc, path_options_);
+    return trajectory::create(std::move(p), trajectory_options_);
+}
+
+void session::extend(const waypoint_accumulator& batch) {
+    if (batch.size() == 0) {
+        throw std::invalid_argument("streaming::session::extend: batch is empty");
+    }
+
+    // First extend: build the initial trajectory directly from the batch.
+    if (!active_) {
+        auto new_waypoints = accumulator_to_xarray_(batch);
+        auto new_active = build_trajectory_from_(new_waypoints);  // throws on validation failure
+
+        last_waypoint_ = row_to_xarray_(new_waypoints, new_waypoints.shape(0) - 1);
+        active_waypoints_ = std::move(new_waypoints);
+        active_ = std::move(new_active);
+        generation_count_ = 1;
+        return;
+    }
+
+    // Subsequent extends: validate DOF and seam before touching any state.
+    if (batch.dof() != active_waypoints_.shape(1)) {
+        throw std::invalid_argument("streaming::session::extend: DOF mismatch");
+    }
+    if (!rows_bit_exact_(batch.at(0), last_waypoint_)) {
+        throw std::invalid_argument("streaming::session::extend: seam mismatch");
+    }
+
+    const std::size_t post_seam_count = batch.size() - 1;
+
+    // Already locked-out: skip the candidate build, just record the new waypoints in staging.
+    if (!staged_batches_.empty()) {
+        if (post_seam_count > 0) {
+            staged_batches_.push_back(accumulator_tail_to_xarray_(batch, 1));
+        }
+        last_waypoint_ = view_to_xarray_(batch.at(batch.size() - 1));
+        return;
+    }
+
+    // Seam-only batch with no new waypoints: nothing to do.
+    if (post_seam_count == 0) {
+        return;
+    }
+
+    // Build a candidate trajectory over (active waypoints) + (batch sans seam) and decide
+    // whether the pivot is admissible by branch-detecting against the current active.
+    auto new_waypoints = concat_active_with_batch_tail_(active_waypoints_, batch, 1);
+    auto candidate = build_trajectory_from_(new_waypoints);  // throws on validation failure
+
+    const auto branch_local = find_branch_local_time_(*active_, candidate);
+    const auto branch_global = epoch_ + branch_local;
+
+    const bool can_pivot = (next_sample_index_ == 0) || (branch_global > current_time_);
+    if (can_pivot) {
+        last_waypoint_ = row_to_xarray_(new_waypoints, new_waypoints.shape(0) - 1);
+        active_waypoints_ = std::move(new_waypoints);
+        active_ = std::move(candidate);
+        ++generation_count_;
+    } else {
+        staged_batches_.push_back(accumulator_tail_to_xarray_(batch, 1));
+        last_waypoint_ = view_to_xarray_(batch.at(batch.size() - 1));
+    }
+}
+
+void session::rebase_() {
+    // Preconditions: active_ holds, staged_batches_ non-empty.
+    const auto old_duration = active_->duration();
+    const auto terminal_sample = active_->sample(old_duration);
+
+    auto new_waypoints = stack_terminal_and_staged_(terminal_sample.configuration, staged_batches_);
+    auto new_active = build_trajectory_from_(new_waypoints);
+
+    active_waypoints_ = std::move(new_waypoints);
+    active_ = std::move(new_active);
+    epoch_ = epoch_ + old_duration;
+    staged_batches_.clear();
+    ++generation_count_;
+}
+
+std::optional<struct trajectory::sample> session::sample_one_() {
+    if (!active_) {
+        return std::nullopt;
+    }
+
+    const auto candidate_global = sample_period_ * static_cast<double>(next_sample_index_);
+    auto candidate_local = candidate_global - epoch_;
+
+    if (candidate_local > active_->duration()) {
+        // Active is exhausted at this index. Rebase if there is staged work; otherwise
+        // the session has drained and the caller sees a short return.
+        if (staged_batches_.empty()) {
+            return std::nullopt;
+        }
+        rebase_();
+        candidate_local = candidate_global - epoch_;
+        if (candidate_local > active_->duration()) {
+            // Pathological case: the new trajectory does not cover the requested index.
+            // Treat as drained; the caller will see fewer samples than requested.
+            return std::nullopt;
+        }
+    }
+
+    auto sample = active_->sample(candidate_local);
+    sample.time = candidate_global;
+    ++next_sample_index_;
+    current_time_ = candidate_global;
+    return sample;
+}
+
+std::vector<struct trajectory::sample> session::sample_next(std::size_t n) {
+    std::vector<struct trajectory::sample> result;
+    result.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        auto opt = sample_one_();
+        if (!opt) {
+            break;
+        }
+        result.push_back(std::move(*opt));
+    }
+    return result;
+}
+
+std::vector<struct trajectory::sample> session::sample_at_least(trajectory::seconds horizon) {
+    const auto target = current_time_ + horizon;
+    std::vector<struct trajectory::sample> result;
+    while (true) {
+        auto opt = sample_one_();
+        if (!opt) {
+            break;
+        }
+        result.push_back(std::move(*opt));
+        if (current_time_ >= target) {
+            break;
+        }
+    }
+    return result;
 }
 
 trajectory::seconds session::current_time() const noexcept {
-    return trajectory::seconds{0.0};
-}
-
-std::vector<struct trajectory::sample> session::sample_next(std::size_t /*n*/) {
-    throw std::logic_error("viam::trajex::totg::streaming::session::sample_next is not yet implemented");
-}
-
-std::vector<struct trajectory::sample> session::sample_at_least(trajectory::seconds /*horizon*/) {
-    throw std::logic_error("viam::trajex::totg::streaming::session::sample_at_least is not yet implemented");
+    return current_time_;
 }
 
 const trajectory* session::active_trajectory() const noexcept {
-    return nullptr;
+    return active_ ? &(*active_) : nullptr;
 }
 
 trajectory::seconds session::active_epoch() const noexcept {
-    return trajectory::seconds{0.0};
+    return epoch_;
 }
 
 std::size_t session::trajectory_generation_count() const noexcept {
-    return 0;
+    return generation_count_;
 }
 
 }  // namespace viam::trajex::totg::streaming
