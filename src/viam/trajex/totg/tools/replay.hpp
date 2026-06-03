@@ -48,18 +48,27 @@ class replay_planner : public planner<replay_receiver> {
     ///
     /// Constructs a replay planner from a replay record stream.
     ///
-    /// @param in Stream containing a canonical JSON replay record
-    /// @throws std::runtime_error if the stream cannot be parsed or required fields are missing
+    /// When `prefix_waypoint_count` is supplied, the planner runs over only the
+    /// first N waypoints of the record instead of the full set. This is intended
+    /// for tests that compare a trajectory generated from a full waypoint set
+    /// against one generated from a prefix of the same set.
     ///
-    static replay_planner create(std::istream& in);
+    /// @param in Stream containing a canonical JSON replay record
+    /// @param prefix_waypoint_count Optional cap on the number of leading waypoints to use
+    /// @throws std::runtime_error if the stream cannot be parsed or required fields are missing
+    /// @throws std::out_of_range if `prefix_waypoint_count` is zero or exceeds the record's waypoint count
+    ///
+    static replay_planner create(std::istream& in, std::optional<std::size_t> prefix_waypoint_count = std::nullopt);
 
     ///
     /// Constructs a replay planner from a replay record file path.
     ///
     /// @param path Path to a canonical JSON replay record file
+    /// @param prefix_waypoint_count Optional cap on the number of leading waypoints to use; see stream overload
     /// @throws std::runtime_error if the file cannot be opened or parsed
+    /// @throws std::out_of_range if `prefix_waypoint_count` is zero or exceeds the record's waypoint count
     ///
-    static replay_planner create(const std::filesystem::path& path);
+    static replay_planner create(const std::filesystem::path& path, std::optional<std::size_t> prefix_waypoint_count = std::nullopt);
 
     ///
     /// Returns the event collector populated during execute().

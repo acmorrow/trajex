@@ -96,8 +96,23 @@ replay_planner::replay_planner(config cfg, std::unique_ptr<trajectory_integratio
     mutable_config().observer = collector_.get();
 }
 
-replay_planner replay_planner::create(std::istream& in) {
+replay_planner replay_planner::create(std::istream& in, std::optional<std::size_t> prefix_waypoint_count) {
     auto [cfg, waypoints] = parse_replay_record(in);
+
+    // Validate prefix request up-front so callers see a clear error before the planner is constructed.
+    // When a prefix shorter than the full set is requested, materialize the leading rows into a fresh
+    // xarray and drop the original. The remainder of this function then runs unchanged against `waypoints`.
+    const auto total_waypoints = waypoints.shape(0);
+    if (prefix_waypoint_count.has_value()) {
+        if (*prefix_waypoint_count == 0 || *prefix_waypoint_count > total_waypoints) {
+            throw std::out_of_range("replay_planner prefix_waypoint_count " + std::to_string(*prefix_waypoint_count) +
+                                    " is out of range for a record with " + std::to_string(total_waypoints) + " waypoints");
+        }
+        if (*prefix_waypoint_count < total_waypoints) {
+            xt::xarray<double> prefix = xt::view(waypoints, xt::range(std::size_t{0}, *prefix_waypoint_count), xt::all());
+            waypoints = std::move(prefix);
+        }
+    }
 
     auto collector = std::make_unique<trajectory_integration_event_collector>();
     replay_planner p(std::move(cfg), std::move(collector));
@@ -112,12 +127,12 @@ replay_planner replay_planner::create(std::istream& in) {
     return p;
 }
 
-replay_planner replay_planner::create(const std::filesystem::path& path) {
+replay_planner replay_planner::create(const std::filesystem::path& path, std::optional<std::size_t> prefix_waypoint_count) {
     std::ifstream in(path);
     if (!in) {
         throw std::runtime_error("failed to open replay record file: " + path.string());
     }
-    return create(in);
+    return create(in, prefix_waypoint_count);
 }
 
 const trajectory_integration_event_collector& replay_planner::collector() const noexcept {
