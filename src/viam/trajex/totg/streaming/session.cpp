@@ -1,6 +1,7 @@
 #include <viam/trajex/totg/streaming/session.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <ranges>
 #include <stdexcept>
@@ -137,11 +138,22 @@ trajectory::seconds find_branch_local_time_(const trajectory& active, const traj
 
 }  // namespace
 
+namespace {
+
+trajectory::seconds validate_sample_rate_and_compute_period_(types::hertz sample_rate) {
+    if (!std::isfinite(sample_rate.value) || sample_rate.value <= 0.0) {
+        throw std::invalid_argument("streaming::session: sample_rate must be positive and finite");
+    }
+    return trajectory::seconds{1.0 / sample_rate.value};
+}
+
+}  // namespace
+
 session::session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate)
     : path_options_(std::move(path_options)),
       trajectory_options_(std::move(trajectory_options)),
       sample_rate_(sample_rate),
-      sample_period_(1.0 / sample_rate.value) {}
+      sample_period_(validate_sample_rate_and_compute_period_(sample_rate)) {}
 
 trajectory session::build_trajectory_from_(const xt::xarray<double>& waypoints) const {
     const waypoint_accumulator acc(waypoints);
