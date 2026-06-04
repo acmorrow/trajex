@@ -1429,8 +1429,15 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             return integration_observer::limit_hit_event{
                                 .breach = breach_point, .s_dot_max_acc = breach_s_dot_max_acc, .s_dot_max_vel = breach_s_dot_max_vel};
                         }
+
                         // The trajectory naturally escapes back to the feasible region. This was
-                        // numerical overshoot from a source point.
+                        // numerical overshoot from a source point. Commit the breach as our next
+                        // position and clamp s_dot to the acceleration limit, mirroring the
+                        // velocity-case escape patterns below. Without committing here the outer
+                        // integrator's delta_s would be zero (since the bisection collapsed
+                        // next_point onto current_point) and the loop would spin indefinitely.
+                        next_point = breach_point;
+                        next_point.s_dot = breach_s_dot_max_acc;
                         return std::nullopt;
                     }
 
