@@ -81,9 +81,17 @@ std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(std::ist
     planner_base::config cfg;
     cfg.velocity_limits = std::move(velocity_limits);
     cfg.acceleration_limits = std::move(acceleration_limits);
-    cfg.path_blend_tolerance = require("path_tolerance_delta_rads").asDouble();
+    if (root.isMember("path_tolerance_delta_rads")) {
+        cfg.path_blend_tolerance = root["path_tolerance_delta_rads"].asDouble();
+    }
     if (root.isMember("path_colinearization_ratio")) {
         cfg.colinearization_ratio = root["path_colinearization_ratio"].asDouble();
+    }
+    if (root.isMember("min_blend_curvature")) {
+        cfg.min_blend_curvature = root["min_blend_curvature"].asDouble();
+    }
+    if (root.isMember("max_blend_curvature")) {
+        cfg.max_blend_curvature = root["max_blend_curvature"].asDouble();
     }
 
     return {std::move(cfg), std::move(waypoints)};

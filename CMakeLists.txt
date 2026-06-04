@@ -532,6 +532,10 @@ if (VIAM_TRAJEX_BUILD_TESTS)
       Boost::boost
     )
 
+    target_compile_definitions(viam-trajex-totg-streaming-test PRIVATE
+      VIAM_TRAJEX_STREAMING_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/viam/trajex/totg/streaming/test/data"
+    )
+
     apply_wall_werror(viam-trajex-totg-streaming-test)
 
     add_test(

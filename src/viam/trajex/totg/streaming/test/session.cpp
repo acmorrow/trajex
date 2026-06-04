@@ -472,6 +472,25 @@ BOOST_AUTO_TEST_CASE(rebase_seam_configuration_is_continuous) {
     BOOST_CHECK(configs_match(post_rebase_samples.front().configuration, terminal_sample.configuration, 1e-3));
 }
 
+BOOST_AUTO_TEST_CASE(rebase_seam_time_keeps_flowing_forward) {
+    // Across a rebase the epoch advances and the new active trajectory has a fresh
+    // local-time origin. The session must add the new epoch when reporting sample
+    // times so the global clock keeps moving forward rather than restarting near zero.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_at_least(initial_duration);
+    const auto pre_rebase_time = sess.current_time();
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(extension.accumulator());
+    const auto post_rebase_samples = sess.sample_next(1);
+    BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_CHECK_GT(post_rebase_samples.front().time.count(), pre_rebase_time.count());
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // stage_and_rebase
 
 BOOST_AUTO_TEST_SUITE(multi_extend)
