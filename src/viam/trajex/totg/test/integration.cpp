@@ -2580,6 +2580,15 @@ BOOST_AUTO_TEST_CASE(lab_sander_05072026_backward_integration_exceeded_limit_cur
     generate_trajectory_from_replay_file("lab_sander_backward_integration_exceeded-20260507.trajex-totg-replay.json");
 }
 
+BOOST_AUTO_TEST_CASE(vik_182_forward_integration_acc_natural_escape_stall) {
+    // Reproducer for a production hang in which forward integration entered an
+    // unbounded loop after the limit-hit bisection collapsed next_point onto
+    // current_point and the acceleration-curve "natural escape" classification
+    // returned nullopt without committing the breach. Tripwire for any future
+    // change that resurrects that path.
+    generate_trajectory_from_replay_file("VIK-182-stall.trajex-totg-replay.json");
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // replay_regression_tests
 
 BOOST_AUTO_TEST_SUITE(random_trajectory_tests)
