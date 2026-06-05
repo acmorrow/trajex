@@ -21,10 +21,6 @@
 
 namespace viam::trajex::totg {
 
-namespace {
-
-// Parse a JSON replay record stream into a planner_base::config and a waypoints
-// xarray. Throws std::runtime_error on malformed input.
 std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(std::istream& in) {
     Json::Value root;
     const Json::CharReaderBuilder reader;
@@ -97,7 +93,13 @@ std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(std::ist
     return {std::move(cfg), std::move(waypoints)};
 }
 
-}  // namespace
+std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in) {
+        throw std::runtime_error("failed to open replay record file: " + path.string());
+    }
+    return parse_replay_record(in);
+}
 
 replay_planner::replay_planner(config cfg, std::unique_ptr<trajectory_integration_event_collector> collector)
     : planner<replay_receiver>(std::move(cfg)), collector_(std::move(collector)) {

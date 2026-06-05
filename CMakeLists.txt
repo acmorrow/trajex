@@ -544,6 +544,27 @@ if (VIAM_TRAJEX_BUILD_TESTS)
     )
 
 
+    # Streaming-session simulator. Standalone binary, not wired into ctest --
+    # see orbsanding-streaming-session-simulation-plan.md.
+    add_executable(viam-trajex-totg-streaming-sim-exe)
+
+    target_sources(viam-trajex-totg-streaming-sim-exe
+      PRIVATE
+      src/viam/trajex/totg/streaming/test/sim/streaming_sim_main.cpp
+    )
+
+    set_target_properties(viam-trajex-totg-streaming-sim-exe PROPERTIES
+      OUTPUT_NAME viam-trajex-totg-streaming-sim
+    )
+
+    target_link_libraries(viam-trajex-totg-streaming-sim-exe
+      PRIVATE
+      viam::trajex::totg::tools
+    )
+
+    apply_wall_werror(viam-trajex-totg-streaming-sim-exe)
+
+
     add_executable(viam-trajex-totg-tools-test)
 
     target_sources(viam-trajex-totg-tools-test

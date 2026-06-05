@@ -100,15 +100,15 @@ xt::xarray<double> concat_active_with_batch_tail_(const xt::xarray<double>& base
     return result;
 }
 
-xt::xarray<double> stack_terminal_and_staged_(const xt::xarray<double>& terminal_pose, const std::vector<xt::xarray<double>>& staged) {
-    const std::size_t dof = terminal_pose.shape(0);
+xt::xarray<double> stack_anchor_and_staged_(const xt::xarray<double>& anchor, const std::vector<xt::xarray<double>>& staged) {
+    const std::size_t dof = anchor.shape(0);
     std::size_t total_rows = 1;
     for (const auto& s : staged) {
         total_rows += s.shape(0);
     }
     xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{total_rows, dof});
     for (std::size_t j = 0; j < dof; ++j) {
-        result(0, j) = terminal_pose(j);
+        result(0, j) = anchor(j);
     }
     std::size_t row = 1;
     for (const auto& s : staged) {
@@ -240,10 +240,17 @@ void session::extend(const waypoint_accumulator& batch) {
 
 void session::rebase_() {
     // Preconditions: active_ holds, staged_batches_ non-empty.
+    //
+    // The new chain's first waypoint is the active's last waypoint (the literal end of
+    // the prior chain's waypoint sequence), not the sampled terminal pose. Sampling the
+    // trajectory at its duration would produce a value that's mathematically equal to
+    // the last waypoint for a rest-to-rest trajectory but may differ by float drift,
+    // which trajex's path-coalescing tolerances can interact pathologically with. Keep
+    // the streaming layer in the waypoint domain.
     const auto old_duration = active_->duration();
-    const auto terminal_sample = active_->sample(old_duration);
+    auto anchor = row_to_xarray_(active_waypoints_, active_waypoints_.shape(0) - 1);
 
-    auto new_waypoints = stack_terminal_and_staged_(terminal_sample.configuration, staged_batches_);
+    auto new_waypoints = stack_anchor_and_staged_(anchor, staged_batches_);
     auto new_active = build_trajectory_from_(new_waypoints);
 
     // The previous chain's terminal was emitted as its last sample at global time

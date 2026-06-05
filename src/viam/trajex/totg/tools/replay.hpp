@@ -4,12 +4,39 @@
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <utility>
+
+#if __has_include(<xtensor/containers/xarray.hpp>)
+#include <xtensor/containers/xarray.hpp>
+#else
+#include <xtensor/xarray.hpp>
+#endif
 
 #include <viam/trajex/totg/observers.hpp>
 #include <viam/trajex/totg/tools/planner.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 
 namespace viam::trajex::totg {
+
+///
+/// Parses a canonical replay JSON record from `in` into a planner config and
+/// a (num_waypoints, dof) xarray of waypoints. Exposed for use by tools and
+/// tests that want the raw record without instantiating a planner.
+///
+/// @param in Stream containing a canonical JSON replay record
+/// @return Pair of (config, waypoints)
+/// @throws std::runtime_error if the stream cannot be parsed or required fields are missing
+///
+std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(std::istream& in);
+
+///
+/// File-path overload of parse_replay_record.
+///
+/// @param path Path to a canonical JSON replay record file
+/// @return Pair of (config, waypoints)
+/// @throws std::runtime_error if the file cannot be opened or parsed
+///
+std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(const std::filesystem::path& path);
 
 ///
 /// Receiver for replay_planner. Holds the most recently generated
