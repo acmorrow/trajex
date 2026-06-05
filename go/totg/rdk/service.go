@@ -114,7 +114,7 @@ func (s *Service) Metadata(_ context.Context) (mlmodel.MLMetadata, error) {
 			{
 				Name:        totg.KeyTrajectorySamplingFreqHz,
 				Description: "Output sample rate, in Hz [scalar]",
-				DataType:    "int64",
+				DataType:    "float64",
 				Shape:       []int{1},
 			},
 		},

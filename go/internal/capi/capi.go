@@ -14,8 +14,8 @@ package capi
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../src/viam/trajex/capi
-#cgo darwin LDFLAGS: -L${SRCDIR}/../../../build -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../../../build
-#cgo linux  LDFLAGS: -L${SRCDIR}/../../../build -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../../../build
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../../build/local -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../../../build/local
+#cgo linux  LDFLAGS: -L${SRCDIR}/../../../build/local -lviam-trajex-capi -Wl,-rpath,${SRCDIR}/../../../build/local
 
 #include "capi.h"
 */
