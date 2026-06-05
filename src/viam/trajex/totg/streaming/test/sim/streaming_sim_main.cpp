@@ -66,7 +66,7 @@ void usage_and_exit(const char* argv0, int code) {
               << "[--w-c-min N] [--w-c-max N] [--w-c-count N] "
               << "[--w-r-min N] [--w-r-max N] [--w-r-count N] "
               << "[--speed-factor N] [--batch-size N] [--sample-rate N]\n";
-    std::exit(code);
+    std::exit(code);  // NOLINT(concurrency-mt-unsafe)
 }
 
 sim_config parse_args(int argc, char* argv[]) {
@@ -133,7 +133,7 @@ std::vector<double> geometric_grid(double lo, double hi, std::size_t count) {
     const double log_hi = std::log(hi);
     for (std::size_t i = 0; i < count; ++i) {
         const double t = static_cast<double>(i) / static_cast<double>(count - 1);
-        values.push_back(std::exp(log_lo + t * (log_hi - log_lo)));
+        values.push_back(std::exp(log_lo + (t * (log_hi - log_lo))));
     }
     return values;
 }
@@ -204,7 +204,7 @@ cell_result simulate_cell(const xt::xarray<double>& workload,
         // trajectory. Use exactly two so subsequent batches can default to batch_size=2 with
         // one new waypoint each.
         {
-            xt::xarray<double> bootstrap = xt::view(workload, xt::range(std::size_t{0}, std::size_t{2}), xt::all());
+            const xt::xarray<double> bootstrap = xt::view(workload, xt::range(std::size_t{0}, std::size_t{2}), xt::all());
             const waypoint_accumulator acc(bootstrap);
             sess.extend(acc);
             next_wp_idx = 2;
@@ -287,7 +287,7 @@ cell_result simulate_cell(const xt::xarray<double>& workload,
                 // (next_wp_idx - 1); batch covers [next_wp_idx - 1, batch_end).
                 const std::size_t batch_start = next_wp_idx - 1;
                 const std::size_t batch_end = std::min(next_wp_idx + batch_size - 1, n);
-                xt::xarray<double> batch_data = xt::view(workload, xt::range(batch_start, batch_end), xt::all());
+                const xt::xarray<double> batch_data = xt::view(workload, xt::range(batch_start, batch_end), xt::all());
                 const waypoint_accumulator acc(batch_data);
 
                 const double watermark_before = sess.current_time().count();
@@ -369,8 +369,8 @@ int main(int argc, char* argv[]) try {
 
     const std::size_t total = w_c_values.size() * w_r_values.size();
     std::size_t done = 0;
-    for (double w_c : w_c_values) {
-        for (double w_r : w_r_values) {
+    for (const double w_c : w_c_values) {
+        for (const double w_r : w_r_values) {
             ++done;
             std::cerr << "[" << done << "/" << total << "] W_c=" << w_c << " W_r=" << w_r << " ... " << std::flush;
             cell_result r = simulate_cell(workload, popts, topts, cfg.sample_rate_hz, w_c, w_r, cfg.speed_factor, cfg.batch_size);

@@ -162,7 +162,7 @@ trajectory session::build_trajectory_from_(const xt::xarray<double>& waypoints) 
 }
 
 void session::extend(const waypoint_accumulator& batch) {
-    if (batch.size() == 0) {
+    if (batch.empty()) {
         throw std::invalid_argument("streaming::session::extend: batch is empty");
     }
 

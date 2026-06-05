@@ -170,7 +170,7 @@ BOOST_AUTO_TEST_CASE(fresh_session_has_no_active_trajectory) {
     auto sess = fresh_session();
     BOOST_CHECK(sess.active_trajectory() == nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0U);
 }
 
 BOOST_AUTO_TEST_CASE(fresh_session_sample_next_returns_empty) {
@@ -198,7 +198,7 @@ BOOST_AUTO_TEST_CASE(first_extend_with_valid_batch_creates_active_trajectory) {
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
     BOOST_CHECK_EQUAL(sess.current_time().count(), 0.0);
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
 }
 
 BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argument) {
@@ -210,7 +210,7 @@ BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argume
     // Failed extend leaves the session unchanged.
     BOOST_CHECK(sess.active_trajectory() == nullptr);
     BOOST_CHECK_EQUAL(sess.current_time().count(), 0.0);
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0U);
 }
 
 BOOST_AUTO_TEST_CASE(first_extend_with_dof_mismatch_against_options_propagates_invalid_argument) {
@@ -223,7 +223,7 @@ BOOST_AUTO_TEST_CASE(first_extend_with_dof_mismatch_against_options_propagates_i
 
     BOOST_CHECK(sess.active_trajectory() == nullptr);
     BOOST_CHECK_EQUAL(sess.current_time().count(), 0.0);
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // first_extend
@@ -236,7 +236,7 @@ BOOST_AUTO_TEST_CASE(sample_next_default_emits_one_sample) {
     sess.extend(wp.accumulator());
 
     const auto samples = sess.sample_next();
-    BOOST_CHECK_EQUAL(samples.size(), 1u);
+    BOOST_CHECK_EQUAL(samples.size(), 1U);
 }
 
 BOOST_AUTO_TEST_CASE(sample_next_n_emits_n_samples) {
@@ -245,7 +245,7 @@ BOOST_AUTO_TEST_CASE(sample_next_n_emits_n_samples) {
     sess.extend(wp.accumulator());
 
     const auto samples = sess.sample_next(10);
-    BOOST_CHECK_EQUAL(samples.size(), 10u);
+    BOOST_CHECK_EQUAL(samples.size(), 10U);
 }
 
 BOOST_AUTO_TEST_CASE(sample_at_least_advances_at_least_horizon) {
@@ -267,7 +267,7 @@ BOOST_AUTO_TEST_CASE(sample_at_least_zero_horizon_returns_exactly_one_sample) {
     // Zero horizon: the first sample's time equals current_time + dt > current_time + 0,
     // so the stopping condition is satisfied after exactly one sample is emitted.
     const auto samples = sess.sample_at_least(trajectory::seconds{0.0});
-    BOOST_CHECK_EQUAL(samples.size(), 1u);
+    BOOST_CHECK_EQUAL(samples.size(), 1U);
 }
 
 BOOST_AUTO_TEST_CASE(current_time_tracks_last_emitted_sample) {
@@ -276,7 +276,7 @@ BOOST_AUTO_TEST_CASE(current_time_tracks_last_emitted_sample) {
     sess.extend(wp.accumulator());
 
     const auto samples = sess.sample_next(7);
-    BOOST_REQUIRE_EQUAL(samples.size(), 7u);
+    BOOST_REQUIRE_EQUAL(samples.size(), 7U);
     BOOST_CHECK_EQUAL(sess.current_time().count(), samples.back().time.count());
 }
 
@@ -348,7 +348,7 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_watermark_pivots) {
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     // One sample's worth of watermark advancement: far below where the branch will lie
     // (the branch sits near the prefix's terminal blend, which is most of a trajectory away).
@@ -358,7 +358,7 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_watermark_pivots) {
     sess.extend(extension.accumulator());
 
     // Generation incremented: a new active trajectory was produced (pivot).
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
 }
 
@@ -373,7 +373,7 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_active_epoch) {
     sess.extend(extension.accumulator());
 
     // Confirm a pivot actually happened, then assert epoch is preserved across it.
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), pre_extend_epoch.count());
 }
 
@@ -388,7 +388,7 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_current_time) {
     sess.extend(extension.accumulator());
 
     // Confirm a pivot actually happened, then assert current_time is preserved across it.
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_EQUAL(sess.current_time().count(), pre_extend_time.count());
 }
 
@@ -403,7 +403,7 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     const auto* initial_active = sess.active_trajectory();
     BOOST_REQUIRE(initial_active != nullptr);
@@ -413,7 +413,7 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
     sess.extend(extension.accumulator());
 
     // Stage: no new trajectory became active, so the generation count is unchanged.
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
 }
 
@@ -421,7 +421,7 @@ BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     const auto initial_duration = sess.active_trajectory()->duration();
 
@@ -431,12 +431,12 @@ BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
     sess.extend(extension.accumulator());
 
     // After extend: stage. Generation count is still 1.
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     // Sampling further triggers the rebase from the original trajectory's terminal pose.
     sess.sample_next(1);
 
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), initial_duration.count());
 }
@@ -459,9 +459,9 @@ BOOST_AUTO_TEST_CASE(rebase_seam_configuration_is_continuous) {
     sess.extend(extension.accumulator());
 
     const auto post_rebase_samples = sess.sample_next(1);
-    BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1u);
+    BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1U);
     // Confirm rebase actually happened.
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
 
     // The first post-rebase sample lives exactly one sample period into the new trajectory
     // by construction of quantized_starting_at(new_active, rate, sample_period_). So its
@@ -482,12 +482,12 @@ BOOST_AUTO_TEST_CASE(rebase_seam_time_keeps_flowing_forward) {
     const auto initial_duration = sess.active_trajectory()->duration();
     sess.sample_at_least(initial_duration);
     const auto pre_rebase_time = sess.current_time();
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
     const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
     const auto post_rebase_samples = sess.sample_next(1);
-    BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1u);
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1U);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_GT(post_rebase_samples.front().time.count(), pre_rebase_time.count());
 }
 
@@ -503,15 +503,15 @@ BOOST_AUTO_TEST_CASE(repeated_admissible_extends_compose_into_long_trajectory) {
 
     const pinned_waypoints batch_1(xt::xarray<double>{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}});
     sess.extend(batch_1.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     const pinned_waypoints batch_2(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(batch_2.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
 
     const pinned_waypoints batch_3(xt::xarray<double>{{2.0, 2.0}, {3.0, 2.0}});
     sess.extend(batch_3.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 3u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 3U);
 
     const xt::xarray<double> merged{
         {0.0, 0.0},
@@ -537,24 +537,24 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     // Sample one tick, then extend -- pivot.
     sess.sample_next(1);
     const pinned_waypoints pivot_batch(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}});
     sess.extend(pivot_batch.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
 
     // Sample past where the next extend's branch will lie, forcing it to stage.
     const auto duration_before_stage = sess.active_trajectory()->duration();
     sess.sample_at_least(duration_before_stage);
     const pinned_waypoints stage_batch(xt::xarray<double>{{2.0, 1.0}, {2.0, 2.0}});
     sess.extend(stage_batch.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);  // staged, not pivoted
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);  // staged, not pivoted
 
     // Sample further to trigger the rebase.
     sess.sample_next(1);
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 3u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 3U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), duration_before_stage.count());
 }
@@ -584,7 +584,7 @@ BOOST_AUTO_TEST_CASE(extend_after_exhaustion_eventually_starts_new_chain) {
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     const auto initial_duration = sess.active_trajectory()->duration();
 
@@ -594,11 +594,11 @@ BOOST_AUTO_TEST_CASE(extend_after_exhaustion_eventually_starts_new_chain) {
     sess.extend(extension.accumulator());
 
     // Extend on an exhausted session: stages, no new active built yet.
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     sess.sample_next(1);
 
-    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_GE(sess.active_epoch().count(), initial_duration.count());
 }
@@ -624,8 +624,8 @@ BOOST_AUTO_TEST_CASE(final_emitted_sample_in_single_trajectory_lies_at_terminal_
     const auto& last = samples.back();
 
     BOOST_CHECK_EQUAL(last.time.count(), duration.count());
-    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2u);
-    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2u);
+    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2U);
+    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2U);
     for (std::size_t i = 0; i < last.velocity.shape(0); ++i) {
         BOOST_CHECK_EQUAL(last.velocity(i), 0.0);
     }
@@ -645,20 +645,20 @@ BOOST_AUTO_TEST_CASE(final_emitted_sample_after_rebase_lies_at_rebased_terminal_
     // Stage an extension by extending while the watermark sits at the terminal.
     const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     // Drain the rest with a generous horizon to fire the rebase and run out the new chain.
     const auto post_rebase_samples = sess.sample_at_least(trajectory::seconds{1000.0});
     BOOST_REQUIRE(!post_rebase_samples.empty());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2u);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
 
     const auto& last = post_rebase_samples.back();
     const auto rebased_duration = sess.active_trajectory()->duration();
     const auto rebased_epoch = sess.active_epoch();
 
     BOOST_CHECK_EQUAL(last.time.count(), (rebased_epoch + rebased_duration).count());
-    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2u);
-    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2u);
+    BOOST_REQUIRE_EQUAL(last.velocity.shape(0), 2U);
+    BOOST_REQUIRE_EQUAL(last.acceleration.shape(0), 2U);
     for (std::size_t i = 0; i < last.velocity.shape(0); ++i) {
         BOOST_CHECK_EQUAL(last.velocity(i), 0.0);
     }
