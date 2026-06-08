@@ -39,7 +39,7 @@ jobs:
   build-test-lint:
     name: Build, Test, and Lint
     runs-on: ${{ matrix.runner }}
-    container: ghcr.io/viam-modules/universal-robots@{{ matrix.container_digest }}
+    container: ghcr.io/viam-modules/universal-robots@${{ matrix.container_digest }}
     strategy:
       fail-fast: false
       matrix:
