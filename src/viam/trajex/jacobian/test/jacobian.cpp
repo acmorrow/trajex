@@ -488,6 +488,16 @@ BOOST_AUTO_TEST_CASE(sixdof_typical) {
         sixdof_arm_table(), {0.1, -0.5, 1.2, -0.3, 0.6, -0.1}, {0.2, 0.7, -0.4, 0.5, -0.6, 0.3}, {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2});
 }
 
+// A singular gain (||J*f'|| -> 0, here from a zero path tangent) has an undefined slope, since
+// dot(v, dv) / gain is 0 / 0. The function must return a finite, non-poisoning value rather than a
+// NaN that would propagate into the phase-plane slope downstream.
+BOOST_AUTO_TEST_CASE(singular_gain_yields_finite_derivative) {
+    const auto chain = kinematic_chain::from(twolink_table());
+    const auto vg = chain.velocity_gain_and_derivative({0.3, -0.7}, {0.0, 0.0}, {0.2, -0.4});
+    BOOST_CHECK_SMALL(vg.gain, 1e-15);
+    BOOST_CHECK(std::isfinite(vg.dgain_ds));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // The tests in this suite validate make_tcp_jacobian: the callback returns the

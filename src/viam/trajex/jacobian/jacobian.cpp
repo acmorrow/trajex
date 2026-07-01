@@ -244,9 +244,8 @@ kinematic_chain::velocity_gain kinematic_chain::velocity_gain_and_derivative(con
                                     std::to_string(actuated_count_) + " (actuated joints)");
     }
 
-    const chain_state state = compute_chain_state_(q);  // validates q against actuated_count_
+    const chain_state state = compute_chain_state_(q);
 
-    // TCP velocity v = J*f' = sum_i cross(w_i, p_e - p_i) * q'_i.
     vec3 v{0.0, 0.0, 0.0};
     for (std::size_t i = 0; i < actuated_count_; ++i) {
         const vec3 col =
@@ -255,22 +254,21 @@ kinematic_chain::velocity_gain kinematic_chain::velocity_gain_and_derivative(con
         v = {v[0] + (col[0] * q_prime(i)), v[1] + (col[1] * q_prime(i)), v[2] + (col[2] * q_prime(i))};
     }
 
-    // dv = d/ds[J*f'] via a single forward walk (Eq. 27).
     vec3 dv{0.0, 0.0, 0.0};
-    vec3 omega{0.0, 0.0, 0.0};  // sum_{j<i} w_j * q'_j
-    vec3 c{0.0, 0.0, 0.0};      // sum_{j<i} cross(w_j * q'_j, p_j)
+    vec3 omega{0.0, 0.0, 0.0};
+    vec3 c{0.0, 0.0, 0.0};
     for (std::size_t i = 0; i < actuated_count_; ++i) {
         const vec3& w = state.axes[i];
         const vec3& p = state.positions[i];
         const vec3 r = {state.p_e[0] - p[0], state.p_e[1] - p[1], state.p_e[2] - p[2]};
-        const vec3 col = cross(w, r);     // J_i
-        const vec3 dw = cross(omega, w);  // dw_i/ds
+        const vec3 col = cross(w, r);
+        const vec3 dw = cross(omega, w);
         const vec3 cp = cross(omega, p);
-        const vec3 v_point = {cp[0] - c[0], cp[1] - c[1], cp[2] - c[2]};  // dp_i/ds
+        const vec3 v_point = {cp[0] - c[0], cp[1] - c[1], cp[2] - c[2]};
         const vec3 dr = {v[0] - v_point[0], v[1] - v_point[1], v[2] - v_point[2]};
         const vec3 d_col_a = cross(dw, r);
         const vec3 d_col_b = cross(w, dr);
-        const vec3 d_col = {d_col_a[0] + d_col_b[0], d_col_a[1] + d_col_b[1], d_col_a[2] + d_col_b[2]};  // dJ_i/ds
+        const vec3 d_col = {d_col_a[0] + d_col_b[0], d_col_a[1] + d_col_b[1], d_col_a[2] + d_col_b[2]};
         dv = {dv[0] + (d_col[0] * q_prime(i)) + (col[0] * q_double_prime(i)),
               dv[1] + (d_col[1] * q_prime(i)) + (col[1] * q_double_prime(i)),
               dv[2] + (d_col[2] * q_prime(i)) + (col[2] * q_double_prime(i))};
@@ -282,9 +280,15 @@ kinematic_chain::velocity_gain kinematic_chain::velocity_gain_and_derivative(con
     }
 
     const double gain = norm(v);
-    // Callers only evaluate the slope when the TCP curve is the binding (finite) constraint, so
-    // gain is non-singular here; dot(v, dv) / gain is well defined.
-    const double dgain_ds = dot(v, dv) / gain;
+    // The slope d||v||/ds is undefined at a singular gain (||J*f'|| -> 0): dot(v, dv) / gain is
+    // 0 / 0 or x / 0. Callers evaluate the slope only where the TCP curve is the binding
+    // (finite-gain) constraint, so this is not reached in normal operation, but guard the division
+    // at the API boundary so a singular gain yields a defined 0 slope rather than a NaN/inf that
+    // would poison the phase-plane slope downstream.
+    double dgain_ds = dot(v, dv) / gain;
+    if (!std::isfinite(dgain_ds)) {
+        dgain_ds = 0.0;
+    }
     return {gain, dgain_ds};
 }
 

@@ -262,6 +262,17 @@ BOOST_AUTO_TEST_CASE(tcp_jacobian_wrong_shape_throws) {
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 }
 
+// A 1-D array (dimension 1) whose length happens to be 3 must be rejected cleanly. Without a
+// dimension check, validating the column count reads shape(1) out of bounds on a rank-1 shape.
+BOOST_AUTO_TEST_CASE(tcp_jacobian_wrong_dimension_throws) {
+    const path p = make_2dof_path();
+    auto opt = base_2dof_options();
+    opt.tcp = trajectory::tcp_limit{.max_velocity = 0.5,
+                                    .jacobian = [](const xt::xarray<double>&) { return xt::xarray<double>{1.0, 2.0, 3.0}; },
+                                    .velocity_derivative = {}};
+    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+}
+
 // get_velocity_limit_components exposes the joint and TCP curves separately; the combined
 // velocity limit from get_velocity_limits is their minimum.
 BOOST_AUTO_TEST_CASE(velocity_limit_components_separate_joint_and_tcp) {

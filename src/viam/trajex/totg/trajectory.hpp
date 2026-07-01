@@ -230,6 +230,19 @@ class trajectory {
     };
 
     ///
+    /// Combined velocity limits together with their joint and TCP components.
+    ///
+    /// Equivalent to get_velocity_limits() and get_velocity_limit_components() at the same cursor,
+    /// but evaluates the TCP Jacobian only once. For diagnostics that emit both the combined curve
+    /// and its components.
+    ///
+    struct velocity_limits_detail {
+        arc_velocity s_dot_max_acc;            ///< Maximum velocity from acceleration constraints
+        arc_velocity s_dot_max_vel;            ///< Combined velocity limit, min(joint, tcp)
+        velocity_limit_components components;  ///< The joint and TCP velocity limit components
+    };
+
+    ///
     /// Phase plane acceleration bounds at a given position and velocity.
     ///
     /// Encapsulates the feasible range of path acceleration given current path
@@ -324,6 +337,17 @@ class trajectory {
     /// @return Joint and TCP velocity limit components (tcp is +inf when no TCP limit is set)
     ///
     velocity_limit_components get_velocity_limit_components(const path::cursor& cursor) const;
+
+    ///
+    /// Computes the combined velocity limits and their joint and TCP components in one evaluation.
+    ///
+    /// Equivalent to calling get_velocity_limits() and get_velocity_limit_components() at the same
+    /// cursor, but evaluates the TCP Jacobian only once. Intended for diagnostics that need both.
+    ///
+    /// @param cursor Path cursor positioned at query location
+    /// @return Acceleration limit, combined velocity limit, and the joint and TCP components
+    ///
+    velocity_limits_detail get_velocity_limits_detail(const path::cursor& cursor) const;
 
     ///
     /// Computes phase plane acceleration bounds at cursor's current position and velocity.

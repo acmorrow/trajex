@@ -44,6 +44,11 @@ std::string switching_point_kind_to_string(trajectory::switching_point_kind kind
     throw std::invalid_argument("Unknown switching_point_kind");
 }
 
+// Serializes a limit-curve value, mapping an infinite (non-constraining) limit to JSON null.
+Json::Value finite_or_null(arc_velocity v) {
+    return std::isinf(static_cast<double>(v)) ? Json::Value::null : Json::Value{static_cast<double>(v)};
+}
+
 // Serialize integration points with joint-space data and limit curves (struct of arrays)
 Json::Value serialize_integration_points(const trajectory& traj) {
     const auto& points = traj.get_integration_points();
@@ -108,36 +113,14 @@ Json::Value serialize_integration_points(const trajectory& traj) {
         const auto q_dot = cursor.tangent();
         const auto q_ddot = cursor.curvature();
 
-        // Get limit curves at this arc length using cursor
-        const auto limits = traj.get_velocity_limits(cursor);
-        const arc_velocity s_dot_max_acc = limits.s_dot_max_acc;
-        const arc_velocity s_dot_max_vel = limits.s_dot_max_vel;
-
-        // Handle infinite limits (serialize as null for JSON)
-        if (std::isinf(static_cast<double>(s_dot_max_acc))) {
-            s_dot_max_acc_values[idx] = Json::Value::null;
-        } else {
-            s_dot_max_acc_values[idx] = static_cast<double>(s_dot_max_acc);
-        }
-
-        if (std::isinf(static_cast<double>(s_dot_max_vel))) {
-            s_dot_max_vel_values[idx] = Json::Value::null;
-        } else {
-            s_dot_max_vel_values[idx] = static_cast<double>(s_dot_max_vel);
-        }
-
-        // Joint-only and TCP-only velocity limits (the combined curve above is their minimum).
-        const auto vel_components = traj.get_velocity_limit_components(cursor);
-        if (std::isinf(static_cast<double>(vel_components.joint))) {
-            s_dot_max_vel_joint_values[idx] = Json::Value::null;
-        } else {
-            s_dot_max_vel_joint_values[idx] = static_cast<double>(vel_components.joint);
-        }
-        if (std::isinf(static_cast<double>(vel_components.tcp))) {
-            s_dot_max_vel_tcp_values[idx] = Json::Value::null;
-        } else {
-            s_dot_max_vel_tcp_values[idx] = static_cast<double>(vel_components.tcp);
-        }
+        // Get limit curves at this arc length using cursor. One evaluation yields the combined
+        // curve and its joint/TCP components (the combined curve is their minimum). Infinite
+        // (non-constraining) limits serialize as JSON null.
+        const auto limits = traj.get_velocity_limits_detail(cursor);
+        s_dot_max_acc_values[idx] = finite_or_null(limits.s_dot_max_acc);
+        s_dot_max_vel_values[idx] = finite_or_null(limits.s_dot_max_vel);
+        s_dot_max_vel_joint_values[idx] = finite_or_null(limits.components.joint);
+        s_dot_max_vel_tcp_values[idx] = finite_or_null(limits.components.tcp);
 
         // Acceleration bounds at this phase point
         const auto accel_bounds = traj.get_acceleration_bounds(cursor, pt.s_dot);
@@ -312,9 +295,8 @@ std::string serialize_trajectory_to_json(const trajectory_integration_event_coll
         auto cursor = effective->path().create_cursor();
         auto add_sample = [&](arc_length s) {
             cursor.seek(s);
-            const auto lim = effective->get_velocity_limits(cursor);
-            const auto comps = effective->get_velocity_limit_components(cursor);
-            samples.push_back({s, lim.s_dot_max_acc, lim.s_dot_max_vel, comps.joint, comps.tcp});
+            const auto lim = effective->get_velocity_limits_detail(cursor);
+            samples.push_back({s, lim.s_dot_max_acc, lim.s_dot_max_vel, lim.components.joint, lim.components.tcp});
         };
 
         for (const auto& ev : collector) {
@@ -380,9 +362,6 @@ std::string serialize_trajectory_to_json(const trajectory_integration_event_coll
             Json::Value lcs_s_dot_max_vel_joint(Json::arrayValue);
             Json::Value lcs_s_dot_max_vel_tcp(Json::arrayValue);
 
-            auto finite_or_null = [](arc_velocity v) {
-                return std::isinf(static_cast<double>(v)) ? Json::Value::null : Json::Value{static_cast<double>(v)};
-            };
             for (const auto& sample : samples) {
                 lcs_s.append(static_cast<double>(sample.s));
                 lcs_s_dot_max_acc.append(finite_or_null(sample.acc));
