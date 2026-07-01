@@ -1,5 +1,7 @@
 #include <viam/trajex/totg/tools/replay.hpp>
 
+#include <viam/trajex/totg/tcp_jacobian.hpp>
+
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -84,6 +86,38 @@ std::pair<planner_base::config, xt::xarray<double>> parse_replay_record(std::ist
     cfg.path_blend_tolerance = require("path_tolerance_delta_rads").asDouble();
     if (root.isMember("path_colinearization_ratio")) {
         cfg.colinearization_ratio = root["path_colinearization_ratio"].asDouble();
+    }
+
+    // Optional TCP Cartesian speed limit (replay schema v2+). model_table is the (n, 10) tensor the
+    // TCP jacobian was built from; max_tcp_speed_m_per_sec is the scalar cap. Rebuild the jacobian
+    // callback via make_tcp_jacobian so the replayed run reproduces the same TCP limit.
+    if (root.isMember("model_table")) {
+        const auto& mt_json = root["model_table"];
+        if (!mt_json.isArray() || mt_json.empty()) {
+            throw std::runtime_error("model_table must be a non-empty array of rows");
+        }
+        const auto rows = static_cast<std::size_t>(mt_json.size());
+        xt::xarray<double> model_table = xt::zeros<double>(std::vector<std::size_t>{rows, std::size_t{10}});
+        for (Json::ArrayIndex i = 0; i < mt_json.size(); ++i) {
+            const auto& row = mt_json[i];
+            if (!row.isArray() || row.size() != 10) {
+                throw std::runtime_error("model_table row must have 10 columns");
+            }
+            for (Json::ArrayIndex j = 0; j < 10; ++j) {
+                model_table(static_cast<std::size_t>(i), static_cast<std::size_t>(j)) = row[j].asDouble();
+            }
+        }
+        cfg.model_table = std::move(model_table);
+    }
+
+    if (root.isMember("max_tcp_speed_m_per_sec")) {
+        if (!cfg.model_table) {
+            throw std::runtime_error("max_tcp_speed_m_per_sec given without a model_table to build the TCP jacobian");
+        }
+        auto cb = make_tcp_jacobian(*cfg.model_table);
+        cfg.tcp = trajectory::tcp_limit{.max_velocity = root["max_tcp_speed_m_per_sec"].asDouble(),
+                                        .jacobian = std::move(cb.jacobian),
+                                        .velocity_derivative = std::move(cb.velocity_derivative)};
     }
 
     return {std::move(cfg), std::move(waypoints)};

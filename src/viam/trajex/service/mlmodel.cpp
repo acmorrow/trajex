@@ -19,6 +19,7 @@
 
 #include <viam/sdk/log/logging.hpp>
 
+#include <viam/trajex/totg/tcp_jacobian.hpp>
 #include <viam/trajex/totg/tools/planner.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_utils.hpp>
@@ -83,6 +84,36 @@ double get_scalar_double(const mlmodel::named_tensor_views& inputs, std::string_
         throw std::invalid_argument("input tensor '" + std::string(name) + "' must be a scalar (shape [1])");
     }
     return view.flat(0);
+}
+
+std::optional<totg::trajectory::tcp_limit> parse_tcp_limit(const mlmodel::named_tensor_views& inputs) {
+    const bool has_tcp = inputs.find(std::string("tcp_max_velocity_m_per_sec")) != inputs.end();
+    const bool has_table = inputs.find(std::string("kinematics_model_table")) != inputs.end();
+
+    if (!has_tcp && !has_table) {
+        return std::nullopt;
+    }
+
+    const auto& tcp_view = get_double_tensor(inputs, "tcp_max_velocity_m_per_sec");
+    const auto& table_view = get_double_tensor(inputs, "kinematics_model_table");
+
+    if (tcp_view.size() != 1) {
+        throw std::invalid_argument("tcp_max_velocity_m_per_sec must be a scalar (shape [1])");
+    }
+    const double tcp_max_velocity = tcp_view.flat(0);
+    if (!(tcp_max_velocity > 0.0)) {
+        throw std::invalid_argument("tcp_max_velocity_m_per_sec must be a positive number");
+    }
+    if (table_view.dimension() != 2 || table_view.shape(1) != 10) {
+        throw std::invalid_argument("kinematics_model_table must be 2-dimensional [n_joints, 10]");
+    }
+
+    auto cb = totg::make_tcp_jacobian(xt::xarray<double>(table_view));
+    return totg::trajectory::tcp_limit{
+        .max_velocity = tcp_max_velocity,
+        .jacobian = std::move(cb.jacobian),
+        .velocity_derivative = std::move(cb.velocity_derivative),
+    };
 }
 
 }  // namespace
@@ -196,6 +227,9 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
     xt::xarray<double> velocity_limits(velocity_limits_view);
     xt::xarray<double> acceleration_limits(acceleration_limits_view);
 
+    // Optional TCP Cartesian-speed limit
+    auto tcp_limit = parse_tcp_limit(inputs);
+
     // Build the planner
     auto planner = totg::planner<service_result>({
         .velocity_limits = std::move(velocity_limits),
@@ -203,6 +237,7 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         .path_blend_tolerance = path_tolerance,
         .colinearization_ratio = colinearization_ratio,
         .segment_totg = config_.segment_for_trajex,
+        .tcp = std::move(tcp_limit),
     });
 
     planner

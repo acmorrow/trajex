@@ -25,6 +25,7 @@
 
 #include <viam/trajex/totg/observers.hpp>
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/tcp_jacobian.hpp>
 #include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/tools/json_serialization.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
@@ -1375,8 +1376,7 @@ BOOST_DATA_TEST_CASE(ur_arm_incremental_waypoints_with_reversals,
             ((static_cast<double>(generation_time_ms) - *fixture.legacy_generation_time_ms_) / *fixture.legacy_generation_time_ms_) * 100.0;
 
         std::cout << "[COMPARISON] Generation time: new=" << generation_time_ms << "ms, legacy=" << *fixture.legacy_generation_time_ms_
-                  << "ms, "
-                  << "ratio=" << time_ratio << ", diff=" << time_diff_percent << "%\n";
+                  << "ms, " << "ratio=" << time_ratio << ", diff=" << time_diff_percent << "%\n";
     }
 
     // Verify sampling works
@@ -1388,9 +1388,8 @@ BOOST_DATA_TEST_CASE(ur_arm_incremental_waypoints_with_reversals,
     }
     BOOST_CHECK(sample_count > 0);
 
-    BOOST_TEST_MESSAGE("PASS: " << profile.name << " with " << num_waypoints << " waypoints, "
-                                << "duration=" << traj.duration().count() << "s, "
-                                << "points=" << traj.get_integration_points().size());
+    BOOST_TEST_MESSAGE("PASS: " << profile.name << " with " << num_waypoints << " waypoints, " << "duration=" << traj.duration().count()
+                                << "s, " << "points=" << traj.get_integration_points().size());
 }
 
 BOOST_AUTO_TEST_CASE(three_waypoint_baseline_behavior_accel_constrained) {
@@ -2587,6 +2586,108 @@ BOOST_AUTO_TEST_CASE(vik_182_forward_integration_acc_natural_escape_stall) {
     // returned nullopt without committing the breach. Tripwire for any future
     // change that resurrects that path.
     generate_trajectory_from_replay_file("VIK-182-stall.trajex-totg-replay.json");
+}
+
+// Reproducer for RSDK-13338 "Cannot query cursor at sentinel position": with a 0.5 m/s TCP cap
+// on the gp12 chain, the terminal integration point could end up with a NaN s_ddot (a path-end
+// point that never received a finite acceleration). Sampling at exactly t == duration then
+// interpolated a NaN arc length (0.5 * NaN * 0 * 0), seeking the path cursor to its sentinel so
+// the sample query threw. This test verifies the terminal acceleration is finite and that
+// sampling at the duration succeeds. The replay record predates TCP options (schema v1), so this
+// test wires the cap and the gp12 model-table jacobian itself.
+BOOST_AUTO_TEST_CASE(gp12_tcp_terminal_acceleration_sentinel_sample) {
+    std::ifstream in(std::filesystem::path(VIAM_TRAJEX_TEST_DATA_DIR) /
+                     "gp12_tcp_terminal_nan_acceleration-20260612.trajex-totg-replay.json");
+    BOOST_REQUIRE(in.good());
+    Json::Value root;
+    const Json::CharReaderBuilder reader;
+    std::string errs;
+    BOOST_REQUIRE_MESSAGE(Json::parseFromStream(reader, in, &root, &errs), errs);
+
+    const auto dof = root["max_velocity_vec_rads_per_sec"].size();
+    xt::xarray<double> max_velocity = xt::zeros<double>({static_cast<std::size_t>(dof)});
+    xt::xarray<double> max_acceleration = xt::zeros<double>({static_cast<std::size_t>(dof)});
+    for (Json::ArrayIndex i = 0; i < dof; ++i) {
+        max_velocity(i) = root["max_velocity_vec_rads_per_sec"][i].asDouble();
+        max_acceleration(i) = root["max_acceleration_vec_rads_per_sec2"][i].asDouble();
+    }
+    const auto& wps = root["waypoints_rads"];
+    xt::xarray<double> waypoints = xt::zeros<double>({static_cast<std::size_t>(wps.size()), static_cast<std::size_t>(dof)});
+    for (Json::ArrayIndex i = 0; i < wps.size(); ++i) {
+        for (Json::ArrayIndex j = 0; j < dof; ++j) {
+            waypoints(i, static_cast<std::size_t>(j)) = wps[i][j].asDouble();
+        }
+    }
+
+    // Yaskawa GP12 model table, transcribed from gp12.urdf (viam::sdk::ModelTable tensor format).
+    const xt::xarray<double> gp12_table = {
+        {0, 0, 0.450, 0, 0, 0, 0, 0, 1, 0},
+        {0.155, 0, 0, 0, 0, 0, 0, 1, 0, 0},
+        {0, 0, 0.614, 0, 0, 0, 0, -1, 0, 0},
+        {0.640, 0, 0.200, 0, 0, 0, -1, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, -1, 0, 0},
+        {0, 0, 0, 0, 0, 0, -1, 0, 0, 0},
+        {0.100, 0, 0, 3.14159265, -1.570796, 0, 0, 0, 0, 3},
+    };
+
+    auto p = path::create(waypoints, path::options{}.set_max_blend_deviation(root["path_tolerance_delta_rads"].asDouble()));
+    trajectory::options opt{.max_velocity = max_velocity, .max_acceleration = max_acceleration};
+    auto cb = make_tcp_jacobian(gp12_table);
+    opt.tcp = trajectory::tcp_limit{
+        .max_velocity = 0.5, .jacobian = std::move(cb.jacobian), .velocity_derivative = std::move(cb.velocity_derivative)};
+
+    const auto traj = trajectory::create(std::move(p), std::move(opt));
+    BOOST_CHECK(std::isfinite(static_cast<double>(traj.get_integration_points().back().s_ddot)));
+    BOOST_CHECK_NO_THROW(static_cast<void>(traj.create_cursor().seek(traj.duration()).sample()));
+}
+
+// Reproducer for a forward-integration numerical artifact: when breach bisection collapses the next
+// point onto the current point, delta_s falls to the floating-point noise floor while staying nonzero,
+// so the finite-difference s_ddot = delta_s_dot / dt divides one noise-floor quantity by another and
+// stamps a spurious arc acceleration of arbitrary magnitude (thousands) on that integration point. The
+// underlying motion stays feasible (s and s_dot are continuous, and the next step restamps the same
+// point with a valid acceleration), so every integration point's s_ddot must lie within its feasible
+// [s_ddot_min, s_ddot_max] band. A small tolerance admits the legitimate float-level overshoot where the
+// trajectory rides the velocity-limit curve; the artifact this guards against exceeds the band by orders
+// of magnitude. This gp12 move (1.2 m/s TCP cap) produced several such spikes before the fix.
+BOOST_AUTO_TEST_CASE(gp12_forward_truncated_step_sddot_within_bounds) {
+    auto planner = viam::trajex::totg::replay_planner::create(std::filesystem::path(VIAM_TRAJEX_TEST_DATA_DIR) /
+                                                              "gp12_forward_truncated_step_sddot_spike-20260623.trajex-totg-replay.json");
+    auto outcome = planner.execute([](const auto&, auto tx, const auto&) { return tx; });
+    BOOST_REQUIRE(outcome.receiver.has_value());
+    BOOST_REQUIRE(outcome.receiver->traj.has_value());
+    const auto& traj = *outcome.receiver->traj;
+
+    auto cursor = traj.path().create_cursor();
+    const auto& points = traj.get_integration_points();
+    BOOST_REQUIRE(!points.empty());
+
+    std::size_t worst_index = 0;
+    double worst_excess = 0.0;
+    double worst_value = 0.0;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const double s_ddot = static_cast<double>(points[i].s_ddot);
+        BOOST_REQUIRE_MESSAGE(std::isfinite(s_ddot), "non-finite s_ddot at integration point " << i);
+
+        cursor.seek(points[i].s);
+        const auto bounds = traj.get_acceleration_bounds(cursor, points[i].s_dot);
+        const double lower = static_cast<double>(bounds.s_ddot_min);
+        const double upper = static_cast<double>(bounds.s_ddot_max);
+
+        // Float-level slack for riding the velocity-limit curve, where the feasible band pinches to a
+        // point and the slope-following acceleration carries rounding noise.
+        const double tol = 1e-2 + (1e-2 * std::max(std::abs(lower), std::abs(upper)));
+        const double excess = std::max({0.0, s_ddot - (upper + tol), (lower - tol) - s_ddot});
+        if (excess > worst_excess) {
+            worst_excess = excess;
+            worst_index = i;
+            worst_value = s_ddot;
+        }
+    }
+
+    BOOST_CHECK_MESSAGE(worst_excess == 0.0,
+                        "integration point " << worst_index << " has s_ddot=" << worst_value
+                                             << " outside its feasible acceleration band by " << worst_excess);
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // replay_regression_tests

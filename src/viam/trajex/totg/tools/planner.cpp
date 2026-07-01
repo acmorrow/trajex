@@ -58,7 +58,7 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
     }
 
     Json::Value root;
-    root["schema_version"] = 1;
+    root["schema_version"] = 2;
     root["timestamp"] = ts.str();
     if (error_message) {
         root["error_message"] = std::string(*error_message);
@@ -82,6 +82,28 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
 
     root["min_blend_curvature"] = path_opts.min_blend_curvature();
     root["max_blend_curvature"] = path_opts.max_blend_curvature();
+
+    // TCP Cartesian speed limit. The jacobian callback in get_config().tcp cannot be serialized, so
+    // record the scalar cap plus the (n, 10) model-table tensor it was built from; replay rebuilds the
+    // callback via make_tcp_jacobian. Both fields are written together and only when the model-table
+    // provenance is available, since neither alone reproduces the limit.
+    if (get_config().tcp && get_config().model_table) {
+        const auto& table = *get_config().model_table;
+        if (table.dimension() != 2 || table.shape(1) != 10) {
+            throw std::runtime_error("replay model_table must be an (n, 10) tensor");
+        }
+        root["max_tcp_speed_m_per_sec"] = get_config().tcp->max_velocity;
+
+        Json::Value model_table_array(Json::arrayValue);
+        for (std::size_t i = 0; i < table.shape(0); ++i) {
+            Json::Value row(Json::arrayValue);
+            for (std::size_t j = 0; j < 10; ++j) {
+                row.append(table(i, j));
+            }
+            model_table_array.append(std::move(row));
+        }
+        root["model_table"] = std::move(model_table_array);
+    }
 
     Json::Value waypoints_array(Json::arrayValue);
     for (const auto& waypoint : waypoints) {

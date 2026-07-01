@@ -25,6 +25,81 @@ void verify_path_visits_waypoints(const path& p, const xt::xarray<double>& waypo
 /// Example: a 3-waypoint path with a single circular blend yields "LCL".
 std::string path_type_sequence(const path& p);
 
+// 3xN linear-velocity Jacobian of a planar 2-link arm at joint angles q=[q1,q2].
+// Rows are [dx; dy; dz]; dz is always 0 (planar). Lengths l1,l2 in metres.
+inline xt::xarray<double> planar_2link_jacobian(double l1, double l2, const xt::xarray<double>& q) {
+    const double q1 = q(0);
+    const double q2 = q(1);
+    const double s1 = std::sin(q1);
+    const double c1 = std::cos(q1);
+    const double s12 = std::sin(q1 + q2);
+    const double c12 = std::cos(q1 + q2);
+    xt::xarray<double> J = xt::zeros<double>({std::size_t{3}, std::size_t{2}});
+    J(0, 0) = -l1 * s1 - l2 * s12;
+    J(0, 1) = -l2 * s12;
+    J(1, 0) = l1 * c1 + l2 * c12;
+    J(1, 1) = l2 * c12;
+    return J;
+}
+
+// Numerical {gain, dgain_ds} for the planar 2-link, for tests that build a tcp_limit by hand.
+// Central-differences ||planar_2link_jacobian(q) * q_prime|| along the path.
+inline trajectory::tcp_limit::gain_derivative planar_2link_gain_derivative(
+    double l1, double l2, const xt::xarray<double>& q, const xt::xarray<double>& q_prime, const xt::xarray<double>& q_double_prime) {
+    const auto gain_at = [&](const xt::xarray<double>& qq, const xt::xarray<double>& qp) {
+        const auto J = planar_2link_jacobian(l1, l2, qq);
+        double vx = 0.0;
+        double vy = 0.0;
+        double vz = 0.0;
+        for (std::size_t j = 0; j < qp.size(); ++j) {
+            vx += J(0, j) * qp(j);
+            vy += J(1, j) * qp(j);
+            vz += J(2, j) * qp(j);
+        }
+        return std::sqrt((vx * vx) + (vy * vy) + (vz * vz));
+    };
+    const double g = gain_at(q, q_prime);
+    const double h = 1e-6;
+    const double dg =
+        (gain_at(q + h * q_prime, q_prime + h * q_double_prime) - gain_at(q - h * q_prime, q_prime - h * q_double_prime)) / (2.0 * h);
+    return {g, dg};
+}
+
+// Builds a tcp_limit for a planar 2-link (l1 = l2 = 1) with both callbacks set.
+inline trajectory::tcp_limit planar_2link_tcp_limit(double max_velocity) {
+    return trajectory::tcp_limit{
+        .max_velocity = max_velocity,
+        .jacobian = [](const xt::xarray<double>& q) { return planar_2link_jacobian(1.0, 1.0, q); },
+        .velocity_derivative =
+            [](const xt::xarray<double>& q, const xt::xarray<double>& q_prime, const xt::xarray<double>& q_double_prime) {
+                return planar_2link_gain_derivative(1.0, 1.0, q, q_prime, q_double_prime);
+            },
+    };
+}
+
+// Maximum realized Cartesian TCP speed over a finished trajectory, for a planar 2-link arm.
+// At each sampled instant the realized TCP velocity is J(q)*q_dot; this returns the peak of
+// its Euclidean norm. Used to verify a TCP-limited trajectory respects its v_TCP cap.
+inline double max_realized_tcp_speed(const trajectory& traj, double l1, double l2, int samples = 1000) {
+    const double T = traj.duration().count();
+    double peak = 0.0;
+    // Sample over [0, T): the instant t == T maps to the path-end sentinel and is not
+    // queryable, so the last sample sits just shy of the end.
+    for (int i = 0; i <= samples; ++i) {
+        const double t = T * static_cast<double>(i) / static_cast<double>(samples + 1);
+        const auto smp = traj.sample(trajectory::seconds{t});
+        const auto J = planar_2link_jacobian(l1, l2, smp.configuration);
+        double v[3] = {0.0, 0.0, 0.0};
+        for (std::size_t r = 0; r < 3; ++r) {
+            for (std::size_t c = 0; c < smp.velocity.size(); ++c) {
+                v[r] += J(r, c) * smp.velocity(c);
+            }
+        }
+        peak = std::max(peak, std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2])));
+    }
+    return peak;
+}
+
 }  // namespace viam::trajex::totg::test
 
 // Equality operators for trajectory event types. Placed in viam::trajex::totg so

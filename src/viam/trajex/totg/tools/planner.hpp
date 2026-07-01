@@ -43,6 +43,13 @@ class planner_base {
         std::optional<double> colinearization_ratio;
         bool segment_totg = true;
         trajectory::integration_observer* observer = nullptr;  // totg only; ignored by legacy
+        std::optional<trajectory::tcp_limit> tcp{};            // optional TCP Cartesian speed limit; totg only
+        // Serializable provenance of tcp.jacobian: the (n, 10) model-table tensor (viam::sdk::ModelTable
+        // format) the jacobian was built from. tcp.jacobian is an opaque callback and cannot be
+        // serialized, so serialize_for_replay records this instead and replay rebuilds the callback via
+        // make_tcp_jacobian. Independent of tcp so a planner using a custom (non-model-table) jacobian can
+        // still set tcp; such a limit simply will not survive a replay round-trip.
+        std::optional<xt::xarray<double>> model_table{};
     };
 
     ///
@@ -89,8 +96,10 @@ class planner_base {
     /// canonical JSON replay record suitable for replay and regression testing.
     ///
     /// The record contains everything needed to reproduce a trajectory generation
-    /// attempt: waypoints, velocity/acceleration limits, and path options. Pass
-    /// e.what() on failure paths; omit on success paths.
+    /// attempt: waypoints, velocity/acceleration limits, and path options. When the
+    /// config carries both a TCP limit and its model-table provenance, the TCP cap and
+    /// the (n, 10) model-table are recorded too, so replay can rebuild the TCP jacobian.
+    /// Pass e.what() on failure paths; omit on success paths.
     ///
     /// @param waypoints Waypoints to serialize
     /// @param error_message Optional error message from a failed generation
@@ -343,6 +352,7 @@ class planner : public planner_base {
                 topts.max_velocity = get_config().velocity_limits;
                 topts.max_acceleration = get_config().acceleration_limits;
                 topts.observer = get_config().observer;
+                topts.tcp = get_config().tcp;
 
                 auto start = std::chrono::steady_clock::now();
                 auto traj = trajectory::create(std::move(p), std::move(topts));
