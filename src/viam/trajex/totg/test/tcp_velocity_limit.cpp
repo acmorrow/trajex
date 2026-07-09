@@ -52,6 +52,16 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     opt.tcp = trajectory::tcp_limit{.max_velocity = 0.5, .jacobian = {}, .velocity_derivative = {}};
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
+    // default-initialized limit with only the callbacks filled in: max_velocity is
+    // zero-initialized, so validation must reject it deterministically
+    trajectory::tcp_limit default_init;
+    default_init.jacobian = [](const xt::xarray<double>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); };
+    default_init.velocity_derivative = [](const xt::xarray<double>& q, const xt::xarray<double>& qp, const xt::xarray<double>& qpp) {
+        return test::planar_2link_gain_derivative(1.0, 1.0, q, qp, qpp);
+    };
+    opt.tcp = default_init;
+    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+
     // valid tcp must NOT throw on construction
     opt.tcp = test::planar_2link_tcp_limit(0.5);
     BOOST_CHECK_NO_THROW(static_cast<void>(trajectory::create(p, opt)));
@@ -337,6 +347,57 @@ BOOST_AUTO_TEST_CASE(serialized_trajectory_exposes_tcp_limit_curve) {
         }
     }
     BOOST_TEST(saw_binding);
+}
+
+// Every committed integration point must respect the combined velocity limit curve. Breach
+// handling commits escape points clamped onto a limit curve, and clamping to the wrong curve
+// (the acceleration curve at a breach where the TCP curve dips below it) would stamp a phase
+// point the sampled trajectory cannot honor.
+BOOST_AUTO_TEST_CASE(integration_points_respect_combined_velocity_limit) {
+    struct limit_case {
+        xt::xarray<double> wp;
+        double V;
+        double vt;
+        double A;
+    };
+    const std::vector<limit_case> cases = {
+        {{{0.0, 2.0}, {10.0, 0.0}}, 100.0, 0.3, 0.05},   // long TCP-limited approach
+        {{{0.0, 1.5}, {6.76, -1.5}}, 100.0, 0.05, 5.0},  // wide TCP dip
+        {{{0.0, 1.0}, {0.4, -1.0}}, 0.3, 0.02, 0.03},    // joint and TCP both tight
+        {{{0.0, 2.5}, {8.0, 0.3}}, 0.35, 0.3, 0.02},     // joint<->TCP crossing
+    };
+
+    for (const auto& tc : cases) {
+        const path p = path::create(tc.wp);
+        auto opt = trajectory::options{.max_velocity = xt::xarray<double>{tc.V, tc.V}, .max_acceleration = xt::xarray<double>{tc.A, tc.A}};
+        opt.tcp = test::planar_2link_tcp_limit(tc.vt);
+        const auto traj = trajectory::create(p, opt);
+
+        for (const auto& ip : traj.get_integration_points()) {
+            auto c = traj.path().create_cursor(ip.s);
+            const auto limit = traj.get_velocity_limits(c).s_dot_max_vel;
+            BOOST_TEST_CONTEXT("V=" << tc.V << " vt=" << tc.vt << " A=" << tc.A << " s=" << static_cast<double>(ip.s)) {
+                BOOST_TEST(static_cast<double>(ip.s_dot) <= static_cast<double>(limit) + 1e-9);
+            }
+        }
+    }
+}
+
+// A velocity_derivative that contradicts the jacobian (zero gain at a TCP-binding point) makes
+// the Eq. 25 slope divide by zero and go non-finite. NaN compares false against everything, so
+// an unguarded non-finite slope silently corrupts every curve-following decision downstream
+// (trap detection, tangent following); the integrator must reject it loudly instead.
+BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
+    const path p = path::create(xt::xarray<double>{{0.0, 2.0}, {10.0, 0.0}});
+    auto opt = trajectory::options{.max_velocity = xt::xarray<double>{100.0, 100.0}, .max_acceleration = xt::xarray<double>{0.05, 0.05}};
+    opt.tcp = trajectory::tcp_limit{
+        .max_velocity = 0.3,
+        .jacobian = [](const xt::xarray<double>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
+        .velocity_derivative = [](const xt::xarray<double>&,
+                                  const xt::xarray<double>&,
+                                  const xt::xarray<double>&) { return trajectory::tcp_limit::gain_derivative{0.0, 0.0}; },
+    };
+    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(tcp_limit_without_velocity_derivative_throws) {

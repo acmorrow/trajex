@@ -78,11 +78,13 @@ class trajectory {
     struct tcp_limit {
         /// The kinematic gain ||J*f'|| and its path derivative d/ds||J*f'|| at a configuration.
         struct gain_derivative {
-            double gain;
-            double dgain_ds;
+            double gain = 0.0;
+            double dgain_ds = 0.0;
         };
 
-        double max_velocity;
+        /// Zero-initialized so a default-constructed limit fails validation deterministically
+        /// instead of reading an indeterminate value.
+        double max_velocity = 0.0;
         /// Maps joint config q -> the 3xN linear-velocity Jacobian. Used for the limit value.
         std::function<xt::xarray<double>(const xt::xarray<double>&)> jacobian;
         /// Maps (q, q_prime, q_double_prime) -> {gain, dgain_ds}. Used for the limit slope.

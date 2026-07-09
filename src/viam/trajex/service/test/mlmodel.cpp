@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <boost/variant/get.hpp>
@@ -335,6 +336,38 @@ BOOST_AUTO_TEST_CASE(model_table_without_tcp_velocity_throws) {
     BOOST_CHECK_THROW(service->infer(inputs, {}), std::invalid_argument);
 }
 
+#if defined(VIAM_TRAJEX_LEGACY_ENABLED)
+// A TCP speed cap is a safety limit only the totg generator can enforce. When totg fails,
+// the service must surface the error rather than fall back to a legacy trajectory that
+// silently ignores the cap.
+BOOST_AUTO_TEST_CASE(tcp_with_totg_failure_does_not_fall_back_to_legacy) {
+    auto service = std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config());
+    auto inputs = make_2dof_tcp_inputs(false);
+    static const std::vector<double> tcp_max = {0.3};
+    // Three revolute joints yield a 3-column jacobian, which totg rejects against the
+    // 2-DOF waypoints during trajectory creation. The legacy generator ignores TCP
+    // inputs entirely and would succeed.
+    static const std::vector<double> model_table = {
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0,  // joint0 at origin, axis z, revolute
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0,  // joint1 +1x,      axis z, revolute
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0,  // joint2 +1x,      axis z, revolute
+    };
+    inputs.emplace("tcp_max_velocity_m_per_sec", mlmodel::make_tensor_view(tcp_max.data(), 1, {1}));
+    inputs.emplace("kinematics_model_table", mlmodel::make_tensor_view(model_table.data(), 30, {3, 10}));
+    BOOST_CHECK_THROW(service->infer(inputs, {}), std::invalid_argument);
+}
+#endif
+
+// A generator sequence with no TCP-capable generator cannot honor a requested cap; the
+// request must be rejected instead of returning an unconstrained trajectory.
+BOOST_AUTO_TEST_CASE(tcp_with_legacy_only_generator_throws) {
+    vsdk::ProtoStruct attrs;
+    attrs.emplace("generator_sequence", std::vector<vsdk::ProtoValue>{vsdk::ProtoValue{"legacy"}});
+
+    auto service = std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config(attrs));
+    BOOST_CHECK_THROW(service->infer(make_2dof_tcp_inputs(true), {}), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(tcp_non_positive_velocity_throws) {
     auto service = std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config());
     auto inputs = make_2dof_tcp_inputs(true);
@@ -342,6 +375,18 @@ BOOST_AUTO_TEST_CASE(tcp_non_positive_velocity_throws) {
     inputs.erase("tcp_max_velocity_m_per_sec");
     inputs.emplace("tcp_max_velocity_m_per_sec", mlmodel::make_tensor_view(bad.data(), 1, {1}));
     BOOST_CHECK_THROW(service->infer(inputs, {}), std::invalid_argument);
+}
+
+// The optional TCP inputs are part of the input schema; clients discover inputs through
+// metadata(), so both tensors must be listed there.
+BOOST_AUTO_TEST_CASE(metadata_lists_tcp_inputs) {
+    auto service = std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config());
+    const auto md = service->metadata({});
+    const auto has_input = [&](std::string_view name) {
+        return std::any_of(md.inputs.begin(), md.inputs.end(), [&](const auto& info) { return info.name == name; });
+    };
+    BOOST_CHECK(has_input("tcp_max_velocity_m_per_sec"));
+    BOOST_CHECK(has_input("kinematics_model_table"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

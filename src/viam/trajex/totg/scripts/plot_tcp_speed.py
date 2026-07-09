@@ -50,7 +50,10 @@ def main():
     s_dot = [float(x) for x in ip["s_dot"]]
 
     cap_env = os.environ.get("TCP_SPEED_CAP", "").strip()
-    cap = float(cap_env) if cap_env else None
+    try:
+        cap = float(cap_env) if cap_env else None
+    except ValueError:
+        sys.exit(f"error: TCP_SPEED_CAP must be a number in m/s, got {cap_env!r}")
 
     speed = []
     for sd, lim in zip(s_dot, tcp_lim):

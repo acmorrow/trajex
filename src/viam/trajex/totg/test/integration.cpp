@@ -2619,20 +2619,9 @@ BOOST_AUTO_TEST_CASE(gp12_tcp_terminal_acceleration_sentinel_sample) {
         }
     }
 
-    // Yaskawa GP12 model table, transcribed from gp12.urdf (viam::sdk::ModelTable tensor format).
-    const xt::xarray<double> gp12_table = {
-        {0, 0, 0.450, 0, 0, 0, 0, 0, 1, 0},
-        {0.155, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-        {0, 0, 0.614, 0, 0, 0, 0, -1, 0, 0},
-        {0.640, 0, 0.200, 0, 0, 0, -1, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, -1, 0, 0},
-        {0, 0, 0, 0, 0, 0, -1, 0, 0, 0},
-        {0.100, 0, 0, 3.14159265, -1.570796, 0, 0, 0, 0, 3},
-    };
-
     auto p = path::create(waypoints, path::options{}.set_max_blend_deviation(root["path_tolerance_delta_rads"].asDouble()));
     trajectory::options opt{.max_velocity = max_velocity, .max_acceleration = max_acceleration};
-    auto cb = make_tcp_jacobian(gp12_table);
+    auto cb = make_tcp_jacobian(test::gp12_model_table());
     opt.tcp = trajectory::tcp_limit{
         .max_velocity = 0.5, .jacobian = std::move(cb.jacobian), .velocity_derivative = std::move(cb.velocity_derivative)};
 

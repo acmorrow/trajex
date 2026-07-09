@@ -14,29 +14,18 @@
 #include <viam/trajex/totg/tcp_jacobian.hpp>
 #include <viam/trajex/totg/tools/replay.hpp>
 
+#include "../../test/test_utils.hpp"
+
 namespace {
 
 using namespace viam::trajex::totg;
+using viam::trajex::totg::test::gp12_model_table;
 
 struct test_receiver {
     int segment_count = 0;
     double total_duration = 0.0;
     std::chrono::microseconds total_gen_time{};
 };
-
-// Yaskawa GP12 model table (viam::sdk::ModelTable tensor format): six revolute joints
-// followed by a fixed tool row, transcribed from gp12.urdf.
-xt::xarray<double> gp12_model_table() {
-    return xt::xarray<double>{
-        {0, 0, 0.450, 0, 0, 0, 0, 0, 1, 0},
-        {0.155, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-        {0, 0, 0.614, 0, 0, 0, 0, -1, 0, 0},
-        {0.640, 0, 0.200, 0, 0, 0, -1, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, -1, 0, 0},
-        {0, 0, 0, 0, 0, 0, -1, 0, 0, 0},
-        {0.100, 0, 0, 3.14159265, -1.570796, 0, 0, 0, 0, 3},
-    };
-}
 
 planner<test_receiver>::config simple_config() {
     return {
@@ -299,6 +288,67 @@ BOOST_AUTO_TEST_CASE(decider_return_type_is_flexible) {
                            .execute([](const auto&, const auto& totg, const auto&) -> int { return totg.receiver ? 42 : -1; });
 
     BOOST_CHECK_EQUAL(result, 42);
+}
+
+#if defined(VIAM_TRAJEX_LEGACY_ENABLED)
+// The legacy generator cannot enforce a TCP speed limit, so it must never run as a fallback
+// for one: a planner whose config carries a TCP limit refuses to register legacy at all.
+BOOST_AUTO_TEST_CASE(legacy_registration_with_tcp_limit_throws) {
+    auto cfg = simple_config();
+    auto cb = make_tcp_jacobian(gp12_model_table());
+    cfg.tcp = trajectory::tcp_limit{
+        .max_velocity = 0.5, .jacobian = std::move(cb.jacobian), .velocity_derivative = std::move(cb.velocity_derivative)};
+
+    planner<test_receiver> p(std::move(cfg));
+    BOOST_CHECK_THROW(p.with_legacy([](const auto&, test_receiver&, const waypoint_accumulator&, Path&&, Trajectory&&, auto) {}),
+                      std::logic_error);
+}
+
+// Legacy replay of a TCP-carrying record is a deliberate uncapped comparison run: the record's
+// TCP limit is dropped explicitly (visible as an empty config field) rather than carried into a
+// generator that would silently ignore it.
+BOOST_AUTO_TEST_CASE(legacy_replay_of_tcp_record_drops_tcp_limit) {
+    const auto table = gp12_model_table();
+
+    planner<test_receiver>::config cfg{
+        .velocity_limits = xt::xarray<double>{1.0, 1.0, 1.0, 1.0, 1.0, 1.0},
+        .acceleration_limits = xt::xarray<double>{1.0, 1.0, 1.0, 1.0, 1.0, 1.0},
+        .path_blend_tolerance = 0.01,
+        .colinearization_ratio = std::nullopt,
+    };
+    auto cb = make_tcp_jacobian(table);
+    cfg.tcp = trajectory::tcp_limit{
+        .max_velocity = 0.5, .jacobian = std::move(cb.jacobian), .velocity_derivative = std::move(cb.velocity_derivative)};
+    cfg.model_table = table;
+
+    planner<test_receiver> p(std::move(cfg));
+    auto data = p.stash(xt::xarray<double>{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, {0.3, 0.1, 0.0, 0.0, 0.0, 0.0}});
+    const std::string record = p.serialize_for_replay(waypoint_accumulator{*data});
+
+    std::istringstream in(record);
+    auto replayed = legacy_replay_planner::create(in);
+    BOOST_CHECK(!replayed.get_config().tcp.has_value());
+
+    auto outcome = replayed.execute([](const auto&, const auto&, auto legacy) { return std::move(legacy); });
+    BOOST_REQUIRE(outcome.receiver.has_value());
+    BOOST_CHECK(outcome.receiver->result.has_value());
+}
+#endif
+
+// A malformed model_table must be rejected where the config is accepted. Deferring the check to
+// serialize_for_replay would throw on the failure paths that call it to record diagnostics,
+// destroying the replay record for the original error.
+BOOST_AUTO_TEST_CASE(malformed_model_table_rejected_at_construction) {
+    {
+        auto cfg = simple_config();
+        cfg.model_table = xt::xarray<double>{1.0, 2.0, 3.0};  // 1-D, not (n, 10)
+        BOOST_CHECK_THROW(planner<test_receiver>(std::move(cfg)), std::invalid_argument);
+    }
+    {
+        auto cfg = simple_config();
+        cfg.model_table = xt::xarray<double>{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};  // (2, 3), not (n, 10)
+        BOOST_CHECK_THROW(planner<test_receiver>(std::move(cfg)), std::invalid_argument);
+    }
 }
 
 // A config carrying a TCP limit and its model-table provenance survives a

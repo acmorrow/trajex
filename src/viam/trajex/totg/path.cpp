@@ -343,7 +343,10 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
         // degenerate bisector by a large center offset and the resulting arc basis vectors x and
         // y come out non-perpendicular, tripping the circular-segment validity check.
         // Below k_min_blend_angle the junction stays linear instead; the tangent is continuous to
-        // within the velocity-limit epsilon, so TOTG does not mandate s_dot = 0 there.
+        // within the velocity-limit epsilon, so TOTG does not mandate s_dot = 0 there. That holds
+        // because 1 - cos(k_min_blend_angle) approx 5e-13 sits well below the default trajectory
+        // epsilon (1e-6); a trajectory configured with an epsilon under ~5e-13 instead classifies
+        // these junctions as tangent discontinuities requiring a full stop (safe, but slower).
         constexpr double k_min_blend_angle = 1e-6;
         if (angle < k_min_blend_angle) {
             return std::nullopt;

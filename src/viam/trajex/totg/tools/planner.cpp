@@ -10,7 +10,14 @@
 
 namespace viam::trajex::totg {
 
-planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {}
+planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {
+    // Validate model_table shape here rather than in serialize_for_replay: serialization runs
+    // on failure paths to record diagnostics, and a throw there would destroy the replay record
+    // for the original error.
+    if (config_.model_table && (config_.model_table->dimension() != 2 || config_.model_table->shape(1) != 10)) {
+        throw std::invalid_argument("planner config model_table must be an (n, 10) tensor");
+    }
+}
 
 const struct planner_base::config& planner_base::get_config() const noexcept {
     return config_;
@@ -88,10 +95,9 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
     // callback via make_tcp_jacobian. Both fields are written together and only when the model-table
     // provenance is available, since neither alone reproduces the limit.
     if (get_config().tcp && get_config().model_table) {
+        // The (n, 10) shape was validated at planner construction, so writing the table here
+        // cannot fail on the failure paths that call this to record diagnostics.
         const auto& table = *get_config().model_table;
-        if (table.dimension() != 2 || table.shape(1) != 10) {
-            throw std::runtime_error("replay model_table must be an (n, 10) tensor");
-        }
         root["max_tcp_speed_m_per_sec"] = get_config().tcp->max_velocity;
 
         Json::Value model_table_array(Json::arrayValue);

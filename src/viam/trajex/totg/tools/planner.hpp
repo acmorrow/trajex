@@ -48,7 +48,8 @@ class planner_base {
         // format) the jacobian was built from. tcp.jacobian is an opaque callback and cannot be
         // serialized, so serialize_for_replay records this instead and replay rebuilds the callback via
         // make_tcp_jacobian. Independent of tcp so a planner using a custom (non-model-table) jacobian can
-        // still set tcp; such a limit simply will not survive a replay round-trip.
+        // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
+        // validated at planner construction.
         std::optional<xt::xarray<double>> model_table{};
     };
 
@@ -246,7 +247,18 @@ class planner : public planner_base {
     ///
     /// Enables the legacy generator.
     ///
+    /// @throws std::logic_error if the config carries a TCP speed limit. The legacy
+    ///         generator cannot enforce a TCP limit, so registering it alongside one
+    ///         would let a TOTG failure fall back to a trajectory that silently
+    ///         ignores a caller-requested safety cap. A consumer that wants a
+    ///         deliberate uncapped legacy run must clear config.tcp first.
+    ///
     planner& with_legacy(legacy_success_fn on_success, algorithm_failure_fn on_failure = nullptr) {
+        if (get_config().tcp) {
+            throw std::logic_error(
+                "planner: cannot register the legacy generator with a TCP speed limit set; "
+                "the legacy generator cannot enforce a TCP limit");
+        }
         legacy_on_success_ = std::move(on_success);
         legacy_on_failure_ = std::move(on_failure);
         return *this;

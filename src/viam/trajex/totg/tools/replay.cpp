@@ -163,6 +163,11 @@ const trajectory_integration_event_collector& replay_planner::collector() const 
 legacy_replay_planner legacy_replay_planner::create(std::istream& in) {
     auto [cfg, waypoints] = parse_replay_record(in);
 
+    // The legacy generator cannot enforce a TCP limit, and the planner refuses to register it
+    // while one is set. A legacy replay of a TCP-carrying record is a deliberate uncapped
+    // comparison run, so drop the limit explicitly; the model-table provenance is kept.
+    cfg.tcp.reset();
+
     legacy_replay_planner p(std::move(cfg));
 
     auto data = p.stash(std::move(waypoints));
