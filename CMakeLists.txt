@@ -181,14 +181,14 @@ endif()
 FetchContent_Declare(
   xtl
   GIT_REPOSITORY https://github.com/xtensor-stack/xtl.git
-  GIT_TAG        e0f00666d90086bb245ae73abb6123d0e2c1b30b # 0.7.2
+  GIT_TAG        a7c1c5444dfc57f76620391af4c94785ff82c8d6 # 0.7.7
   FIND_PACKAGE_ARGS ${VIAM_TRAJEX_XTL_VERSION_MINIMUM} CONFIG
 )
 
 FetchContent_Declare(
   xtensor
   GIT_REPOSITORY https://github.com/xtensor-stack/xtensor
-  GIT_TAG        9e8662ddad7fcd1a96969b96bf8955e59cf44978 # 0.24.3
+  GIT_TAG        3634f2ded19e0cf38208c8b86cea9e1d7c8e397d # 0.25.0
   FIND_PACKAGE_ARGS ${VIAM_TRAJEX_XTENSOR_VERSION_MINIMUM} CONFIG
 )
 
@@ -403,6 +403,10 @@ if (VIAM_TRAJEX_ENABLE_CAPI)
   target_sources(viam-trajex-capi
     PRIVATE
       src/viam/trajex/capi/capi.cpp
+    PUBLIC
+      FILE_SET HEADERS
+      BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src
+      FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/viam/trajex/capi/capi.h
   )
   target_include_directories(viam-trajex-capi
     PUBLIC
@@ -656,6 +660,16 @@ endif()
 
 include(GNUInstallDirs)
 
+# Put every trajex install() rule below into the `trajex` component -- none of them set a
+# component individually, so this default applies to all of them. This lets
+# `cmake --install --component trajex` stage just trajex's own outputs: the FetchContent'd
+# xtl/xtensor registered their install rules earlier (during FetchContent_MakeAvailable),
+# under the built-in "Unspecified" component, so they are excluded. A full install (no
+# --component) is unaffected -- every component installs. Finer-grained roles/components
+# (dev vs runtime, capi vs tools, ...) are future work; for now the feature flags gate
+# what exists, so one component is enough.
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME trajex)
+
 # Always install core libraries. The legacy alias is always installed; when
 # VIAM_TRAJEX_ENABLE_LEGACY is OFF it is an empty INTERFACE library and install() is a no-op.
 install(
@@ -696,6 +710,7 @@ if (VIAM_TRAJEX_ENABLE_CAPI)
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   )
 endif()
 
