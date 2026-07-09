@@ -106,8 +106,18 @@ class kinematic_chain {
     // position.
     struct chain_state;
 
-    // Validates the rows (joint types, axes) and counts actuated joints; all
-    // public construction funnels through here via `from`.
+    // Constant per-row kinematics derived once at construction: the
+    // parent-to-joint link transform (row-major 4x4) and, for revolute rows,
+    // the normalized local joint axis. The forward-kinematics walk runs per
+    // integration step, so its q-independent terms are not recomputed there.
+    struct row_constants {
+        std::array<double, 16> link_tf{};
+        std::array<double, 3> unit_axis{};
+    };
+
+    // Validates the rows (joint types, axes) and counts actuated joints, then
+    // precomputes the per-row constants; all public construction funnels
+    // through here via `from`.
     explicit kinematic_chain(std::vector<joint_row> rows);
 
     // Evaluates the forward kinematics at joint positions q, capturing the
@@ -116,6 +126,7 @@ class kinematic_chain {
     chain_state compute_chain_state_(const xt::xarray<double>& q) const;
 
     std::vector<joint_row> rows_;
+    std::vector<row_constants> row_constants_;
     std::size_t actuated_count_ = 0;
 };
 
