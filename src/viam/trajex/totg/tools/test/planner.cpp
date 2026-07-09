@@ -342,12 +342,12 @@ BOOST_AUTO_TEST_CASE(malformed_model_table_rejected_at_construction) {
     {
         auto cfg = simple_config();
         cfg.model_table = xt::xarray<double>{1.0, 2.0, 3.0};  // 1-D, not (n, 10)
-        BOOST_CHECK_THROW(planner<test_receiver>(std::move(cfg)), std::invalid_argument);
+        BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
     }
     {
         auto cfg = simple_config();
         cfg.model_table = xt::xarray<double>{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};  // (2, 3), not (n, 10)
-        BOOST_CHECK_THROW(planner<test_receiver>(std::move(cfg)), std::invalid_argument);
+        BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
     }
 }
 
