@@ -98,9 +98,12 @@ inline double max_realized_tcp_speed(const trajectory& traj, double l1, double l
     const double T = traj.duration().count();
     double peak = 0.0;
     // Sample over [0, T] inclusive: end-of-path stamping artifacts surface at the terminal
-    // instant, so the exact end of the trajectory must be checked against the cap too.
+    // instant, so the exact end of the trajectory must be checked against the cap too. The
+    // clamp matters: the T * i / samples round trip can land one ulp above T on the last
+    // iteration (duration-value dependent, observed on arm64), and sampling past the
+    // duration throws.
     for (int i = 0; i <= samples; ++i) {
-        const double t = T * static_cast<double>(i) / static_cast<double>(samples);
+        const double t = std::min(T, T * static_cast<double>(i) / static_cast<double>(samples));
         const auto smp = traj.sample(trajectory::seconds{t});
         const auto J = planar_2link_jacobian(l1, l2, smp.configuration);
         double v[3] = {0.0, 0.0, 0.0};
