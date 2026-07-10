@@ -329,7 +329,7 @@ BOOST_AUTO_TEST_CASE(legacy_replay_of_tcp_record_drops_tcp_limit) {
     auto replayed = legacy_replay_planner::create(in);
     BOOST_CHECK(!replayed.get_config().tcp.has_value());
 
-    auto outcome = replayed.execute([](const auto&, const auto&, auto legacy) { return std::move(legacy); });
+    auto outcome = replayed.execute([](const auto&, const auto&, auto legacy) { return legacy; });
     BOOST_REQUIRE(outcome.receiver.has_value());
     BOOST_CHECK(outcome.receiver->result.has_value());
 }
