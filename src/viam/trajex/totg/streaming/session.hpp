@@ -30,9 +30,10 @@ namespace viam::trajex::totg::streaming {
 /// trajectory has been sampled through.
 ///
 /// Sampling is forward-only and stateful: each call to `sample_next()` or
-/// `sample_at_least()` advances an internal cursor that gates the admissibility
-/// of subsequent extends. The session assumes single-threaded ownership; sampling
-/// and extending from different threads is unsupported.
+/// `sample_at_least()` advances an internal cursor, and how far that cursor has
+/// advanced determines whether a later extend can pivot or must stage. The session
+/// assumes single-threaded ownership; sampling and extending from different threads
+/// is unsupported.
 ///
 class session {
    public:
@@ -47,8 +48,8 @@ class session {
     /// @param sample_rate Nominal sample rate. Each underlying trajectory's sampler is
     ///                    quantized to land its last sample exactly on the trajectory's
     ///                    duration, so per-sample spacing approximates 1 / sample_rate
-    ///                    with small per-trajectory drift. The parameter shape may
-    ///                    change when sampler injection lands.
+    ///                    with small per-trajectory drift. This parameter's shape may
+    ///                    change if a sampler factory is added later.
     ///
     session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate);
 
@@ -59,8 +60,8 @@ class session {
     /// Otherwise, requires `batch`'s first waypoint to compare bit-exactly equal to the
     /// session's most recently stored waypoint, then absorbs the remainder of `batch` and
     /// attempts to build a trajectory incorporating it. The result is either swapped in
-    /// (pivot) or held aside for later (stage). The choice is invisible to the caller
-    /// and reversible only via subsequent extensions.
+    /// (a pivot) or held aside for later (a stage); which one happens is not visible to
+    /// the caller and does not need to be.
     ///
     /// Waypoints in `batch` are assumed to have been deduplicated by the caller. The
     /// bit-exact seam requirement means the merged sequence retains the dedup invariant
@@ -103,8 +104,8 @@ class session {
     /// `current_time() + horizon`, advancing the sampling cursor accordingly.
     ///
     /// Returns fewer (possibly zero) samples than that target if the session is exhausted.
-    /// The `at_least` qualifier reflects that non-uniform samplers may overshoot the
-    /// requested horizon by a bounded amount; the session does not split a sample-period.
+    /// The name says `at_least` because a non-uniform sampler may overshoot the requested
+    /// horizon by a bounded amount; the session does not split a sample period.
     ///
     /// @param horizon Minimum amount of time to advance before stopping
     /// @return Vector of samples covering at least `horizon`, or fewer on exhaustion

@@ -1,9 +1,8 @@
 // Streaming session simulator.
 //
 // Loads a canonical replay JSON record, sweeps a (W_c, W_r) grid by simulating a
-// firehose caller on top of streaming::session, and writes a CSV summarizing each
-// cell. See orbsanding-streaming-session-simulation-plan.md at the repo root for
-// the full design.
+// caller that streams waypoints at maximum rate on top of streaming::session, and
+// writes a CSV summarizing each cell.
 
 #include <algorithm>
 #include <chrono>

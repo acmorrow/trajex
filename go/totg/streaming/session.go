@@ -87,7 +87,7 @@ func (s *Session) Close() {
 // Extend honors ctx at entry only: if ctx is already cancelled when Extend is
 // called, it returns ctx.Err() without invoking the C ABI. Once the C call
 // begins it cannot be interrupted, so a cancellation landing mid-call does not
-// abort it -- the operation runs to completion and its result (including any
+// abort it; the operation runs to completion and its result (including any
 // committed state mutation) is always reported.
 func (s *Session) Extend(ctx context.Context, batch *trajex.TensorMap) error {
 	if err := ctx.Err(); err != nil {
