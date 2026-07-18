@@ -392,6 +392,118 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_current_time) {
     BOOST_CHECK_EQUAL(sess.current_time().count(), pre_extend_time.count());
 }
 
+BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
+    // A pivot resumes its new sampler one sample period past the last emitted sample. If the
+    // candidate has less than one sample period of trajectory left after the branch, that
+    // offset lands at or past the candidate's duration and the naive path throws out of
+    // quantized_for_trajectory (start >= duration). The correct behavior is to fall through
+    // to stage: with the branch that close to the end, a pivot buys essentially no new
+    // samplable material, so staging (then draining and rebasing) is the right call.
+    //
+    // In production this arises at ordinary sample rates via corner-cutting: the active's
+    // last waypoint is a hard endpoint (full stop), but in the candidate that same waypoint
+    // becomes interior and gets a circular blend, so the branch sits within one sample period
+    // of the candidate's end. Reproducing that exact geometry deterministically is fragile,
+    // so we instead force the identical inequality with a slow sample rate: a small appended
+    // tail leaves post-branch material shorter than one (large) sample period.
+    //
+    // Construction: park the watermark at D_act/2 -- the middle of a three-sample grid, and
+    // comfortably ahead of the branch, so the extend is admitted as a pivot -- and choose the
+    // period so the resume offset (D_act/2 + period) overshoots the candidate's duration by a
+    // fixed margin. Algebra: period = D_cand - D_act/2 + margin makes the offset D_cand +
+    // margin regardless of the actual durations.
+    const auto d_act = reference_trajectory(three_waypoints()).duration();
+    const xt::xarray<double> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
+    const auto d_cand = reference_trajectory(merged).duration();
+
+    constexpr double k_margin_sec = 0.05;
+    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
+    // period lands in [D_act/2, D_act), so quantized_for_trajectory builds a three-sample grid
+    // at { 0, D_act/2, D_act } and sample_next(2) parks the watermark exactly at D_act/2.
+    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(2);
+
+    // Precondition: we are set up so the pivot's resume offset overshoots the candidate.
+    BOOST_REQUIRE_GE(sess.current_time().count() + period, d_cand.count());
+
+    // The tiny appended tail would pivot (the branch is ahead of the watermark), but the
+    // resume offset overshoots, so the session must stage instead of throwing.
+    const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {1.0, 1.05}});
+    BOOST_CHECK_NO_THROW(sess.extend(extension.accumulator()));
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
+    // Continuation of the staging test above. Once the overshoot guard declines the pivot and
+    // stages the tiny post-branch tail, draining the session must FOLD THAT TAIL IN: its
+    // waypoints are valid, reachable motion and must never be dropped. The rebuild ({active
+    // terminal waypoint} + {staged tail}) is a legitimate trajectory that merely runs shorter
+    // than one (slow) sample period, so rebase_'s resume-at-sample_period_ offset overshoots
+    // and quantized_for_trajectory throws start >= duration inside sample_one_. The fix
+    // mirrors the pivot-overshoot guard on the rebase side: for a sub-sample-period rebuild,
+    // clamp the resume so the batch's terminal is emitted and the rebase completes. This test
+    // asserts the batch is consumed; against the unfixed rebase it fails, because the drain
+    // throws rather than delivering the endpoint.
+    //
+    // Construction mirrors the staging test above.
+    const auto d_act = reference_trajectory(three_waypoints()).duration();
+    const xt::xarray<double> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
+    const auto d_cand = reference_trajectory(merged).duration();
+
+    constexpr double k_margin_sec = 0.05;
+    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
+    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(2);  // park the watermark at D_act/2: mid-grid and ahead of the branch
+
+    const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {1.0, 1.05}});
+    sess.extend(extension.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, not pivoted
+
+    // Precondition: the rebuild rebase_ will attempt ({active terminal waypoint} + {staged
+    // tail}) is shorter than one sample period, so the unfixed resume-at-sample_period_ offset
+    // overshoots. This is the regime the fix must handle by consuming the batch, not dropping.
+    const auto d_rebuild = reference_trajectory(xt::xarray<double>{{1.0, 1.0}, {1.0, 1.05}}).duration();
+    BOOST_REQUIRE_GE(period, d_rebuild.count());
+
+    // Draining past the active's terminal triggers the rebase. It must consume the staged tail
+    // -- neither throw nor drop it.
+    std::vector<struct trajectory::sample> drained;
+    BOOST_CHECK_NO_THROW(drained = sess.sample_next(8));
+
+    // The rebase completed: a new trajectory was installed for the staged batch.
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+
+    // The batch's motion was delivered: the last emitted sample reaches the final waypoint.
+    BOOST_REQUIRE(!drained.empty());
+    const auto& terminal = drained.back();
+    const xt::xarray<double> final_waypoint{1.0, 1.05};
+    BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
+
+    // The short-rebuild terminal is a true rest-to-rest endpoint: zero velocity and
+    // acceleration, landing exactly at the rebased trajectory's end in global time (the epoch
+    // advanced by the old duration, plus the short rebuild's own duration).
+    BOOST_CHECK_EQUAL(terminal.time.count(), (sess.active_epoch() + sess.active_trajectory()->duration()).count());
+    BOOST_REQUIRE_EQUAL(terminal.velocity.shape(0), 2U);
+    BOOST_REQUIRE_EQUAL(terminal.acceleration.shape(0), 2U);
+    for (std::size_t i = 0; i < terminal.velocity.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(terminal.velocity(i), 0.0);
+    }
+    for (std::size_t i = 0; i < terminal.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(terminal.acceleration(i), 0.0);
+    }
+
+    // Having consumed the batch, the session is now cleanly drained.
+    std::vector<struct trajectory::sample> tail;
+    BOOST_CHECK_NO_THROW(tail = sess.sample_next(1));
+    BOOST_CHECK(tail.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // pivot
 
 BOOST_AUTO_TEST_SUITE(stage_and_rebase)
@@ -491,6 +603,47 @@ BOOST_AUTO_TEST_CASE(rebase_seam_time_keeps_flowing_forward) {
     BOOST_CHECK_GT(post_rebase_samples.front().time.count(), pre_rebase_time.count());
 }
 
+BOOST_AUTO_TEST_CASE(staged_batch_that_fails_to_build_surfaces_as_error_at_rebase) {
+    // A staged batch whose geometry cannot build a path must surface as a hard error when the
+    // rebase fires: this is robot motion, so a bad batch is never silently dropped nor masked
+    // as a clean drain. Duplicate consecutive waypoints yield a zero-length linear segment,
+    // which path::create rejects (path.cpp:77). We disable linear coalescing
+    // (max_linear_deviation = 0) so the duplicate is not quietly removed before it can throw.
+    //
+    // To make the failure land at REBASE rather than at extend, the bad batch must arrive while
+    // the session is already locked out (staging non-empty): a locked-out extend only records
+    // the batch, deferring the build to rebase_.
+    path::options popt = default_path_options();
+    popt.set_max_linear_deviation(0.0);
+    streaming::session sess{popt, default_trajectory_options(), default_sample_rate()};
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+
+    // Drain to the terminal so the next extend stages (branch behind the watermark), locking out.
+    sess.sample_at_least(sess.active_trajectory()->duration());
+
+    const pinned_waypoints good(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}});
+    sess.extend(good.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, locked out
+
+    // Locked out: this batch is recorded, not built. Its tail {2,1} duplicates the prior staged
+    // waypoint, so the eventual rebuild {1,1},{2,1},{2,1} carries a zero-length segment.
+    const pinned_waypoints bad(xt::xarray<double>{{2.0, 1.0}, {2.0, 1.0}});
+    BOOST_REQUIRE_NO_THROW(sess.extend(bad.accumulator()));  // locked-out extend defers the build
+
+    // Draining fires the rebase, whose build fails. It must surface as an exception (the C ABI
+    // maps this to an error return) -- not silently vanish.
+    BOOST_CHECK_THROW(sess.sample_next(4), std::invalid_argument);
+
+    // State is intact: the failed rebase installed no new trajectory (rebase_ mutates only after
+    // the throwing build). And the batch is retained, not dropped -- a subsequent pull re-attempts
+    // and reports the same error again. That is correct: a bad batch is a persistent, honestly
+    // reported failure, never a silently dropped one.
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+    BOOST_CHECK_THROW(sess.sample_next(1), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // stage_and_rebase
 
 BOOST_AUTO_TEST_SUITE(multi_extend)
@@ -557,6 +710,63 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 3U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), duration_before_stage.count());
+}
+
+BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
+    // While locked out, several extends accumulate into staged_batches_ and a single rebase
+    // folds them ALL into one rebuilt chain. Every other rebase test stages exactly one batch,
+    // leaving the multi-element accumulation path unexercised (stack_anchor_and_staged_ over
+    // N>1 blocks, and the locked-out append firing repeatedly). This also backs the reasoning
+    // that "more input before draining takes the normal, non-short rebase path" -- which only
+    // holds if multiple staged batches merge correctly.
+    auto sess = fresh_session();
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+
+    // Drain to the terminal so the next extend stages (branch behind the watermark), locking out.
+    sess.sample_at_least(initial_duration);
+
+    const pinned_waypoints batch_a(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(batch_a.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, locked out
+
+    // Second extend arrives while locked out: it accumulates onto staging rather than rebasing.
+    const pinned_waypoints batch_b(xt::xarray<double>{{2.0, 2.0}, {3.0, 2.0}});
+    sess.extend(batch_b.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // still just accumulated
+
+    // Draining fires ONE rebase that folds both staged batches into a single new chain.
+    const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_REQUIRE(!drained.empty());
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);  // one rebase, not one-per-batch
+    BOOST_CHECK_EQUAL(sess.active_epoch().count(), initial_duration.count());
+
+    // Both batches folded in: the terminal reaches batch_b's last waypoint {3,2} at rest. Had
+    // accumulation dropped or misassembled batch_b, the terminal would be batch_a's last, {2,2}.
+    const auto& terminal = drained.back();
+    const xt::xarray<double> final_waypoint{3.0, 2.0};
+    BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
+    BOOST_REQUIRE_EQUAL(terminal.velocity.shape(0), 2U);
+    BOOST_REQUIRE_EQUAL(terminal.acceleration.shape(0), 2U);
+    for (std::size_t i = 0; i < terminal.velocity.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(terminal.velocity(i), 0.0);
+    }
+    for (std::size_t i = 0; i < terminal.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(terminal.acceleration(i), 0.0);
+    }
+
+    // TODO: strengthen to a full geometry-equivalence check -- verify the post-rebase sample
+    // stream matches a trajectory built directly over the merged waypoint set {terminal pose,
+    // ...staged tails}, not merely reaching its endpoint. Deferred because it needs an
+    // epoch-aware comparison: post-rebase samples carry global timestamps advanced by the prior
+    // chain's duration, and check_samples_match_reference skips any sample past the reference's
+    // local duration -- so reusing it as-is would silently skip every post-rebase sample and
+    // pass vacuously. The full check must compare reference.sample(sample.time - epoch) via a
+    // small epoch-shifted variant of that helper. This minimal test pins the load-bearing
+    // property: both batches fold into one rebase, and the terminal reaches the last staged
+    // waypoint at rest.
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // multi_extend

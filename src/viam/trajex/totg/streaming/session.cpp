@@ -216,14 +216,21 @@ void session::extend(const waypoint_accumulator& batch) {
     const auto branch_local = find_branch_local_time_(*active_, candidate);
     const auto branch_global = epoch_ + branch_local;
 
-    const bool can_pivot = (emitted_sample_count_ == 0) || (branch_global > current_time_);
-    if (can_pivot) {
-        // Compute where the new sampler should start. If no samples have been emitted, the
-        // new sampler picks up at local time zero (same as the first build). Otherwise it
-        // picks up one sample period past the last emitted sample's local time, so the
-        // sample grid stays approximately uniform across the pivot.
-        const auto starting_local_time =
-            (emitted_sample_count_ == 0) ? trajectory::seconds{0.0} : (current_time_ - epoch_) + sample_period_;
+    // Decide between pivot and stage. A pivot is admissible only when two conditions hold.
+    // First, the branch must be ahead of the latest emitted sample (or nothing has been
+    // emitted yet), so the new trajectory diverges from the old only in as-yet-unsampled
+    // territory. Second, the new sampler's resume offset must still leave samplable material
+    // before the candidate's end. That offset picks up one sample period past the last
+    // emitted sample so the sample grid stays approximately uniform across the pivot; if it
+    // lands at or past the candidate's duration, the candidate has less than one sample
+    // period of trajectory after the branch, so a pivot would buy no new samplable material
+    // (and quantized_for_trajectory would reject start >= duration). Stage instead and let
+    // the batch fold in at the next rebase.
+    const auto starting_local_time = (emitted_sample_count_ == 0) ? trajectory::seconds{0.0} : (current_time_ - epoch_) + sample_period_;
+    const bool branch_ahead = (emitted_sample_count_ == 0) || (branch_global > current_time_);
+    const bool has_samplable_material = starting_local_time < candidate.duration();
+
+    if (branch_ahead && has_samplable_material) {
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
 
         last_waypoint_ = row_to_xarray_(new_waypoints, new_waypoints.shape(0) - 1);
@@ -254,10 +261,21 @@ void session::rebase_() {
     auto new_active = build_trajectory_from_(new_waypoints);
 
     // The previous chain's terminal was emitted as its last sample at global time
-    // (epoch_ + old_duration). Start the new sampler one nominal sample period past that
-    // so the seam shows no duplicate sample and the inter-trajectory gap is exactly
+    // (epoch_ + old_duration). Resume the new sampler one nominal sample period past that so
+    // the seam shows no duplicate sample and the inter-trajectory gap is exactly
     // sample_period_.
-    uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, sample_period_);
+    //
+    // A rebuilt trajectory shorter than one sample period is the rebase-side mirror of the
+    // pivot overshoot handled in extend(): the resume offset would land at or past its end,
+    // and quantized_for_trajectory rejects start >= duration. The staged motion is valid and
+    // must be delivered, not dropped -- but the whole move fits inside a single sample period,
+    // so its only grid-aligned sample is the terminal: the pose the arm holds at the next
+    // sample instant, having completed the move and come to rest at the destination. Emit
+    // exactly that with a single-sample grid landing on the trajectory's end, which also
+    // avoids re-emitting the seam the way a start-at-zero sampler would.
+    uniform_sampler new_sampler = (sample_period_ < new_active.duration())
+                                      ? uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, sample_period_)
+                                      : uniform_sampler{std::size_t{1}};
 
     active_waypoints_ = std::move(new_waypoints);
     active_ = std::move(new_active);
