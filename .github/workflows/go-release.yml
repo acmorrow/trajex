@@ -69,7 +69,7 @@ jobs:
             runner: macos-26   # build host only; the 14.0 floor comes from CMAKE_OSX_DEPLOYMENT_TARGET below
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.BUILD_REF }}   # released tag, or the dispatch ref (not target_commitish)
           submodules: true
@@ -83,7 +83,7 @@ jobs:
           apt-get install -y --no-install-recommends gcc-10 g++-10
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum   # cache modules + build (the rdk dep tree is heavy)
@@ -147,7 +147,7 @@ jobs:
           go -C go test -c -o "$GITHUB_WORKSPACE/totg.test" ./totg/
 
       - name: Upload the go test binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: totg-test-${{ matrix.plat }}
           path: totg.test
@@ -155,7 +155,7 @@ jobs:
           retention-days: 3
 
       - name: Upload platform artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-artifacts-${{ matrix.plat }}
           path: go/artifacts   # lib/<plat>/*.a plus the (shared) include/ tree
@@ -191,7 +191,7 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Fetch the ${{ matrix.arch }} test binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: totg-test-linux_${{ matrix.arch }}
       - name: Run it in a clean ${{ matrix.image }} environment
@@ -219,13 +219,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.BUILD_REF }}
           fetch-depth: 0
 
       - name: Gather all platform artifacts into go/artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: go-artifacts-*
           path: go/artifacts
@@ -251,7 +251,7 @@ jobs:
         run: git format-patch -1 --binary -o patch HEAD
 
       - name: Upload commit patch
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-release-commit-patch
           path: patch/*.patch
