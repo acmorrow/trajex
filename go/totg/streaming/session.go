@@ -84,10 +84,11 @@ func (s *Session) Close() {
 // first, batch[0] must compare bit-exactly equal to the session's most
 // recently stored waypoint (the seam contract).
 //
-// Extend honors ctx at entry and exit: if ctx is already cancelled when
-// Extend is called, it returns ctx.Err() without invoking the C ABI; if ctx
-// is cancelled while the C call is in flight (which itself cannot be
-// interrupted), the result is discarded and ctx.Err() is returned.
+// Extend honors ctx at entry only: if ctx is already cancelled when Extend is
+// called, it returns ctx.Err() without invoking the C ABI. Once the C call
+// begins it cannot be interrupted, so a cancellation landing mid-call does not
+// abort it -- the operation runs to completion and its result (including any
+// committed state mutation) is always reported.
 func (s *Session) Extend(ctx context.Context, batch *trajex.TensorMap) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -99,9 +100,6 @@ func (s *Session) Extend(ctx context.Context, batch *trajex.TensorMap) error {
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)
 		return errors.Errorf("trajex/totg/streaming: Extend failed: %s", msg)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	return nil
 }
@@ -123,9 +121,6 @@ func (s *Session) SampleNext(ctx context.Context, n int, outputs *trajex.TensorM
 		C.viam_trajex_string_destroy(errOut)
 		return errors.Errorf("trajex/totg/streaming: SampleNext failed: %s", msg)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -144,9 +139,6 @@ func (s *Session) SampleAtLeast(ctx context.Context, horizon time.Duration, outp
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)
 		return errors.Errorf("trajex/totg/streaming: SampleAtLeast failed: %s", msg)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	return nil
 }
