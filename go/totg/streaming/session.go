@@ -1,4 +1,4 @@
-//go:build !windows && !no_cgo
+//go:build !windows
 
 // Package streaming exposes the trajex TOTG streaming session as a Go API,
 // layered on top of github.com/viam-modules/trajex's TensorMap. Sessions are
