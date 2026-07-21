@@ -1,18 +1,4 @@
-// Streaming session tests.
-//
-// These tests drive the design of `viam::trajex::totg::streaming::session`. The class is
-// currently stubbed out; all tests that exercise real behavior are expected to fail until
-// the implementation lands. Tests are organized in the order of the test plan:
-//
-//   A. Empty session behavior
-//   B. First extend & construction error paths
-//   C. Sampling primitives
-//   D. Single-trajectory equivalence
-//   E. Seam validation
-//   F. Pivot semantics
-//   G. Stage and rebase
-//   H. Multi-extend stress
-//   I. End-of-stream behavior
+// Tests for viam::trajex::totg::streaming::session.
 
 #if __has_include(<xtensor/containers/xarray.hpp>)
 #include <xtensor/containers/xarray.hpp>
@@ -43,8 +29,6 @@ using viam::trajex::totg::waypoint_accumulator;
 namespace streaming = viam::trajex::totg::streaming;
 namespace types = viam::trajex::types;
 
-// === Fixture defaults ===
-//
 // A small but real fixture: 2 DOF, modest velocity / acceleration limits, and a 100 Hz
 // sample rate. The waypoint sets below produce trajectories long enough that pulling a
 // dozen samples at 100 Hz stays well within the trajectory's duration.
