@@ -80,8 +80,8 @@ xt::xarray<double> accumulator_tail_to_xarray(const waypoint_accumulator& batch,
 }
 
 xt::xarray<double> concat_active_with_batch_tail(const xt::xarray<double>& base,
-                                                  const waypoint_accumulator& batch,
-                                                  std::size_t batch_from) {
+                                                 const waypoint_accumulator& batch,
+                                                 std::size_t batch_from) {
     const std::size_t n_base = base.shape(0);
     const std::size_t n_add = batch.size() - batch_from;
     const std::size_t dof = base.shape(1);
