@@ -159,6 +159,22 @@ class session {
     std::size_t trajectory_generation_count() const noexcept;
 
    private:
+    // Builds a trajectory from the given waypoints xarray, threading through path::options
+    // and trajectory::options. Throws on validation failure inside path::create or
+    // trajectory::create; the session's state is unaffected because this is called before
+    // any member is mutated.
+    trajectory build_trajectory_from_(const xt::xarray<double>& waypoints) const;
+
+    // Emits a single sample, advancing the cursor. Triggers a rebase if the active is
+    // exhausted at the next-sample index and staging is non-empty. Returns nullopt when
+    // the session is fully drained.
+    std::optional<struct trajectory::sample> sample_one_();
+
+    // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, advances
+    // the epoch by the prior active's duration, clears staging, and increments the
+    // generation count. Preconditions: active_ holds a value, staged_batches_ is non-empty.
+    void rebase_();
+
     // Construction-time configuration. Reused for every trajectory the session builds.
     path::options path_options_;
     trajectory::options trajectory_options_;
@@ -212,22 +228,6 @@ class session {
     // Cumulative count of trajectories the session has installed as active. Increments
     // on first build, on each pivot, and on each rebase.
     std::size_t generation_count_{0};
-
-    // Builds a trajectory from the given waypoints xarray, threading through path::options
-    // and trajectory::options. Throws on validation failure inside path::create or
-    // trajectory::create; the session's state is unaffected because this is called before
-    // any member is mutated.
-    trajectory build_trajectory_from_(const xt::xarray<double>& waypoints) const;
-
-    // Emits a single sample, advancing the cursor. Triggers a rebase if the active is
-    // exhausted at the next-sample index and staging is non-empty. Returns nullopt when
-    // the session is fully drained.
-    std::optional<struct trajectory::sample> sample_one_();
-
-    // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, advances
-    // the epoch by the prior active's duration, clears staging, and increments the
-    // generation count. Preconditions: active_ holds a value, staged_batches_ is non-empty.
-    void rebase_();
 };
 
 }  // namespace viam::trajex::totg::streaming
