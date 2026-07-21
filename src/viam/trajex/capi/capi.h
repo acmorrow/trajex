@@ -449,8 +449,8 @@ void viam_trajex_totg_streaming_session_destroy(viam_trajex_totg_streaming_sessi
 /// @return 0 on success, -1 on bad arguments or any caught exception (seam mismatch,
 ///         DOF mismatch, trajectory generation failure, etc.).
 ///
-int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session_t* VIAM_TRAJEX_RESTRICT session,
-                                              const viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT batch,
+int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session_t* session,
+                                              const viam_trajex_tensor_map_t* batch,
                                               const char** error_out);
 
 ///
@@ -480,9 +480,9 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
 ///
 /// @return 0 on success, -1 on bad arguments or caught exception.
 ///
-int viam_trajex_totg_streaming_session_sample_next(viam_trajex_totg_streaming_session_t* VIAM_TRAJEX_RESTRICT session,
+int viam_trajex_totg_streaming_session_sample_next(viam_trajex_totg_streaming_session_t* session,
                                                    size_t n,
-                                                   viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT outputs,
+                                                   viam_trajex_tensor_map_t* outputs,
                                                    const char** error_out);
 
 ///
@@ -501,9 +501,9 @@ int viam_trajex_totg_streaming_session_sample_next(viam_trajex_totg_streaming_se
 ///
 /// @return 0 on success, -1 on bad arguments or caught exception.
 ///
-int viam_trajex_totg_streaming_session_sample_at_least(viam_trajex_totg_streaming_session_t* VIAM_TRAJEX_RESTRICT session,
+int viam_trajex_totg_streaming_session_sample_at_least(viam_trajex_totg_streaming_session_t* session,
                                                        double horizon_sec,
-                                                       viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT outputs,
+                                                       viam_trajex_tensor_map_t* outputs,
                                                        const char** error_out);
 
 ///
