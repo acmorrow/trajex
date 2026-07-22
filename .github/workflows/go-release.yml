@@ -86,6 +86,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum   # cache modules + build (the rdk dep tree is heavy)
 
       - name: Configure, build, and install archives into go/artifacts
         run: |
@@ -130,17 +131,20 @@ jobs:
           # component and are excluded, so they don't bloat the shipped module.
           DESTDIR="$GITHUB_WORKSPACE/go/artifacts" cmake --install build-go --prefix / --component trajex
 
-      - name: Build the go test binary and smoke-test it
-        # Compile the totg tests into a standalone binary and run it here as the in-container
-        # sanity check. Link with the SYSTEM-DEFAULT compiler -- do NOT set CC/CXX to gcc-10.
-        # That IS the ABI-floor test: the archives are gcc-10-built and must link/run against
-        # whatever toolchain the environment provides. The same binary is uploaded and re-run
-        # on other distros by abi-check. It is self-contained (archives baked in, no runtime
-        # file deps -- confirmed), so CWD does not matter.
+      - name: Run the full go test suite, then build the abi-check binary
+        # Run EVERY go test under the tree (`./...` -- root, totg, streaming, rdk), so a cgo
+        # break or logic regression in ANY package is caught here, not just totg. Linked with
+        # the SYSTEM-DEFAULT compiler (do NOT set CC/CXX to gcc-10), so this also exercises
+        # the gcc-10 archives against the environment's default toolchain.
+        #
+        # Then compile the totg tests into a standalone binary for abi-check. That job tests
+        # SYSTEM-ABI transferability across distros (the libstdc++/glibc floor the archives
+        # demand), for which one representative binary is sufficient -- it need not exercise
+        # our own symbols (those are baked in), so totg alone covers it. Self-contained.
         run: |
           set -euxo pipefail
+          go -C go test ./...
           go -C go test -c -o "$GITHUB_WORKSPACE/totg.test" ./totg/
-          "$GITHUB_WORKSPACE/totg.test"
 
       - name: Upload the go test binary
         uses: actions/upload-artifact@v7
