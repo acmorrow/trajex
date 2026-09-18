@@ -371,16 +371,18 @@ BOOST_AUTO_TEST_CASE(tcp_non_positive_velocity_throws) {
     BOOST_CHECK_THROW(service->infer(inputs, {}), std::invalid_argument);
 }
 
-// The optional TCP inputs are part of the input schema; clients discover inputs through
-// metadata(), so both tensors must be listed there.
-BOOST_AUTO_TEST_CASE(metadata_lists_tcp_inputs) {
+// Every tensor named in metadata is mandatory on every inference call, so naming the TCP inputs
+// would force a model table and a cap on callers who want neither. The tests above call `infer`
+// directly and still cover parsing and enforcement, so all this one checks is that the two inputs
+// stay out of the schema we advertise.
+BOOST_AUTO_TEST_CASE(metadata_omits_tcp_inputs) {
     auto service = std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config());
     const auto md = service->metadata({});
     const auto has_input = [&](std::string_view name) {
         return std::any_of(md.inputs.begin(), md.inputs.end(), [&](const auto& info) { return info.name == name; });
     };
-    BOOST_CHECK(has_input("tcp_max_linear_velocity"));
-    BOOST_CHECK(has_input("kinematics_model_table"));
+    BOOST_CHECK(!has_input("tcp_max_linear_velocity"));
+    BOOST_CHECK(!has_input("kinematics_model_table"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
