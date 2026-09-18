@@ -71,36 +71,17 @@ struct switching_point_cache {
 }
 
 // TCP velocity limit: v_TCP / ||J_v(q)*f'(s)||.
-// Returns +inf at a singularity (||J*f'|| < eps) or NaN Jacobian (non-constraining).
+// Returns +inf at a singularity (gain < eps) or a NaN gain (non-constraining).
 arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                         const xvector<>& q_prime,
+                                        const xvector<>& q_double_prime,
                                         const trajectory::tcp_limits& tcp,
                                         class epsilon epsilon) {
-    // Held by value because binding a reference straight to *callback() would point into a
-    // temporary that dies at the end of the statement. Lifetime extension does not reach
-    // through a member function's returned reference.
-    const auto J_checked = tcp.linear_jacobian(q);
-    const auto& J = *J_checked;
-    if (J.shape(0) != 3) {
-        throw std::invalid_argument{"tcp.linear_jacobian must return 3 rows, got " + std::to_string(J.shape(0))};
-    }
-    if (J.shape(1) != q_prime.size()) {
-        throw std::invalid_argument{"tcp.linear_jacobian column count " + std::to_string(J.shape(1)) + " does not match joint DOF " +
-                                    std::to_string(q_prime.size())};
-    }
-    double norm_sq = 0.0;
-    for (std::size_t i = 0; i < 3; ++i) {
-        double dot = 0.0;
-        for (std::size_t j = 0; j < q_prime.size(); ++j) {
-            dot += J(i, j) * q_prime(j);
-        }
-        norm_sq += dot * dot;
-    }
-    const double norm = std::sqrt(norm_sq);
-    if (std::isnan(norm) || norm < static_cast<double>(epsilon)) {
+    const double gain = tcp.linear_velocity_gain(q, q_prime, q_double_prime).per_arc_unit;
+    if (std::isnan(gain) || gain < static_cast<double>(epsilon)) {
         return arc_velocity{std::numeric_limits<double>::infinity()};
     }
-    return arc_velocity{tcp.max_linear_velocity / norm};
+    return arc_velocity{tcp.max_linear_velocity / gain};
 }
 
 // Computes maximum path velocity (s_dot) from joint velocity and acceleration limits.
@@ -194,7 +175,7 @@ struct velocity_limits_with_components {
     const arc_velocity joint = base.s_dot_max_vel;
     arc_velocity tcp{std::numeric_limits<double>::infinity()};
     if (opt.tcp.has_value()) {
-        tcp = compute_tcp_velocity_limit(q, q_prime, *opt.tcp, opt.epsilon);
+        tcp = compute_tcp_velocity_limit(q, q_prime, q_double_prime, *opt.tcp, opt.epsilon);
     }
     return {base.s_dot_max_acc, std::min(joint, tcp), joint, tcp};
 }
@@ -386,13 +367,13 @@ phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_
 
     // TCP binding (gain finite): d/ds s_dot_max_TCP = -v_TCP * (dg/ds) / g^2.
     const auto gd = opt.tcp->linear_velocity_gain(configuration_of(cursor), q_prime, q_double_prime);
-    const double slope = -opt.tcp->max_linear_velocity * gd.d_gain_ds / (gd.gain_per_arc_unit * gd.gain_per_arc_unit);
+    const double slope = -opt.tcp->max_linear_velocity * gd.d_ds / (gd.per_arc_unit * gd.per_arc_unit);
 
     if (!std::isfinite(slope)) {
         throw std::runtime_error{
-            "compute_velocity_limit_derivative_with_tcp: non-finite TCP limit-curve slope (velocity_derivative "
-            "returned gain_per_arc_unit " +
-            std::to_string(gd.gain_per_arc_unit) + ", d_gain_ds " + std::to_string(gd.d_gain_ds) + " at a TCP-binding cursor)"};
+            "compute_velocity_limit_derivative_with_tcp: non-finite TCP limit-curve slope (linear_velocity_gain "
+            "returned per_arc_unit " +
+            std::to_string(gd.per_arc_unit) + ", d_ds " + std::to_string(gd.d_ds) + " at a TCP-binding cursor)"};
     }
     return phase_plane_slope{slope};
 }
@@ -1293,17 +1274,13 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
     on_event(traj, std::move(event));
 }
 
-trajectory::tcp_limits trajectory::tcp_limits::from_chain_(jacobian::kinematic_chain chain_in, double max_linear_velocity) {
-    // One chain, shared by both callbacks, so the limit value and its slope cannot describe
-    // different kinematics.
-    auto chain = std::make_shared<jacobian::kinematic_chain>(std::move(chain_in));
-
+trajectory::tcp_limits trajectory::tcp_limits::from(jacobian::kinematic_chain chain, double max_linear_velocity) {
     return tcp_limits{
         .max_linear_velocity = max_linear_velocity,
-        .linear_jacobian = [chain](const xvector<>& q) -> xmatrix<> { return chain->linear_jacobian(q); },
         .linear_velocity_gain =
-            [chain](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-                return chain->linear_velocity_gain_at(q, q_prime, q_double_prime);
+            [chain = std::move(chain)](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
+                const auto g = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
+                return gain{.per_arc_unit = g.gain_per_arc_unit, .d_ds = g.d_gain_ds};
             },
     };
 }
@@ -1368,17 +1345,9 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         if (!(opt.tcp->max_linear_velocity > 0.0) || !std::isfinite(opt.tcp->max_linear_velocity)) {
             throw std::invalid_argument{"tcp.max_linear_velocity must be a finite positive number"};
         }
-        if (!opt.tcp->linear_jacobian) {
-            throw std::invalid_argument{"tcp.linear_jacobian must be set"};
-        }
         if (!opt.tcp->linear_velocity_gain) {
             throw std::invalid_argument{"tcp.linear_velocity_gain must be set"};
         }
-        // Probe the jacobian once at the path start so a malformed callback fails here with a
-        // clear message instead of mid-integration. compute_tcp_velocity_limit performs the
-        // full shape validation, keeping it in one place.
-        const auto probe_cursor = p.create_cursor();
-        static_cast<void>(compute_tcp_velocity_limit(probe_cursor.configuration(), probe_cursor.tangent(), *opt.tcp, opt.epsilon));
     }
 
     if (points.empty()) {

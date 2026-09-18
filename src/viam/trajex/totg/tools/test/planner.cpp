@@ -14,6 +14,7 @@ namespace {
 using namespace viam::trajex::totg;
 using viam::trajex::xmatrix;
 using viam::trajex::xvector;
+using viam::trajex::totg::test::gp12_chain;
 using viam::trajex::totg::test::gp12_model_table;
 
 struct test_receiver {
@@ -292,7 +293,7 @@ BOOST_AUTO_TEST_CASE(decider_return_type_is_flexible) {
 // for one: a planner whose config carries a TCP limit refuses to register legacy at all.
 BOOST_AUTO_TEST_CASE(legacy_registration_with_tcp_limit_throws) {
     auto cfg = simple_config();
-    cfg.tcp = trajectory::tcp_limits::from(gp12_model_table(), 0.5);
+    cfg.tcp = trajectory::tcp_limits::from(gp12_chain(), 0.5);
 
     planner<test_receiver> p(std::move(cfg));
     BOOST_CHECK_THROW(p.with_legacy([](const auto&, test_receiver&, const waypoint_accumulator&, Path&&, Trajectory&&, auto) {}),
@@ -339,7 +340,7 @@ BOOST_AUTO_TEST_CASE(malformed_model_table_rejected_at_construction) {
 
 // A config carrying a TCP limit and its model-table provenance survives a
 // serialize_for_replay -> replay_planner round-trip: the scalar cap is preserved, the model-table is
-// recorded, and the opaque jacobian callback is rebuilt from it.
+// recorded, and the opaque gain callback is rebuilt from it.
 BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
     const auto table = gp12_model_table();
 
@@ -367,13 +368,16 @@ BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
     BOOST_CHECK_EQUAL((*rc.model_table)->shape(0), 7U);
     BOOST_CHECK_EQUAL((*rc.model_table)->shape(1), 10U);
 
-    // The rebuilt jacobian is callable and returns the 3xN linear-velocity block for the six
-    // actuated joints, confirming the callback was reconstructed (not merely the scalar copied).
-    BOOST_REQUIRE(static_cast<bool>(rc.tcp->linear_jacobian));
-    const auto J = rc.tcp->linear_jacobian(xvector<>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-    BOOST_REQUIRE_EQUAL(J->dimension(), 2U);
-    BOOST_CHECK_EQUAL(J->shape(0), 3U);
-    BOOST_CHECK_EQUAL(J->shape(1), 6U);
+    // The rebuilt callback reports what the recorded chain does, confirming it was reconstructed
+    // rather than the scalar merely copied.
+    BOOST_REQUIRE(static_cast<bool>(rc.tcp->linear_velocity_gain));
+    const xvector<> q = {0.1, -0.2, 0.3, 0.0, 0.4, 0.0};
+    const xvector<> q_prime = {0.5, 0.1, -0.3, 0.2, 0.0, 0.1};
+    const xvector<> q_double_prime = xt::zeros<double>({std::size_t{6}});
+    const auto rebuilt = rc.tcp->linear_velocity_gain(q, q_prime, q_double_prime);
+    const auto expected = viam::trajex::jacobian::kinematic_chain::from(table).linear_velocity_gain_at(q, q_prime, q_double_prime);
+    BOOST_CHECK_EQUAL(rebuilt.per_arc_unit, expected.gain_per_arc_unit);
+    BOOST_CHECK_EQUAL(rebuilt.d_ds, expected.d_gain_ds);
 
     // The reconstructed limit generates a trajectory end to end.
     auto outcome = replayed.execute([](const auto&, auto tx, const auto&) { return tx; });
@@ -390,7 +394,7 @@ BOOST_AUTO_TEST_CASE(replay_record_omits_tcp_without_model_table) {
         .path_blend_tolerance = 0.01,
         .colinearization_ratio = std::nullopt,
     };
-    cfg.tcp = trajectory::tcp_limits::from(gp12_model_table(), 0.5);
+    cfg.tcp = trajectory::tcp_limits::from(gp12_chain(), 0.5);
     // cfg.model_table intentionally left unset.
 
     planner<test_receiver> p(std::move(cfg));

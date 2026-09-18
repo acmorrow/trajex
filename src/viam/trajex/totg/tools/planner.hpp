@@ -49,12 +49,12 @@ class planner_base {
         bool segment_totg = true;
         trajectory::integration_observer* observer = nullptr;  // totg only; ignored by legacy
         std::optional<trajectory::tcp_limits> tcp{};           // optional TCP Cartesian speed limit; totg only
-        // Serializable provenance of tcp.linear_jacobian: the (n, 10) model-table tensor (viam::sdk::ModelTable
-        // format) the jacobian was built from. tcp.linear_jacobian is an opaque callback and cannot be
-        // serialized, so serialize_for_replay records this instead and replay rebuilds the callback via
-        // tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table) jacobian can
-        // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
-        // validated at planner construction.
+        // Serializable provenance of tcp.linear_velocity_gain: the (n, 10) model-table tensor
+        // (viam::sdk::ModelTable format) the gain callback was built from. The callback is opaque and
+        // cannot be serialized, so serialize_for_replay records this instead and replay rebuilds the
+        // callback via tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table)
+        // gain can still set tcp; such a limit simply will not survive a replay round-trip. When set, the
+        // shape is validated at planner construction.
         std::optional<xrank_checked<xmatrix<>>> model_table{};
     };
 

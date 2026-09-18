@@ -2,8 +2,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
+#include <utility>
 
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/types/xt.hpp>
@@ -34,6 +36,36 @@ inline xmatrix<> gp12_model_table() {
     };
 }
 
+/// The quaternion w, x, y, z for a URDF fixed-axis XYZ rpy, which composes as
+/// Rz(yaw) * Ry(pitch) * Rx(roll).
+inline std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double yaw) {
+    const double cr = std::cos(roll / 2.0);
+    const double sr = std::sin(roll / 2.0);
+    const double cp = std::cos(pitch / 2.0);
+    const double sp = std::sin(pitch / 2.0);
+    const double cy = std::cos(yaw / 2.0);
+    const double sy = std::sin(yaw / 2.0);
+    return {
+        (cr * cp * cy) + (sr * sp * sy), (sr * cp * cy) - (cr * sp * sy), (cr * sp * cy) + (sr * cp * sy), (cr * cp * sy) - (sr * sp * cy)};
+}
+
+/// The Yaskawa GP12 of gp12_model_table as a chain. The tool's origin uses the table's own
+/// truncated rpy rather than exact multiples of pi, so the two describe the same geometry to
+/// rounding and the regression tests that use either reproduce the same trajectories.
+inline jacobian::kinematic_chain gp12_chain() {
+    using joint_origin = jacobian::kinematic_chain::joint_origin;
+    using rotation_axis = jacobian::kinematic_chain::rotation_axis;
+    return jacobian::kinematic_chain::builder{}
+        .extend(joint_origin{.translation = {0, 0, 0.450}}, rotation_axis{{0, 0, 1}})
+        .extend(joint_origin{.translation = {0.155, 0, 0}}, rotation_axis{{0, 1, 0}})
+        .extend(joint_origin{.translation = {0, 0, 0.614}}, rotation_axis{{0, -1, 0}})
+        .extend(joint_origin{.translation = {0.640, 0, 0.200}}, rotation_axis{{-1, 0, 0}})
+        .extend(joint_origin{}, rotation_axis{{0, -1, 0}})
+        .extend(joint_origin{}, rotation_axis{{-1, 0, 0}})
+        .extend(joint_origin{.translation = {0.100, 0, 0}, .rotation = rpy_to_quaternion(3.14159265, -1.570796, 0)})
+        .build();
+}
+
 /// 3xN linear-velocity Jacobian of a planar 2-link arm at joint angles q=[q1,q2].
 /// Rows are [dx; dy; dz]; dz is always 0 (planar). Lengths l1,l2 in metres.
 inline xmatrix<> planar_2link_jacobian(double l1, double l2, const xvector<>& q) {
@@ -53,7 +85,7 @@ inline xmatrix<> planar_2link_jacobian(double l1, double l2, const xvector<>& q)
 
 /// Numerical linear velocity gain for the planar 2-link, for tests that build tcp_limits by hand.
 /// Central-differences ||planar_2link_jacobian(q) * q_prime|| along the path.
-inline jacobian::kinematic_chain::linear_velocity_gain planar_2link_linear_velocity_gain(
+inline trajectory::tcp_limits::gain planar_2link_linear_velocity_gain(
     double l1, double l2, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
     const auto gain_at = [&](const xvector<>& qq, const xvector<>& qp) {
         const auto J = planar_2link_jacobian(l1, l2, qq);
@@ -71,14 +103,13 @@ inline jacobian::kinematic_chain::linear_velocity_gain planar_2link_linear_veloc
     const double h = 1e-6;
     const double dg =
         (gain_at(q + h * q_prime, q_prime + h * q_double_prime) - gain_at(q - h * q_prime, q_prime - h * q_double_prime)) / (2.0 * h);
-    return {.gain_per_arc_unit = g, .d_gain_ds = dg};
+    return {.per_arc_unit = g, .d_ds = dg};
 }
 
-/// Builds tcp_limits for a planar 2-link (l1 = l2 = 1) with both callbacks set.
+/// Builds tcp_limits for a planar 2-link (l1 = l2 = 1).
 inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_velocity) {
     return trajectory::tcp_limits{
         .max_linear_velocity = max_linear_velocity,
-        .linear_jacobian = [](const xvector<>& q) { return planar_2link_jacobian(1.0, 1.0, q); },
         .linear_velocity_gain =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 return planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);

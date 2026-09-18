@@ -2681,7 +2681,7 @@ BOOST_AUTO_TEST_CASE(gp12_tcp_terminal_acceleration_sentinel_sample) {
 
     auto p = path::create(waypoints, path::options{}.set_max_blend_deviation(root["path_tolerance_delta_rads"].asDouble()));
     trajectory::options opt{.max_velocity = max_velocity, .max_acceleration = max_acceleration};
-    opt.tcp = trajectory::tcp_limits::from(test::gp12_model_table(), 0.5);
+    opt.tcp = trajectory::tcp_limits::from(test::gp12_chain(), 0.5);
 
     const auto traj = trajectory::create(std::move(p), std::move(opt));
     BOOST_CHECK(std::isfinite(static_cast<double>(traj.get_integration_points().back().s_ddot)));

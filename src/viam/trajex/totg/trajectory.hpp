@@ -92,38 +92,38 @@ class trajectory {
     ///
     /// TCP (tool center point) limits. Currently constrains linear TCP speed.
     ///
-    /// The linear_jacobian callback maps joint config q to the 3xN linear-velocity Jacobian; the
-    /// folded limit is max_linear_velocity / ||J_v(q)*f'(s)||. Forward integration, backward
-    /// integration, and bisection each query at the arc position under examination, so successive
-    /// calls do not advance monotonically along the path.
+    /// The linear_velocity_gain callback reports how fast the TCP moves per unit of path arc
+    /// length at a point on the path, ||J_v(q)*f'(s)||, together with its derivative along the
+    /// path. The folded limit is max_linear_velocity divided by the gain, and its phase-plane
+    /// slope follows from the derivative. Forward integration, backward integration, and
+    /// bisection each query at the arc position under examination, so successive calls do not
+    /// advance monotonically along the path.
     ///
-    /// Both callbacks must describe the same kinematic chain. The value decides which curve is
-    /// active and the slope is then taken from the other callback, so a mismatched pair yields a
-    /// slope for one curve and a value for the other, with no diagnostic. from() builds both from
-    /// a single chain.
-    ///
-    /// Only linear_jacobian may return NaN, which signals a singularity and is treated as
-    /// non-constraining. A non-finite result from linear_velocity_gain where TCP is the binding
-    /// curve throws instead.
+    /// The callback may return a NaN gain, which signals a singularity and is treated as
+    /// non-constraining. A non-finite slope where TCP is the binding curve throws instead.
     ///
     /// Units are the caller's. max_linear_velocity must be expressed in the same length unit as
-    /// the Jacobian's task-space output, per second; nothing here checks that they agree.
+    /// the gain, per second; nothing here checks that they agree.
     ///
     struct tcp_limits {
-        /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
-        using linear_jacobian_fn = std::function<xrank_checked<xmatrix<>>(const xvector<>&)>;
+        ///
+        /// The linear velocity gain at a point on the path and its derivative along the path.
+        ///
+        struct gain {
+            double per_arc_unit = 0.0;  ///< ||J_v(q)*f'(s)||: TCP speed per unit of path speed
+            double d_ds = 0.0;          ///< Derivative of per_arc_unit with respect to arc length
+        };
 
-        /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
-        using linear_velocity_gain_fn =
-            std::function<jacobian::kinematic_chain::linear_velocity_gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
+        /// Maps (q, q_prime, q_double_prime) to the linear velocity gain and its derivative.
+        using linear_velocity_gain_fn = std::function<gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
 
         ///
-        /// Builds both callbacks from one kinematic chain parsed from a model table.
+        /// Builds the gain callback from a kinematic chain parsed from a model table.
         ///
         /// @param model_table (n, 10) tensor in the viam::sdk::ModelTable format
         /// @param max_linear_velocity Cap on TCP linear speed, in the model table's length unit
         ///        per second
-        /// @return A limits object whose callbacks share a single chain
+        /// @return A limits object whose callback evaluates the parsed chain
         /// @throws std::invalid_argument on a malformed model table
         ///
         /// What counts as a model table is kinematic_chain::from's rule rather than one
@@ -132,18 +132,24 @@ class trajectory {
         template <typename T>
             requires requires(const T& t) { jacobian::kinematic_chain::from(t); }
         [[nodiscard]] static tcp_limits from(const T& model_table, double max_linear_velocity) {
-            return from_chain_(jacobian::kinematic_chain::from(model_table), max_linear_velocity);
+            return from(jacobian::kinematic_chain::from(model_table), max_linear_velocity);
         }
 
-       private:
-        // Holds the lambda plumbing in the source file. The chain is already validated.
-        static tcp_limits from_chain_(jacobian::kinematic_chain chain, double max_linear_velocity);
+        ///
+        /// Builds the gain callback from a kinematic chain.
+        ///
+        /// The capped point is the origin of the chain's last frame.
+        ///
+        /// @param chain Chain describing the arm and whatever it carries
+        /// @param max_linear_velocity Cap on TCP linear speed, in the length unit of the chain's
+        ///        translations per second
+        /// @return A limits object whose callback evaluates the chain
+        ///
+        [[nodiscard]] static tcp_limits from(jacobian::kinematic_chain chain, double max_linear_velocity);
 
-       public:
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
         double max_linear_velocity = 0.0;
-        linear_jacobian_fn linear_jacobian;
         linear_velocity_gain_fn linear_velocity_gain;
     };
 

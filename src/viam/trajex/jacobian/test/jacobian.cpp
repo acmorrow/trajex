@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #if __has_include(<xtensor/containers/xfixed.hpp>)
 #include <xtensor/containers/xfixed.hpp>
@@ -180,7 +183,7 @@ xmatrix<> forward_transform(const xmatrix<>& table, const xvector<>& q) {
         link(2, 3) = table(r, 2);
         T = reference_matmul(T, link);
 
-        if (table(r, 9) == k_rev) {
+        if (table(r, 9) == k_rev || table(r, 9) == k_cont) {
             const double ax = table(r, 6);
             const double ay = table(r, 7);
             const double az = table(r, 8);
@@ -192,9 +195,117 @@ xmatrix<> forward_transform(const xmatrix<>& table, const xvector<>& q) {
     return T;
 }
 
+// A chain as the builder takes it, kept as plain data so the reference forward kinematics below
+// can walk it without going through kinematic_chain.
+enum class test_joint_kind : std::uint8_t { k_fixed, k_rotational, k_translational };
+
+struct test_joint {
+    test_joint_kind kind;
+    std::array<double, 3> xyz;
+    std::array<double, 4> wxyz;
+    std::array<double, 3> axis;
+};
+
+using test_chain = std::vector<test_joint>;
+
+constexpr std::array<double, 4> k_identity_rotation = {1.0, 0.0, 0.0, 0.0};
+
+kinematic_chain build_chain(const test_chain& joints) {
+    kinematic_chain::builder builder;
+    for (const auto& j : joints) {
+        const kinematic_chain::joint_origin origin{.translation = j.xyz, .rotation = j.wxyz};
+        switch (j.kind) {
+            case test_joint_kind::k_fixed:
+                builder.extend(origin);
+                break;
+            case test_joint_kind::k_rotational:
+                builder.extend(origin, kinematic_chain::rotation_axis{j.axis});
+                break;
+            case test_joint_kind::k_translational:
+                builder.extend(origin, kinematic_chain::translation_axis{j.axis});
+                break;
+        }
+    }
+    return std::move(builder).build();
+}
+
+// The rotation a quaternion denotes, built by way of its axis and angle rather than the direct
+// matrix formula the implementation uses, so the two are independent.
+xmatrix<> reference_quaternion_rotation(const std::array<double, 4>& wxyz) {
+    const double n = std::sqrt((wxyz[0] * wxyz[0]) + (wxyz[1] * wxyz[1]) + (wxyz[2] * wxyz[2]) + (wxyz[3] * wxyz[3]));
+    const double w = wxyz[0] / n;
+    const std::array<double, 3> v = {wxyz[1] / n, wxyz[2] / n, wxyz[3] / n};
+    const double s = std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
+    if (s == 0.0) {
+        return reference_identity4();
+    }
+    return reference_axis_rotation(v[0] / s, v[1] / s, v[2] / s, 2.0 * std::atan2(s, w));
+}
+
+xmatrix<> forward_transform(const test_chain& joints, const xvector<>& q) {
+    xmatrix<> T = reference_identity4();
+    std::size_t qi = 0;
+    for (const auto& j : joints) {
+        xmatrix<> origin = reference_quaternion_rotation(j.wxyz);
+        origin(0, 3) = j.xyz[0];
+        origin(1, 3) = j.xyz[1];
+        origin(2, 3) = j.xyz[2];
+        T = reference_matmul(T, origin);
+
+        if (j.kind == test_joint_kind::k_fixed) {
+            continue;
+        }
+        const double an = std::sqrt((j.axis[0] * j.axis[0]) + (j.axis[1] * j.axis[1]) + (j.axis[2] * j.axis[2]));
+        if (j.kind == test_joint_kind::k_rotational) {
+            T = reference_matmul(T, reference_axis_rotation(j.axis[0] / an, j.axis[1] / an, j.axis[2] / an, q(qi)));
+        } else {
+            xmatrix<> slide = reference_identity4();
+            slide(0, 3) = q(qi) * j.axis[0] / an;
+            slide(1, 3) = q(qi) * j.axis[1] / an;
+            slide(2, 3) = q(qi) * j.axis[2] / an;
+            T = reference_matmul(T, slide);
+        }
+        ++qi;
+    }
+    return T;
+}
+
+// The quaternion for a URDF fixed-axis XYZ rpy, which composes as Rz(yaw) * Ry(pitch) * Rx(roll).
+std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double yaw) {
+    const double cr = std::cos(roll / 2.0);
+    const double sr = std::sin(roll / 2.0);
+    const double cp = std::cos(pitch / 2.0);
+    const double sp = std::sin(pitch / 2.0);
+    const double cy = std::cos(yaw / 2.0);
+    const double sy = std::sin(yaw / 2.0);
+    return {
+        (cr * cp * cy) + (sr * sp * sy), (sr * cp * cy) - (cr * sp * sy), (cr * sp * cy) + (sr * cp * sy), (cr * cp * sy) - (sr * sp * cy)};
+}
+
+// The same geometry as a model table, described as a joint list for the builder.
+test_chain chain_from_table(const xmatrix<>& table) {
+    test_chain joints;
+    for (std::size_t r = 0; r < table.shape()[0]; ++r) {
+        const double type = table(r, 9);
+        test_joint_kind kind = test_joint_kind::k_rotational;
+        if (type == k_fix) {
+            kind = test_joint_kind::k_fixed;
+        } else if (type == k_pris) {
+            kind = test_joint_kind::k_translational;
+        }
+        joints.push_back({.kind = kind,
+                          .xyz = {table(r, 0), table(r, 1), table(r, 2)},
+                          .wxyz = rpy_to_quaternion(table(r, 3), table(r, 4), table(r, 5)),
+                          .axis = {table(r, 6), table(r, 7), table(r, 8)}});
+    }
+    return joints;
+}
+
 // Numerical geometric Jacobian via central differences on the reference
-// forward_transform.
-xmatrix<> numerical_jacobian(const xmatrix<>& table, const xvector<>& q, double delta = 1e-7) {
+// forward_transform. The model is either a table or a joint list, since
+// forward_transform has an overload for each.
+template <typename Model>
+xmatrix<> numerical_jacobian(const Model& model, const xvector<>& q, double delta = 1e-7) {
     const std::size_t n_actuated = q.size();
     xmatrix<> J_num = xt::zeros<double>({std::size_t{6}, n_actuated});
 
@@ -204,8 +315,8 @@ xmatrix<> numerical_jacobian(const xmatrix<>& table, const xvector<>& q, double 
         q_plus(i) += delta;
         q_minus(i) -= delta;
 
-        const xmatrix<> Tp = forward_transform(table, q_plus);
-        const xmatrix<> Tm = forward_transform(table, q_minus);
+        const xmatrix<> Tp = forward_transform(model, q_plus);
+        const xmatrix<> Tm = forward_transform(model, q_minus);
 
         for (std::size_t r = 0; r < 3; ++r) {
             J_num(r, i) = (Tp(r, 3) - Tm(r, 3)) / (2.0 * delta);
@@ -525,6 +636,72 @@ BOOST_AUTO_TEST_CASE(tcp_limits_from_accepts_exactly_what_the_chain_does) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
+// A continuous joint is a revolute joint without position limits, and the model table carries
+// no limits, so retyping a row from revolute to continuous must change nothing anyone can
+// observe. These compare the two tables rather than checking a continuous chain against
+// precomputed values, because indistinguishability is the property we mean to hold.
+BOOST_AUTO_TEST_SUITE(continuous_joint_tests)
+
+// Same table as the named helper, with every rotating row typed continuous instead.
+xt::xarray<double> twolink_table_continuous() {
+    return xt::xarray<double>{
+        {0, 0, 0, 0, 0, 0, 0, 0, 1, k_cont},
+        {1, 0, 0, 0, 0, 0, 0, 0, 1, k_cont},
+        {1, 0, 0, 0, 0, 0, 0, 0, 0, k_fix},
+    };
+}
+
+// As sixdof_arm_table, but with the wrist rows typed continuous, which is the mix a real arm
+// is most likely to present.
+xt::xarray<double> sixdof_arm_table_continuous_wrist() {
+    return xt::xarray<double>{
+        {0, 0, 0.10, 0, 0, 0, 0, 0, 1, k_rev},
+        {0, 0, 0.15, 0, 0, 0, 0, 1, 0, k_rev},
+        {0.4, 0, 0, 0, 0, 0, 0, 1, 0, k_rev},
+        {0.4, 0, 0, 0, 0, 0, 0, 1, 0, k_cont},
+        {0, 0, 0.10, 0, 0, 0, 1, 0, 0, k_cont},
+        {0, 0, 0.10, 0, 0, 0, 0, 0, 1, k_cont},
+        {0, 0, 0.05, 0, 0, 0, 0, 0, 0, k_fix},
+    };
+}
+
+BOOST_AUTO_TEST_CASE(jacobian_matches_revolute_twolink) {
+    for (const auto& q : {xt::xarray<double>{0.0, 0.0}, xt::xarray<double>{0.3, -0.7}, xt::xarray<double>{-1.1, 2.4}}) {
+        BOOST_CHECK_EQUAL(matrix_diff_norm(compute_jacobian(twolink_table(), q), compute_jacobian(twolink_table_continuous(), q)), 0.0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(jacobian_matches_revolute_sixdof) {
+    const xt::xarray<double> q = {0.1, -0.5, 1.2, -0.3, 0.6, -0.1};
+    BOOST_CHECK_EQUAL(matrix_diff_norm(compute_jacobian(sixdof_arm_table(), q), compute_jacobian(sixdof_arm_table_continuous_wrist(), q)),
+                      0.0);
+}
+
+BOOST_AUTO_TEST_CASE(linear_velocity_gain_matches_revolute) {
+    const xt::xarray<double> q = {0.1, -0.5, 1.2, -0.3, 0.6, -0.1};
+    const xt::xarray<double> q_prime = {0.2, 0.1, -0.3, 0.4, -0.2, 0.5};
+    const xt::xarray<double> q_double_prime = {-0.1, 0.3, 0.2, -0.4, 0.1, -0.2};
+
+    const auto revolute = kinematic_chain::from(sixdof_arm_table()).linear_velocity_gain_at(q, q_prime, q_double_prime);
+    const auto continuous = kinematic_chain::from(sixdof_arm_table_continuous_wrist()).linear_velocity_gain_at(q, q_prime, q_double_prime);
+
+    BOOST_CHECK_EQUAL(revolute.gain_per_arc_unit, continuous.gain_per_arc_unit);
+    BOOST_CHECK_EQUAL(revolute.d_gain_ds, continuous.d_gain_ds);
+}
+
+// We never consult a position limit, so the representative a driver reports for an angle does
+// not matter. This holds for revolute rows too; it is stated here because a continuous joint is
+// the one a driver is liable to report as an accumulated angle.
+BOOST_AUTO_TEST_CASE(indifferent_to_full_turn_offsets) {
+    const auto chain = kinematic_chain::from(twolink_table_continuous());
+    const xt::xarray<double> q = {0.3, -0.7};
+    const xt::xarray<double> q_offset = {0.3 + 4.0 * std::numbers::pi, -0.7 - 2.0 * std::numbers::pi};
+
+    BOOST_CHECK_SMALL(matrix_diff_norm(chain.jacobian(q), chain.jacobian(q_offset)), 1e-14);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 // The tests in this suite validate linear_velocity_gain_at: the gain ||J*f'|| and its
 // path derivative d/ds||J*f'|| against a central finite difference of the gain along the path.
 BOOST_AUTO_TEST_SUITE(linear_velocity_gain_tests)
@@ -587,26 +764,39 @@ BOOST_AUTO_TEST_CASE(singular_gain_yields_finite_derivative) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite validate trajectory::tcp_limits::from: the jacobian callback returns
-// the linear-velocity block of the geometric Jacobian and reuses the chain it parsed at
-// construction.
+// The tests in this suite validate trajectory::tcp_limits::from: the gain callback reports what
+// the chain it parsed at construction reports, and keeps doing so across calls.
 BOOST_AUTO_TEST_SUITE(tcp_limits_from_tests)
 
-BOOST_AUTO_TEST_CASE(matches_linear_jacobian) {
+BOOST_AUTO_TEST_CASE(matches_linear_velocity_gain) {
     const xmatrix<> table = twolink_table();
     const xvector<> q = {0.3, -0.7};
+    const xvector<> q_prime = {0.6, 0.8};
+    const xvector<> q_double_prime = {-0.2, 0.1};
 
     const auto limits = viam::trajex::totg::trajectory::tcp_limits::from(table, 0.5);
-    const auto J3 = limits.linear_jacobian(q);
-    BOOST_REQUIRE_EQUAL(J3->shape()[0], 3U);
-    BOOST_REQUIRE_EQUAL(J3->shape()[1], 2U);
+    const auto expected = kinematic_chain::from(table).linear_velocity_gain_at(q, q_prime, q_double_prime);
 
-    BOOST_CHECK_SMALL(matrix_diff_norm(*J3, kinematic_chain::from(table).linear_jacobian(q)), 1e-15);
+    for (int call = 0; call < 2; ++call) {
+        const auto g = limits.linear_velocity_gain(q, q_prime, q_double_prime);
+        BOOST_CHECK_EQUAL(g.per_arc_unit, expected.gain_per_arc_unit);
+        BOOST_CHECK_EQUAL(g.d_ds, expected.d_gain_ds);
+    }
 
-    // The captured chain is reused: a second call returns identical values.
-    const auto J3_again = limits.linear_jacobian(q);
-    BOOST_CHECK_SMALL(matrix_diff_norm(*J3, *J3_again), 1e-15);
+    BOOST_CHECK_EQUAL(limits.max_linear_velocity, 0.5);
+}
 
+BOOST_AUTO_TEST_CASE(chain_overload_matches_linear_velocity_gain) {
+    const auto chain = build_chain(chain_from_table(sixdof_arm_table()));
+    const xvector<> q = {0.1, -0.5, 1.2, -0.3, 0.6, -0.1};
+    const xvector<> q_prime = {0.2, 0.7, -0.4, 0.5, -0.6, 0.3};
+    const xvector<> q_double_prime = {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2};
+
+    const auto limits = viam::trajex::totg::trajectory::tcp_limits::from(chain, 0.5);
+    const auto expected = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
+    const auto g = limits.linear_velocity_gain(q, q_prime, q_double_prime);
+    BOOST_CHECK_EQUAL(g.per_arc_unit, expected.gain_per_arc_unit);
+    BOOST_CHECK_EQUAL(g.d_ds, expected.d_gain_ds);
     BOOST_CHECK_EQUAL(limits.max_linear_velocity, 0.5);
 }
 
@@ -632,8 +822,14 @@ BOOST_AUTO_TEST_CASE(linear_jacobian_rejects_wrong_q_size) {
     BOOST_CHECK_THROW(static_cast<void>(chain.linear_jacobian(q_bad)), std::invalid_argument);
 }
 
-BOOST_AUTO_TEST_CASE(rejects_continuous_joint) {
-    const auto table = make_table({{0, 0, 0, 0, 0, 0, 0, 0, 1, k_cont}});
+BOOST_AUTO_TEST_CASE(rejects_zero_axis_for_continuous) {
+    const auto table = make_table({{0, 0, 0, 0, 0, 0, 0, 0, 0, k_cont}});
+    const xvector<> q = {0.0};
+    BOOST_CHECK_THROW(compute_jacobian(table, q), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(continuous_chain_rejects_wrong_q_size) {
+    const auto table = make_table({{0, 0, 0, 0, 0, 0, 0, 0, 1, k_cont}, {1, 0, 0, 0, 0, 0, 0, 0, 1, k_cont}});
     const xvector<> q = {0.0};
     BOOST_CHECK_THROW(compute_jacobian(table, q), std::invalid_argument);
 }
@@ -672,6 +868,183 @@ BOOST_AUTO_TEST_CASE(rejects_unknown_joint_type) {
     const auto table = make_table({{0, 0, 0, 0, 0, 0, 0, 0, 1, 7.0}});
     const xvector<> q = {0.0};
     BOOST_CHECK_THROW(compute_jacobian(table, q), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The tests in this suite validate chains assembled with kinematic_chain::builder: that they agree
+// with the tensor path on the geometry both can express, that prismatic joints are the derivative
+// of the reference forward kinematics like everything else, and that build() refuses what it
+// should.
+BOOST_AUTO_TEST_SUITE(builder_tests)
+
+namespace {
+
+// Spatial origins with nonzero rpy throughout, so the tensor's rpy and the builder's quaternions
+// both carry real rotations.
+xmatrix<> rotated_origins_table() {
+    return xmatrix<>{
+        {0, 0, 0.10, 0.3, -0.2, 0.5, 0, 0, 1, k_rev},
+        {0.05, 0, 0.15, -0.4, 0.1, 0.2, 0, 1, 0, k_rev},
+        {0.4, 0.02, 0, 0.0, 0.6, -0.3, 0, 1, 0, k_cont},
+        {0.1, 0, 0.05, 3.14159265, -1.570796, 0, 0, 0, 0, k_fix},
+    };
+}
+
+// A SCARA: two rotations about z, a vertical prismatic quill, then a wrist rotation.
+test_chain scara_chain() {
+    return {
+        {.kind = test_joint_kind::k_rotational, .xyz = {0, 0, 0.3}, .wxyz = k_identity_rotation, .axis = {0, 0, 1}},
+        {.kind = test_joint_kind::k_rotational, .xyz = {0.35, 0, 0}, .wxyz = k_identity_rotation, .axis = {0, 0, 1}},
+        {.kind = test_joint_kind::k_translational, .xyz = {0.3, 0, 0}, .wxyz = k_identity_rotation, .axis = {0, 0, -1}},
+        {.kind = test_joint_kind::k_rotational, .xyz = {0, 0, -0.05}, .wxyz = k_identity_rotation, .axis = {0, 0, 1}},
+        {.kind = test_joint_kind::k_fixed, .xyz = {0, 0, -0.1}, .wxyz = k_identity_rotation, .axis = {}},
+    };
+}
+
+// Prismatic and rotating joints interleaved, with rotated origins and axes that are neither unit
+// length nor aligned with a coordinate axis, so a translating joint's axis is carried around by
+// rotations upstream of it and moves points downstream of it.
+test_chain mixed_chain() {
+    return {
+        {.kind = test_joint_kind::k_translational, .xyz = {0, 0, 0}, .wxyz = k_identity_rotation, .axis = {2, 0, 0}},
+        {.kind = test_joint_kind::k_rotational, .xyz = {0, 0, 0.2}, .wxyz = rpy_to_quaternion(0.2, 0.1, -0.3), .axis = {0, 1, 1}},
+        {.kind = test_joint_kind::k_translational, .xyz = {0.3, 0.1, 0}, .wxyz = rpy_to_quaternion(-0.5, 0.4, 0.2), .axis = {1, 1, 0}},
+        {.kind = test_joint_kind::k_rotational, .xyz = {0, 0.2, 0.1}, .wxyz = rpy_to_quaternion(0.7, 0, 0.3), .axis = {1, 0, 0}},
+        {.kind = test_joint_kind::k_fixed, .xyz = {0.1, 0, 0.05}, .wxyz = rpy_to_quaternion(0, -0.4, 0), .axis = {}},
+    };
+}
+
+void check_gain_matches_numerical(const kinematic_chain& chain,
+                                  const xvector<>& q,
+                                  const xvector<>& q_prime,
+                                  const xvector<>& q_double_prime) {
+    const auto gain_at = [&](const xvector<>& qq, const xvector<>& qp) {
+        const auto J = chain.linear_jacobian(qq);
+        std::array<double, 3> v{0.0, 0.0, 0.0};
+        for (std::size_t r = 0; r < 3; ++r) {
+            for (std::size_t j = 0; j < qp.size(); ++j) {
+                v[r] += J(r, j) * qp(j);
+            }
+        }
+        return std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
+    };
+    const auto analytic = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
+    BOOST_CHECK_CLOSE(analytic.gain_per_arc_unit, gain_at(q, q_prime), 1e-9);
+
+    const double h = 1e-6;
+    const double numeric =
+        (gain_at(q + (h * q_prime), q_prime + (h * q_double_prime)) - gain_at(q - (h * q_prime), q_prime - (h * q_double_prime))) /
+        (2.0 * h);
+    BOOST_CHECK_SMALL(analytic.d_gain_ds - numeric, 1e-6);
+}
+
+}  // namespace
+
+BOOST_AUTO_TEST_CASE(agrees_with_the_tensor_path) {
+    const xvector<> q6 = {0.1, -0.5, 1.2, -0.3, 0.6, -0.1};
+    const xvector<> q6_prime = {0.2, 0.7, -0.4, 0.5, -0.6, 0.3};
+    const xvector<> q6_double_prime = {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2};
+    const xvector<> q3 = {0.4, -0.9, 0.3};
+    const xvector<> q3_prime = {0.6, -0.2, 0.5};
+    const xvector<> q3_double_prime = {0.1, 0.4, -0.3};
+
+    const auto compare = [](const xmatrix<>& table, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
+        const auto parsed = kinematic_chain::from(table);
+        const auto built = build_chain(chain_from_table(table));
+        BOOST_CHECK_SMALL(matrix_diff_norm(parsed.jacobian(q), built.jacobian(q)), 1e-12);
+        BOOST_CHECK_SMALL(vec3_diff_norm(parsed.end_position(q), built.end_position(q)), 1e-12);
+        const auto parsed_gain = parsed.linear_velocity_gain_at(q, q_prime, q_double_prime);
+        const auto built_gain = built.linear_velocity_gain_at(q, q_prime, q_double_prime);
+        BOOST_CHECK_SMALL(parsed_gain.gain_per_arc_unit - built_gain.gain_per_arc_unit, 1e-12);
+        BOOST_CHECK_SMALL(parsed_gain.d_gain_ds - built_gain.d_gain_ds, 1e-12);
+    };
+    compare(sixdof_arm_table(), q6, q6_prime, q6_double_prime);
+    compare(rotated_origins_table(), q3, q3_prime, q3_double_prime);
+}
+
+BOOST_AUTO_TEST_CASE(end_position_matches_reference_forward_kinematics) {
+    for (const auto& [joints, q] :
+         {std::pair{scara_chain(), xvector<>{0.4, -1.1, 0.12, 0.7}}, std::pair{mixed_chain(), xvector<>{0.3, -0.6, 0.2, 1.1}}}) {
+        const auto T = forward_transform(joints, q);
+        BOOST_CHECK_SMALL(vec3_diff_norm(build_chain(joints).end_position(q), {T(0, 3), T(1, 3), T(2, 3)}), 1e-12);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(jacobian_with_prismatic_matches_numerical) {
+    for (const auto& [joints, q] : {std::pair{scara_chain(), xvector<>{0.4, -1.1, 0.12, 0.7}},
+                                    std::pair{scara_chain(), xvector<>{0.0, 0.0, 0.0, 0.0}},
+                                    std::pair{mixed_chain(), xvector<>{0.3, -0.6, 0.2, 1.1}},
+                                    std::pair{mixed_chain(), xvector<>{-0.8, 1.4, -0.3, -0.5}}}) {
+        BOOST_CHECK_SMALL(matrix_diff_norm(build_chain(joints).jacobian(q), numerical_jacobian(joints, q)), 1e-6);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(prismatic_column_is_the_world_axis) {
+    // At q = 0 the SCARA's quill points straight down, so its linear column is -z and it
+    // contributes nothing angular.
+    const auto J = build_chain(scara_chain()).jacobian(xvector<>{0.0, 0.0, 0.0, 0.0});
+    for (std::size_t r = 0; r < 6; ++r) {
+        BOOST_CHECK_SMALL(J(r, 2) - (r == 2 ? -1.0 : 0.0), 1e-15);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(linear_velocity_gain_with_prismatic_matches_numerical) {
+    check_gain_matches_numerical(build_chain(scara_chain()), {0.4, -1.1, 0.12, 0.7}, {0.3, -0.5, 0.8, 0.2}, {0.1, 0.2, -0.4, 0.3});
+    check_gain_matches_numerical(build_chain(mixed_chain()), {0.3, -0.6, 0.2, 1.1}, {0.5, 0.4, -0.7, 0.2}, {-0.3, 0.1, 0.2, 0.6});
+}
+
+// build() normalizes, so a quaternion and an axis given at some other length describe the same
+// chain.
+BOOST_AUTO_TEST_CASE(normalizes_quaternions_and_axes) {
+    auto scaled = mixed_chain();
+    for (auto& j : scaled) {
+        for (auto& c : j.wxyz) {
+            c *= 3.7;
+        }
+        for (auto& c : j.axis) {
+            c *= 0.25;
+        }
+    }
+    const xvector<> q = {0.3, -0.6, 0.2, 1.1};
+    BOOST_CHECK_SMALL(matrix_diff_norm(build_chain(mixed_chain()).jacobian(q), build_chain(scaled).jacobian(q)), 1e-14);
+}
+
+// We never consult a position limit, so the representative a driver reports for an angle does not
+// matter. A continuous joint is the one a driver is liable to report as an accumulated angle.
+BOOST_AUTO_TEST_CASE(indifferent_to_full_turn_offsets) {
+    const auto chain = build_chain(scara_chain());
+    const xvector<> q = {0.4, -1.1, 0.12, 0.7};
+    const xvector<> q_offset = {0.4 + (4.0 * std::numbers::pi), -1.1 - (2.0 * std::numbers::pi), 0.12, 0.7 + (6.0 * std::numbers::pi)};
+    BOOST_CHECK_SMALL(matrix_diff_norm(chain.jacobian(q), chain.jacobian(q_offset)), 1e-13);
+}
+
+BOOST_AUTO_TEST_CASE(fixed_joints_consume_no_q) {
+    const auto chain = build_chain(scara_chain());
+    BOOST_CHECK_EQUAL(chain.jacobian(xvector<>{0.0, 0.0, 0.0, 0.0}).shape(1), 4U);
+    BOOST_CHECK_THROW(static_cast<void>(chain.jacobian(xvector<>{0.0, 0.0, 0.0, 0.0, 0.0})), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.end_position(xvector<>{0.0, 0.0, 0.0})), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(build_refuses_what_it_cannot_represent) {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const auto refuses = [](const test_chain& joints) { BOOST_CHECK_THROW(static_cast<void>(build_chain(joints)), std::invalid_argument); };
+
+    refuses({});
+    refuses({{.kind = test_joint_kind::k_rotational, .xyz = {}, .wxyz = k_identity_rotation, .axis = {0, 0, 0}}});
+    refuses({{.kind = test_joint_kind::k_translational, .xyz = {}, .wxyz = k_identity_rotation, .axis = {0, 0, 0}}});
+    refuses({{.kind = test_joint_kind::k_rotational, .xyz = {}, .wxyz = k_identity_rotation, .axis = {0, nan, 1}}});
+    refuses({{.kind = test_joint_kind::k_translational, .xyz = {}, .wxyz = k_identity_rotation, .axis = {inf, 0, 0}}});
+    refuses({{.kind = test_joint_kind::k_fixed, .xyz = {}, .wxyz = {0, 0, 0, 0}, .axis = {}}});
+    refuses({{.kind = test_joint_kind::k_fixed, .xyz = {}, .wxyz = {nan, 0, 0, 0}, .axis = {}}});
+    refuses({{.kind = test_joint_kind::k_fixed, .xyz = {}, .wxyz = {1e200, 1e200, 0, 0}, .axis = {}}});
+    refuses({{.kind = test_joint_kind::k_fixed, .xyz = {0, inf, 0}, .wxyz = k_identity_rotation, .axis = {}}});
+
+    // A fixed joint has no axis to validate, and a fixed-only chain is legal: it has no q at all.
+    const auto fixed_only =
+        build_chain({{.kind = test_joint_kind::k_fixed, .xyz = {1, 2, 3}, .wxyz = k_identity_rotation, .axis = {0, 0, 0}}});
+    BOOST_CHECK_SMALL(vec3_diff_norm(fixed_only.end_position(xvector<>(xt::zeros<double>({std::size_t{0}}))), {1, 2, 3}), 1e-15);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

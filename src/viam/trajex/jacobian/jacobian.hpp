@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <viam/trajex/types/xt.hpp>
@@ -14,11 +15,36 @@ namespace viam::trajex::jacobian {
 // TODO(RSDK-14104): Remove duplicated code that exists in the viam-cpp-sdk
 
 ///
-/// A validated URDF-style serial kinematic chain, parsed from an (n, 10)
-/// model-table tensor and held in chain order.
+/// A validated serial kinematic chain, held in chain order.
+///
+/// Chains are assembled with kinematic_chain::builder, or parsed from an (n, 10) model-table
+/// tensor. A finished chain is immutable and copyable. Each rotating or translating joint consumes
+/// one element of the joint vector q, in chain order; fixed joints consume none. A rotating joint's
+/// element is an angle in radians, and a translating joint's is a displacement in the length unit
+/// of the chain's translations.
 ///
 class kinematic_chain {
    public:
+    ///
+    /// The rigid transform from a joint's parent frame to the joint's own frame.
+    ///
+    struct joint_origin;
+
+    ///
+    /// The axis a revolute or continuous joint rotates about.
+    ///
+    struct rotation_axis;
+
+    ///
+    /// The axis a prismatic joint translates along.
+    ///
+    struct translation_axis;
+
+    ///
+    /// Assembles a kinematic chain one joint at a time.
+    ///
+    class builder;
+
     ///
     /// Parses an (n, 10) tensor in the viam::sdk::ModelTable format into a
     /// kinematic chain.
@@ -26,9 +52,8 @@ class kinematic_chain {
     /// @param tensor (n, 10) tensor in the viam::sdk::ModelTable format
     /// @return Validated kinematic chain
     /// @throws std::invalid_argument on non-2D input, wrong column count, a
-    ///         non-integer joint-type encoding, an empty table, an unsupported
-    ///         joint type (continuous or prismatic), or a revolute row with
-    ///         zero-magnitude axis
+    ///         non-integer joint-type encoding, an empty table, a prismatic
+    ///         joint, or a rotating row with zero-magnitude axis
     ///
     [[nodiscard]] static kinematic_chain from(const xmatrix<>& tensor);
 
@@ -57,13 +82,15 @@ class kinematic_chain {
     ///
     /// Computes the geometric Jacobian at joint positions q.
     ///
-    /// @param q (N_actuated,) vector with one element per revolute row in the
-    ///        table, in chain order. Fixed rows do not consume a q entry.
+    /// @param q (N_actuated,) vector with one element per rotating or
+    ///        translating joint, in chain order. Fixed joints do not consume a
+    ///        q entry.
     /// @return A (6, N_actuated) matrix where rows 0..2 are the
-    ///         linear-velocity columns J_v_i = w_i x (p_e - p_i) and rows 3..5
-    ///         are the angular-velocity columns J_w_i = w_i, with w_i the
-    ///         world-frame axis of revolute joint i, p_i its world position,
-    ///         and p_e the end-effector position.
+    ///         linear-velocity columns and rows 3..5 the angular-velocity
+    ///         columns. With w_i the world-frame axis of joint i, p_i its world
+    ///         position, and p_e the end-effector position, a rotating joint's
+    ///         column is J_v_i = w_i x (p_e - p_i), J_w_i = w_i, and a
+    ///         translating joint's is J_v_i = w_i, J_w_i = 0.
     /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
     /// The integrator calls this once per step holding an xvector, and binds here with no copy.
@@ -92,8 +119,9 @@ class kinematic_chain {
     /// Computes the linear-velocity block of the geometric Jacobian at joint
     /// positions q.
     ///
-    /// @param q (N_actuated,) vector with one element per revolute row in the
-    ///        table, in chain order. Fixed rows do not consume a q entry.
+    /// @param q (N_actuated,) vector with one element per rotating or
+    ///        translating joint, in chain order. Fixed joints do not consume a
+    ///        q entry.
     /// @return A (3, N_actuated) matrix of linear-velocity columns.
     /// @throws std::invalid_argument on q-size mismatch
     ///
@@ -115,8 +143,36 @@ class kinematic_chain {
         requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
     xmatrix<> linear_jacobian(const Q&) const = delete;
 
-    /// Linear velocity gain ||J_v*f'||: task-space length per unit of path arc length, in
-    /// whatever length unit the model table uses, with its rate of change along the path.
+    ///
+    /// Computes the position of the chain's last frame at joint positions q.
+    ///
+    /// Trajex does not need this itself. It exists so that a caller can compare the chain it built
+    /// against its own forward kinematics.
+    ///
+    /// @param q (N_actuated,) joint positions, in chain order
+    /// @return The position, in the length unit of the chain's translations
+    /// @throws std::invalid_argument on q-size mismatch
+    ///
+    [[nodiscard]] std::array<double, 3> end_position(const xvector<>& q) const;
+
+    ///
+    /// As above, for a q the caller holds in something other than an xvector.
+    ///
+    /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
+    ///         above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q>
+    [[nodiscard]] std::array<double, 3> end_position(const Q& q) const {
+        require_rank_one_(q);
+        return end_position(xvector<>(q));
+    }
+
+    template <xexpression_like Q>
+        requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
+    std::array<double, 3> end_position(const Q&) const = delete;
+
+    /// Linear velocity gain ||J_v*f'||: task-space length per unit of path arc length, in the
+    /// length unit of the chain's translations, with its rate of change along the path.
     struct linear_velocity_gain {
         double gain_per_arc_unit;
         double d_gain_ds;
@@ -162,43 +218,30 @@ class kinematic_chain {
     linear_velocity_gain linear_velocity_gain_at(const Q&, const QP&, const QPP&) const = delete;
 
    private:
-    // URDF joint type, restricted to arm-relevant joints. Underlying values
-    // are the column-9 wire encoding accepted by `from`, and match
-    // viam::sdk::ModelTable::JointType.
-    enum class joint_type_ : std::uint8_t {
-        k_revolute = 0,
-        k_continuous = 1,
-        k_prismatic = 2,
-        k_fixed = 3,
+    // How a joint moves. This never leaves the class: the builder's method names and the
+    // tensor's type column are each translated into it at construction.
+    enum class joint_kind_ : std::uint8_t {
+        k_fixed,
+        k_rotational,
+        k_translational,
     };
 
-    // One row of the model table: the per-joint URDF fields. xyz/rpy are the
-    // joint origin relative to the parent link (rpy is fixed-axis XYZ); axis
-    // is the joint axis in the local frame.
-    struct joint_row_ {
-        std::array<double, 3> xyz{};
-        std::array<double, 3> rpy{};
-        std::array<double, 3> axis{};
-        joint_type_ type = joint_type_::k_fixed;
-    };
-
-    // Per-revolute-joint world-frame axes and origins plus the end-effector
-    // position.
-    struct chain_state_;
-
-    // Constant per-row kinematics derived once at construction: the
-    // parent-to-joint link transform (row-major 4x4) and, for revolute rows,
-    // the normalized local joint axis. The forward-kinematics walk runs per
-    // integration step, so its q-independent terms are not recomputed there.
-    struct row_constants_ {
-        std::array<double, 16> link_tf{};
+    // A joint in the form the forward-kinematics walk consumes, with everything that does not
+    // depend on q already computed: the parent-to-joint origin transform (row-major 4x4) and, for
+    // a moving joint, its normalized local axis. The walk runs several times per integration
+    // step, so none of this is recomputed there.
+    struct joint_ {
+        joint_kind_ kind = joint_kind_::k_fixed;
+        std::array<double, 16> origin_tf{};
         std::array<double, 3> unit_axis{};
     };
 
-    // Validates the rows (joint types, axes) and counts actuated joints, then
-    // precomputes the per-row constants; all public construction funnels
-    // through here via `from`.
-    explicit kinematic_chain(std::vector<joint_row_> rows);
+    // Per-moving-joint world-frame axes and origins plus the end-effector position.
+    struct chain_state_;
+
+    // Takes joints that have already been validated by the builder or by `from`, and counts the
+    // moving ones.
+    explicit kinematic_chain(std::vector<joint_> joints);
 
     // Defined here, not in the source file: the deduced overloads above instantiate in the
     // caller's translation unit, so a definition there would have to be exported.
@@ -214,9 +257,118 @@ class kinematic_chain {
     // std::invalid_argument on q-size mismatch.
     chain_state_ compute_chain_state_(const xvector<>& q) const;
 
-    std::vector<joint_row_> rows_;
-    std::vector<row_constants_> constants_;
+    std::vector<joint_> joints_;
     std::size_t actuated_count_ = 0;
+};
+
+///
+/// The rigid transform from a joint's parent frame to the joint's own frame. It applies before
+/// the joint's motion.
+///
+struct kinematic_chain::joint_origin {
+    std::array<double, 3> translation{};
+
+    /// Quaternion w, x, y, z in the Hamilton convention. It need not be unit length, since the
+    /// builder normalizes it.
+    std::array<double, 4> rotation{1.0, 0.0, 0.0, 0.0};
+};
+
+///
+/// The axis a revolute or continuous joint rotates about, in the joint's own frame. It need not
+/// be unit length.
+///
+struct kinematic_chain::rotation_axis {
+    std::array<double, 3> direction{};
+};
+
+///
+/// The axis a prismatic joint translates along, in the joint's own frame. It need not be unit
+/// length.
+///
+struct kinematic_chain::translation_axis {
+    std::array<double, 3> direction{};
+};
+
+///
+/// Assembles a kinematic_chain one joint at a time, from the base to the end effector.
+///
+/// The overload chosen says how each joint moves: an origin alone is a fixed joint, an origin and
+/// a rotation_axis a revolute or continuous joint, and an origin and a translation_axis a
+/// prismatic joint. Revolute and continuous joints are not distinguished because the chain carries
+/// no position limits, and nothing else about them differs. The capped point of a TCP limit is the
+/// origin of the last joint's frame, so a chain should end at whatever point the caller wants
+/// limited, with a fixed joint if need be.
+///
+class kinematic_chain::builder {
+   public:
+    ///
+    /// Appends a fixed joint.
+    ///
+    /// @param origin Transform from the previous frame
+    /// @return This builder
+    ///
+    builder& extend(const joint_origin& origin) &;
+
+    ///
+    /// Appends a revolute or continuous joint.
+    ///
+    /// @param origin Transform from the previous frame, applied before the rotation
+    /// @param axis Axis of rotation in the joint's frame
+    /// @return This builder
+    ///
+    builder& extend(const joint_origin& origin, const rotation_axis& axis) &;
+
+    ///
+    /// Appends a prismatic joint.
+    ///
+    /// @param origin Transform from the previous frame, applied before the translation
+    /// @param axis Axis of translation in the joint's frame
+    /// @return This builder
+    ///
+    builder& extend(const joint_origin& origin, const translation_axis& axis) &;
+
+    ///
+    /// The overloads above for a builder that is a temporary, so that a chain can be built in a
+    /// single expression ending in build().
+    ///
+    /// @return This builder, as an rvalue
+    ///
+    builder&& extend(const joint_origin& origin) && {
+        return std::move(extend(origin));
+    }
+
+    /// @copydoc extend(const joint_origin&) &&
+    builder&& extend(const joint_origin& origin, const rotation_axis& axis) && {
+        return std::move(extend(origin, axis));
+    }
+
+    /// @copydoc extend(const joint_origin&) &&
+    builder&& extend(const joint_origin& origin, const translation_axis& axis) && {
+        return std::move(extend(origin, axis));
+    }
+
+    ///
+    /// Validates the joints and builds the chain.
+    ///
+    /// Quaternions and axes are normalized here, so neither need be unit length on the way in.
+    ///
+    /// @return The chain
+    /// @throws std::invalid_argument naming the offending joint if the chain is empty, or a joint
+    ///         has a non-finite translation, a zero or non-finite quaternion, or a zero or
+    ///         non-finite axis
+    ///
+    [[nodiscard]] kinematic_chain build() &&;
+
+   private:
+    // Joints as the caller described them. Validation and the derived transforms wait for
+    // build(), which is the one place that can report an error with the joint's index.
+    struct pending_joint_ {
+        joint_kind_ kind;
+        joint_origin origin;
+        std::array<double, 3> axis;
+    };
+
+    std::vector<pending_joint_> joints_;
 };
 
 }  // namespace viam::trajex::jacobian

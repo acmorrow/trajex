@@ -44,19 +44,16 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     auto opt = base_2dof_options();
 
     // non-positive max_velocity
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.0,
-                                     .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
-                                     .linear_velocity_gain = {}};
+    opt.tcp = test::planar_2link_tcp_limits(0.0);
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
-    // missing jacobian
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5, .linear_jacobian = {}, .linear_velocity_gain = {}};
+    // missing gain callback
+    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5, .linear_velocity_gain = {}};
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
-    // default-initialized limit with only the callbacks filled in: max_velocity is
+    // default-initialized limit with only the callback filled in: max_velocity is
     // zero-initialized, so validation must reject it deterministically
     trajectory::tcp_limits default_init;
-    default_init.linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); };
     default_init.linear_velocity_gain = [](const xvector<>& q, const xvector<>& qp, const xvector<>& qpp) {
         return test::planar_2link_linear_velocity_gain(1.0, 1.0, q, qp, qpp);
     };
@@ -251,27 +248,6 @@ BOOST_AUTO_TEST_CASE(terminal_acceleration_finite_and_sampleable_at_exact_durati
     }
 }
 
-// The TCP velocity limit requires the jacobian callback to return a 3xN matrix (3 Cartesian
-// rows, one column per joint DOF). A callback that violates that contract must be rejected;
-// trajectory::create evaluates the limit during generation, so the bad shape surfaces there.
-BOOST_AUTO_TEST_CASE(tcp_jacobian_callback_wrong_shape_throws) {
-    const path p = make_2dof_path();
-    auto opt = base_2dof_options();
-
-    // Fewer than 3 rows.
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5,
-                                     .linear_jacobian = [](const xvector<>&) { return xmatrix<>{{1.0, 0.0}, {0.0, 1.0}}; },
-                                     .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
-
-    // Right number of rows, wrong column count (3 columns for a 2-DOF tangent).
-    opt.tcp = trajectory::tcp_limits{
-        .max_linear_velocity = 0.5,
-        .linear_jacobian = [](const xvector<>&) { return xmatrix<>{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}; },
-        .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
-}
-
 // get_velocity_limit_components exposes the joint and TCP curves separately; the combined
 // velocity limit from get_velocity_limits is their minimum.
 BOOST_AUTO_TEST_CASE(velocity_limit_components_separate_joint_and_tcp) {
@@ -372,29 +348,39 @@ BOOST_AUTO_TEST_CASE(integration_points_respect_combined_velocity_limit) {
     }
 }
 
-// A linear_velocity_gain that contradicts linear_jacobian (zero gain at a TCP-binding point)
-// makes the TCP slope divide by zero and go non-finite. NaN compares false against everything, so
-// an unguarded non-finite slope silently corrupts every curve-following decision downstream
-// (trap detection, tangent following); the integrator must reject it loudly instead.
+// gp12_chain is meant to be gp12_model_table built the other way, so the regression tests that
+// moved from one to the other still exercise the same arm.
+BOOST_AUTO_TEST_CASE(gp12_chain_matches_gp12_model_table) {
+    const auto table = jacobian::kinematic_chain::from(test::gp12_model_table());
+    const auto chain = test::gp12_chain();
+    const xvector<> q = {1.4, 1.06, 1.8, -2.34, 0.94, -0.47};
+    const xvector<> q_prime = {0.2, 0.7, -0.4, 0.5, -0.6, 0.3};
+    const xvector<> q_double_prime = {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2};
+
+    const auto from_table = table.linear_velocity_gain_at(q, q_prime, q_double_prime);
+    const auto from_chain = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
+    BOOST_CHECK_SMALL(from_table.gain_per_arc_unit - from_chain.gain_per_arc_unit, 1e-12);
+    BOOST_CHECK_SMALL(from_table.d_gain_ds - from_chain.d_gain_ds, 1e-12);
+    BOOST_CHECK_SMALL(static_cast<double>(xt::amax(xt::abs(table.jacobian(q) - chain.jacobian(q)))()), 1e-12);
+}
+
+// A gain callback whose derivative is NaN at a TCP-binding point makes the TCP slope non-finite.
+// NaN compares false against everything, so an unguarded non-finite slope silently corrupts every
+// curve-following decision downstream (trap detection, tangent following); the integrator must
+// reject it loudly instead.
 BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
     const path p = path::create(xmatrix<>{{0.0, 2.0}, {10.0, 0.0}});
     auto opt = trajectory::options{.max_velocity = xvector<>{100.0, 100.0}, .max_acceleration = xvector<>{0.05, 0.05}};
     opt.tcp = trajectory::tcp_limits{
         .max_linear_velocity = 0.3,
-        .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
         .linear_velocity_gain =
-            [](const xvector<>&, const xvector<>&, const xvector<>&) { return jacobian::kinematic_chain::linear_velocity_gain{0.0, 0.0}; },
+            [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
+                auto g = test::planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);
+                g.d_ds = std::numeric_limits<double>::quiet_NaN();
+                return g;
+            },
     };
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
-}
-
-BOOST_AUTO_TEST_CASE(tcp_limit_without_velocity_derivative_throws) {
-    const path p = make_2dof_path();
-    auto opt = base_2dof_options();
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5,
-                                     .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
-                                     .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
