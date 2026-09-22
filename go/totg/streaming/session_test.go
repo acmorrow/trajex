@@ -74,7 +74,8 @@ func TestSessionExtendAndSample(t *testing.T) {
 	})
 	defer batch.Close()
 
-	test.That(t, sess.Extend(context.Background(), batch), test.ShouldBeNil)
+	_, err = sess.Extend(context.Background(), batch)
+	test.That(t, err, test.ShouldBeNil)
 
 	// Active trajectory should now exist.
 	test.That(t, sess.HasActiveTrajectory(), test.ShouldBeTrue)
@@ -128,7 +129,8 @@ func TestSessionSampleAtLeast(t *testing.T) {
 		1.0, 1.0,
 	})
 	defer batch.Close()
-	test.That(t, sess.Extend(context.Background(), batch), test.ShouldBeNil)
+	_, err = sess.Extend(context.Background(), batch)
+	test.That(t, err, test.ShouldBeNil)
 
 	out, err := trajex.NewTensorMap()
 	test.That(t, err, test.ShouldBeNil)
@@ -155,9 +157,61 @@ func TestSessionExtendCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = sess.Extend(ctx, batch)
+	_, err = sess.Extend(ctx, batch)
 	test.That(t, err, test.ShouldNotBeNil)
 	test.That(t, err.Error(), test.ShouldContainSubstring, "context")
+}
+
+// TestSessionExtendReporting checks that an Extend result survives the cgo boundary with
+// its meaning intact. The kinds and the branch/duration arithmetic are covered by the C++
+// suite; what only this layer can check is that the C enum values and the Go constants
+// still agree, and that the NaN the C ABI writes for an absent time becomes a nil pointer
+// rather than a plausible-looking zero.
+func TestSessionExtendReporting(t *testing.T) {
+	opts := buildOptions(t)
+	defer opts.Close()
+	sess, err := streaming.New(opts)
+	test.That(t, err, test.ShouldBeNil)
+	defer sess.Close()
+
+	first := buildBatch(t, []float64{
+		0.0, 0.0,
+		1.0, 0.0,
+		1.0, 1.0,
+	})
+	defer first.Close()
+
+	// A first build has nothing to branch from, so the slack must arrive as nil, while the
+	// duration delta is the whole of the new trajectory.
+	res, err := sess.Extend(context.Background(), first)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendFirstBuild)
+	test.That(t, res.BranchSlack, test.ShouldBeNil)
+	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
+	test.That(t, *res.DeltaActiveDuration, test.ShouldEqual, sess.ActiveDuration())
+
+	test.That(t, sess.RemainingActiveDuration(), test.ShouldEqual, sess.ActiveDuration())
+
+	// One sample of watermark leaves the branch well ahead, so the next extend pivots and
+	// both times come back populated.
+	out, err := trajex.NewTensorMap()
+	test.That(t, err, test.ShouldBeNil)
+	defer out.Close()
+	test.That(t, sess.SampleNext(context.Background(), 1, out), test.ShouldBeNil)
+
+	second := buildBatch(t, []float64{
+		1.0, 1.0,
+		2.0, 1.0,
+		2.0, 2.0,
+	})
+	defer second.Close()
+
+	res, err = sess.Extend(context.Background(), second)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendPivot)
+	test.That(t, res.BranchSlack, test.ShouldNotBeNil)
+	test.That(t, *res.BranchSlack, test.ShouldBeGreaterThan, time.Duration(0))
+	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
 }
 
 func TestSessionCloseIdempotent(t *testing.T) {

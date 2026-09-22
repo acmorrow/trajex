@@ -177,12 +177,19 @@ BOOST_AUTO_TEST_CASE(first_extend_with_valid_batch_creates_active_trajectory) {
     auto sess = fresh_session();
     const pinned_waypoints wp(three_waypoints());
 
-    sess.extend(wp.accumulator());
+    const auto result = sess.extend(wp.accumulator());
 
     BOOST_CHECK(sess.active_trajectory() != nullptr);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
     BOOST_CHECK_EQUAL(sess.current_time().count(), 0.0);
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+
+    // There was nothing to branch from, so no slack is reported, and the whole of the new
+    // trajectory counts as growth.
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_first_build);
+    BOOST_CHECK(!result.branch_slack.has_value());
+    BOOST_REQUIRE(result.delta_active_duration.has_value());
+    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), sess.active_trajectory()->duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argument) {
@@ -324,6 +331,32 @@ BOOST_AUTO_TEST_CASE(second_extend_with_bit_exact_seam_matches_merged_reference)
     check_samples_match_reference(samples, reference);
 }
 
+BOOST_AUTO_TEST_CASE(seam_only_batch_leaves_the_session_untouched) {
+    // A batch carrying nothing past the seam has no waypoints to absorb, so extend returns
+    // early without building a candidate. Nothing had exercised that path before: the concern
+    // is not the returned kind so much as the early return being a genuine no-op rather than
+    // something that advances the chain or disturbs the sampler.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(2);
+
+    const auto generation_before = sess.trajectory_generation_count();
+    const auto time_before = sess.current_time();
+    const auto duration_before = sess.active_trajectory()->duration();
+
+    const pinned_waypoints seam_only(xt::xarray<double>{{1.0, 1.0}});
+    const auto result = sess.extend(seam_only.accumulator());
+
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_noop);
+    BOOST_CHECK(!result.branch_slack.has_value());
+    BOOST_CHECK(!result.delta_active_duration.has_value());
+
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), generation_before);
+    BOOST_CHECK_EQUAL(sess.current_time().count(), time_before.count());
+    BOOST_CHECK_EQUAL(sess.active_trajectory()->duration().count(), duration_before.count());
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // seam_validation
 
 BOOST_AUTO_TEST_SUITE(pivot)
@@ -338,12 +371,23 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_watermark_pivots) {
     // (the branch sits near the prefix's terminal blend, which is most of a trajectory away).
     sess.sample_next(1);
 
+    const auto duration_before = sess.active_trajectory()->duration();
     const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
-    sess.extend(extension.accumulator());
+    const auto result = sess.extend(extension.accumulator());
 
     // Generation incremented: a new active trajectory was produced (pivot).
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
+
+    // The pivot is admitted precisely because the branch sits ahead of the watermark, so the
+    // reported slack must be positive. The duration delta has to be measured against the
+    // trajectory being replaced, which means capturing its duration before the swap; reading
+    // it afterwards would report zero.
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_pivot);
+    BOOST_REQUIRE(result.branch_slack.has_value());
+    BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
+    BOOST_REQUIRE(result.delta_active_duration.has_value());
+    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), (sess.active_trajectory()->duration() - duration_before).count());
 }
 
 BOOST_AUTO_TEST_CASE(pivot_preserves_active_epoch) {
@@ -416,8 +460,17 @@ BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
     // The tiny appended tail would pivot (the branch is ahead of the watermark), but the
     // resume offset overshoots, so the session must stage instead of throwing.
     const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {1.0, 1.05}});
-    BOOST_CHECK_NO_THROW(sess.extend(extension.accumulator()));
+    streaming::session::extend_result result{};
+    BOOST_CHECK_NO_THROW(result = sess.extend(extension.accumulator()));
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+
+    // This is the discriminator between the two staged-after-comparison kinds: the branch was
+    // ahead of the watermark, so the slack is positive and lateness was never the problem.
+    // Reporting k_staged_branch_sampled here would send a caller chasing the wrong remedy.
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_unsamplable);
+    BOOST_REQUIRE(result.branch_slack.has_value());
+    BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
+    BOOST_CHECK(!result.delta_active_duration.has_value());
 }
 
 BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
@@ -506,11 +559,18 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
     sess.sample_at_least(initial_active->duration());
 
     const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
-    sess.extend(extension.accumulator());
+    const auto result = sess.extend(extension.accumulator());
 
     // Stage: no new trajectory became active, so the generation count is unchanged.
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
+
+    // The watermark has passed the branch, which is what forced the stage, so the slack is
+    // non-positive. Nothing was installed, so there is no duration delta to report.
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_branch_sampled);
+    BOOST_REQUIRE(result.branch_slack.has_value());
+    BOOST_CHECK_LE(result.branch_slack->count(), 0.0);
+    BOOST_CHECK(!result.delta_active_duration.has_value());
 }
 
 BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
@@ -713,13 +773,21 @@ BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
     sess.sample_at_least(initial_duration);
 
     const pinned_waypoints batch_a(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
-    sess.extend(batch_a.accumulator());
+    const auto first_stage = sess.extend(batch_a.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, locked out
+    BOOST_CHECK(first_stage.kind == streaming::session::extend_result::kinds::k_staged_branch_sampled);
 
     // Second extend arrives while locked out: it accumulates onto staging rather than rebasing.
     const pinned_waypoints batch_b(xt::xarray<double>{{2.0, 2.0}, {3.0, 2.0}});
-    sess.extend(batch_b.accumulator());
+    const auto second_stage = sess.extend(batch_b.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // still just accumulated
+
+    // The second call skips the candidate build entirely, so it has nothing to compare and
+    // reports neither time. That absence is the point: a caller cannot read a stale slack from
+    // the previous call and conclude anything about this one.
+    BOOST_CHECK(second_stage.kind == streaming::session::extend_result::kinds::k_staged_again);
+    BOOST_CHECK(!second_stage.branch_slack.has_value());
+    BOOST_CHECK(!second_stage.delta_active_duration.has_value());
 
     // Draining fires a single rebase that folds both staged batches into one new chain.
     const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
@@ -863,5 +931,46 @@ BOOST_AUTO_TEST_CASE(final_emitted_sample_after_rebase_lies_at_rebased_terminal_
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // terminal_sampling
+
+BOOST_AUTO_TEST_SUITE(remaining_duration)
+
+BOOST_AUTO_TEST_CASE(remaining_active_duration_is_zero_without_a_trajectory) {
+    auto sess = fresh_session();
+    BOOST_CHECK_EQUAL(sess.remaining_active_duration().count(), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(remaining_active_duration_is_measured_in_global_time) {
+    // The remainder is the active trajectory's end in global time less the most recently
+    // emitted sample. While the epoch is still zero a local-frame computation agrees with a
+    // global-frame one by coincidence, so the distinction only shows up after a rebase has
+    // advanced the epoch -- at which point a local-frame implementation reports a negative
+    // remainder and keeps doing so for the rest of the session. Drive past a rebase and check
+    // it there, because that is the case the accessor exists to get right.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+
+    // Nothing emitted yet, so the whole active trajectory remains.
+    BOOST_CHECK_EQUAL(sess.remaining_active_duration().count(), sess.active_trajectory()->duration().count());
+
+    // Drain to the terminal, stage a batch, then sample once more to fire the rebase.
+    sess.sample_at_least(sess.active_trajectory()->duration());
+    const pinned_waypoints extension(xt::xarray<double>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(extension.accumulator());
+    sess.sample_next(1);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_REQUIRE_GT(sess.active_epoch().count(), 0.0);
+
+    const auto remaining = sess.remaining_active_duration();
+    BOOST_CHECK_GT(remaining.count(), 0.0);
+    BOOST_CHECK_EQUAL(remaining.count(), (sess.active_epoch() + sess.active_trajectory()->duration() - sess.current_time()).count());
+
+    // Draining the rebased chain takes it to zero, and the clamp keeps it from going below.
+    sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_CHECK_GE(sess.remaining_active_duration().count(), 0.0);
+    BOOST_CHECK_SMALL(sess.remaining_active_duration().count(), 1e-9);
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // remaining_duration
 
 BOOST_AUTO_TEST_SUITE_END()  // streaming_session_tests
