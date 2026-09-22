@@ -170,6 +170,21 @@ struct cell_result {
     // sees a red cell either way.
     bool extend_threw{false};
     std::string extend_throw_message;
+
+    // Tally of what the session did with each batch we handed it. The two staged
+    // reasons are kept apart because they call for opposite corrections: a batch whose
+    // branch had already been sampled needed to arrive sooner, while an unsamplable one
+    // arrived in time and was simply too small to be worth pivoting to.
+    int pivots{};
+    int staged_branch_sampled{};
+    int staged_unsamplable{};
+    int staged_again{};
+
+    // Tightest branch slack over every extend that compared a candidate, in seconds.
+    // This is what separates a configuration that survives comfortably from one sitting
+    // a hair away from staging -- `rebases` scores both as zero. Negative once a cell
+    // starts missing, and then it reads as how much sooner the batch needed to arrive.
+    std::optional<double> min_branch_slack;
 };
 
 cell_result simulate_cell(const xt::xarray<double>& workload,
@@ -290,10 +305,9 @@ cell_result simulate_cell(const xt::xarray<double>& workload,
                 const waypoint_accumulator acc(batch_data);
 
                 const double watermark_before = sess.current_time().count();
-                const auto pre_gen = sess.trajectory_generation_count();
 
                 const auto start = std::chrono::steady_clock::now();
-                sess.extend(acc);  // may throw; let it propagate up
+                const auto outcome = sess.extend(acc);  // may throw; let it propagate up
                 const auto stop = std::chrono::steady_clock::now();
                 const double elapsed_real = std::chrono::duration<double>(stop - start).count();
                 const double arm_advance = elapsed_real * speed_factor;
@@ -307,9 +321,33 @@ cell_result simulate_cell(const xt::xarray<double>& workload,
                 }
                 arm_time += arm_advance;
 
-                const auto post_gen = sess.trajectory_generation_count();
+                using kinds = streaming::session::extend_result::kinds;
+                switch (outcome.kind) {
+                    case kinds::k_pivot:
+                        ++result.pivots;
+                        break;
+                    case kinds::k_staged_branch_sampled:
+                        ++result.staged_branch_sampled;
+                        break;
+                    case kinds::k_staged_unsamplable:
+                        ++result.staged_unsamplable;
+                        break;
+                    case kinds::k_staged_again:
+                        ++result.staged_again;
+                        break;
+                    case kinds::k_first_build:
+                    case kinds::k_noop:
+                        break;  // bootstrap happens before this loop; a noop adds no waypoints
+                }
+                if (outcome.branch_slack) {
+                    const double slack = outcome.branch_slack->count();
+                    result.min_branch_slack = result.min_branch_slack ? std::min(*result.min_branch_slack, slack) : slack;
+                }
+
+                // Whether the batch joined the active trajectory or went to staging is now
+                // reported outright, rather than inferred from a generation-count delta.
                 const std::size_t new_wps = batch_end - next_wp_idx;
-                if (post_gen > pre_gen) {
+                if (outcome.kind == kinds::k_pivot) {
                     active_wp_count += new_wps;
                 } else {
                     staged_wp_count += new_wps;
@@ -336,11 +374,18 @@ void write_csv(const sim_config& cfg, std::size_t n_waypoints, const std::vector
     out << "# sample_rate_hz: " << cfg.sample_rate_hz << "\n";
     out << "# speed_factor: " << cfg.speed_factor << "\n";
     out << "# batch_size: " << cfg.batch_size << "\n";
-    out << "commit_window,replan_budget,rebases,starved_at_waypoint\n";
+    // The reporting columns are appended rather than interleaved so readers that select
+    // by name (the plot script uses csv.DictReader) keep working untouched.
+    out << "commit_window,replan_budget,rebases,starved_at_waypoint,"
+        << "pivots,staged_branch_sampled,staged_unsamplable,staged_again,min_branch_slack\n";
     for (const auto& c : cells) {
         out << c.w_c << "," << c.w_r << "," << c.rebases << ",";
         if (c.starved_at_waypoint) {
             out << *c.starved_at_waypoint;
+        }
+        out << "," << c.pivots << "," << c.staged_branch_sampled << "," << c.staged_unsamplable << "," << c.staged_again << ",";
+        if (c.min_branch_slack) {
+            out << *c.min_branch_slack;
         }
         out << "\n";
     }
@@ -374,7 +419,11 @@ int main(int argc, char* argv[]) try {
             std::cerr << "[" << done << "/" << total << "] W_c=" << w_c << " W_r=" << w_r << " ... " << std::flush;
             cell_result r = simulate_cell(workload, popts, topts, cfg.sample_rate_hz, w_c, w_r, cfg.speed_factor, cfg.batch_size);
             cells.push_back(r);
-            std::cerr << "rebases=" << r.rebases;
+            std::cerr << "rebases=" << r.rebases << " pivots=" << r.pivots << " staged=" << r.staged_branch_sampled << "/"
+                      << r.staged_unsamplable << "/" << r.staged_again;
+            if (r.min_branch_slack) {
+                std::cerr << " min_slack=" << *r.min_branch_slack;
+            }
             if (r.extend_threw) {
                 std::cerr << " EXTEND-THREW@" << *r.starved_at_waypoint << ": " << r.extend_throw_message;
             } else if (r.starved_at_waypoint) {

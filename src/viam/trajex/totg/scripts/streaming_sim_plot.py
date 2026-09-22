@@ -27,6 +27,11 @@ def load_csv(path):
     Header is `#`-prefixed `key: value` lines preceding the column header.
     Rows are dicts with `commit_window`, `replan_budget`, `rebases`, and
     `starved_at_waypoint` (None if completed).
+
+    The simulator also emits per-cell extend tallies (`pivots`,
+    `staged_branch_sampled`, `staged_unsamplable`, `staged_again`) and
+    `min_branch_slack`. They are read by name, so they are simply ignored here;
+    plotting the slack margin alongside the rebase count is a separate change.
     """
     metadata = {}
     rows = []
