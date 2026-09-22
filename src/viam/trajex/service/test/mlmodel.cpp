@@ -147,14 +147,14 @@ BOOST_AUTO_TEST_CASE(unknown_algorithm_rejects) {
     vsdk::ProtoStruct attrs;
     attrs.emplace("generator_sequence", std::vector<vsdk::ProtoValue>{vsdk::ProtoValue{"unknown"}});
 
-    BOOST_CHECK_THROW(std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config(attrs)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config(attrs))), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(empty_sequence_rejects) {
     vsdk::ProtoStruct attrs;
     attrs.emplace("generator_sequence", std::vector<vsdk::ProtoValue>{});
 
-    BOOST_CHECK_THROW(std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config(attrs)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(std::make_shared<mlmodel>(vsdk::Dependencies{}, make_config(attrs))), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
