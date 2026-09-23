@@ -1233,7 +1233,7 @@ BOOST_AUTO_TEST_CASE(waypoints_to_samples_smoke_test) {
 
     for (const auto& s : traj.samples(sampler)) {
         // Verify sample structure
-        BOOST_CHECK_NO_THROW(s.time.count());
+        BOOST_CHECK_NO_THROW(static_cast<void>(s.time.count()));
         BOOST_CHECK_NO_THROW(s.configuration.size());
         BOOST_CHECK_NO_THROW(s.velocity.size());
         BOOST_CHECK_NO_THROW(s.acceleration.size());

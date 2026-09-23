@@ -103,6 +103,46 @@ void populate_simple_totg_inputs(viam_trajex_tensor_map_t* inputs) {
     BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs, viam_trajex_totg_key_path_tolerance_delta_rads, 0.01) == 0);
 }
 
+// RAII handle for viam_trajex_totg_streaming_session_t.
+struct streaming_session_deleter {
+    void operator()(viam_trajex_totg_streaming_session_t* p) const noexcept {
+        viam_trajex_totg_streaming_session_destroy(p);
+    }
+};
+using session_owner = std::unique_ptr<viam_trajex_totg_streaming_session_t, streaming_session_deleter>;
+
+// Minimal valid streaming session: 2 DOF, modest limits, 100 Hz.
+session_owner make_streaming_session() {
+    const auto options = make_map();
+    const std::vector<double> velocity_limits = {1.0, 1.0};
+    const std::vector<double> acceleration_limits = {1.0, 1.0};
+    const std::vector<std::size_t> dof_dims = {2};
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_f64(
+                           options.get(), viam_trajex_totg_key_velocity_limits_rads_per_sec, 1, dof_dims.data(), velocity_limits.data()) ==
+                       0);
+    BOOST_TEST_REQUIRE(
+        viam_trajex_tensor_map_insert_f64(
+            options.get(), viam_trajex_totg_key_acceleration_limits_rads_per_sec2, 1, dof_dims.data(), acceleration_limits.data()) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_path_tolerance_delta_rads, 0.01) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_trajectory_sampling_freq_hz, 100.0) ==
+                       0);
+
+    const char* raw = nullptr;
+    session_owner session{viam_trajex_totg_streaming_session_create(options.get(), &raw)};
+    const error_string owned_error{raw};
+    BOOST_TEST_REQUIRE(session);
+    return session;
+}
+
+// Wrap a flat list of 2-DOF waypoint coordinates into a batch map for extend().
+map_owner make_waypoint_batch(const std::vector<double>& coordinates) {
+    auto batch = make_map();
+    const std::vector<std::size_t> dims = {coordinates.size() / 2, 2};
+    BOOST_TEST_REQUIRE(
+        viam_trajex_tensor_map_insert_f64(batch.get(), viam_trajex_totg_key_waypoints_rads, 2, dims.data(), coordinates.data()) == 0);
+    return batch;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -431,4 +471,57 @@ BOOST_AUTO_TEST_CASE(totg_generate_wrong_shape_on_velocity_limits) {
     BOOST_TEST(result.status == -1);
     BOOST_TEST_REQUIRE(result.error);
     BOOST_TEST(std::string(result.error.get()).size() > 0U);
+}
+
+// ============================================================================
+// Streaming session reporting parameters
+//
+// The session's behavior is covered by the C++ suite and its cgo binding by the
+// Go suite. What neither of those can reach is the shim's handling of the
+// reporting out-parameters, so that is all this section covers.
+// ============================================================================
+
+BOOST_AUTO_TEST_CASE(streaming_extend_accepts_null_reporting_parameters) {
+    // The three reporting parameters are documented as optional. The Go binding always passes
+    // all three, so nothing else in the tree exercises the NULL path, and getting it wrong
+    // would be a crash rather than a wrong answer.
+    const auto session = make_streaming_session();
+    const auto batch = make_waypoint_batch({0.0, 0.0, 1.0, 0.0, 1.0, 1.0});
+
+    const char* raw = nullptr;
+    const int status = viam_trajex_totg_streaming_session_extend(session.get(), batch.get(), nullptr, nullptr, nullptr, &raw);
+    const error_string owned_error{raw};
+    BOOST_TEST(status == 0);
+}
+
+BOOST_AUTO_TEST_CASE(streaming_extend_leaves_reporting_parameters_untouched_on_failure) {
+    // A call that failed has no outcome to describe, so the header promises it writes nothing
+    // but error_out. A Go caller cannot observe this, since it discards the result whenever
+    // the error is non-nil, which makes this the only place the contract can be checked.
+    const auto session = make_streaming_session();
+    const auto first = make_waypoint_batch({0.0, 0.0, 1.0, 0.0, 1.0, 1.0});
+    {
+        const char* raw = nullptr;
+        const int status = viam_trajex_totg_streaming_session_extend(session.get(), first.get(), nullptr, nullptr, nullptr, &raw);
+        const error_string owned_error{raw};
+        BOOST_TEST_REQUIRE(status == 0);
+    }
+
+    // Seeded with values the call could not legitimately produce for this scenario.
+    auto kind = VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP;
+    constexpr double k_sentinel = -12345.0;
+    double branch_slack_sec = k_sentinel;
+    double delta_active_duration_sec = k_sentinel;
+
+    // First waypoint does not match the session's last, so the seam check rejects the batch.
+    const auto mismatched = make_waypoint_batch({9.0, 9.0, 8.0, 8.0});
+    const char* raw = nullptr;
+    const int status = viam_trajex_totg_streaming_session_extend(
+        session.get(), mismatched.get(), &kind, &branch_slack_sec, &delta_active_duration_sec, &raw);
+    const error_string owned_error{raw};
+
+    BOOST_TEST_REQUIRE(status == -1);
+    BOOST_TEST(kind == VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP);
+    BOOST_TEST(branch_slack_sec == k_sentinel);
+    BOOST_TEST(delta_active_duration_sec == k_sentinel);
 }

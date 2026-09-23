@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <utility>
@@ -151,7 +152,9 @@ session::session(path::options path_options, trajectory::options trajectory_opti
       sample_rate_(sample_rate),
       sample_period_(validate_sample_rate_and_compute_period(sample_rate)) {}
 
-void session::extend(const waypoint_accumulator& batch) {
+session::extend_result session::extend(const waypoint_accumulator& batch) {
+    using kinds = extend_result::kinds;
+
     if (batch.empty()) {
         throw std::invalid_argument("streaming::session::extend: batch is empty");
     }
@@ -171,7 +174,10 @@ void session::extend(const waypoint_accumulator& batch) {
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
         generation_count_ = 1;
-        return;
+
+        // Nothing preceded this trajectory, so there is no branch to measure against, and the
+        // whole of what we just built counts as growth.
+        return {kinds::k_first_build, std::nullopt, active_->duration()};
     }
 
     // Subsequent extends: validate DOF and seam before touching any state.
@@ -184,18 +190,20 @@ void session::extend(const waypoint_accumulator& batch) {
 
     const std::size_t post_seam_count = batch.size() - 1;
 
-    // Already locked-out: skip the candidate build, just record the new waypoints in staging.
+    // Already staging: skip the candidate build, just record the new waypoints in staging.
+    // Nothing is compared here, so neither time can be reported.
     if (!staged_batches_.empty()) {
-        if (post_seam_count > 0) {
-            staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
+        if (post_seam_count == 0) {
+            return {kinds::k_noop, std::nullopt, std::nullopt};
         }
+        staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
         last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
-        return;
+        return {kinds::k_staged_again, std::nullopt, std::nullopt};
     }
 
     // Seam-only batch with no new waypoints: nothing to do.
     if (post_seam_count == 0) {
-        return;
+        return {kinds::k_noop, std::nullopt, std::nullopt};
     }
 
     // Build a candidate trajectory from the active waypoints plus the batch's new waypoints,
@@ -221,7 +229,13 @@ void session::extend(const waypoint_accumulator& batch) {
     const bool branch_ahead = (emitted_sample_count_ == 0) || (branch_global > current_time_);
     const bool has_samplable_material = starting_local_time < candidate.duration();
 
+    const auto branch_slack = branch_global - current_time_;
+
     if (branch_ahead && has_samplable_material) {
+        // Both durations have to be read before the moves below: afterwards `candidate` is
+        // gutted and `active_` names the new trajectory, so the difference would come out zero.
+        const auto delta_active_duration = candidate.duration() - active_->duration();
+
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
 
         last_waypoint_ = row_to_xarray(new_waypoints, new_waypoints.shape(0) - 1);
@@ -230,14 +244,36 @@ void session::extend(const waypoint_accumulator& batch) {
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
         ++generation_count_;
-    } else {
-        staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
-        last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
+        return {kinds::k_pivot, branch_slack, delta_active_duration};
     }
+
+    staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
+    last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
+
+    // Both stage conditions can hold at once. Report lateness in that case, because it is the
+    // one the caller can do something about: sending sooner fixes a branch that has already
+    // been sampled, whereas an unsamplable candidate needs a larger batch instead.
+    const auto kind = branch_ahead ? kinds::k_staged_unsamplable : kinds::k_staged_branch_sampled;
+    return {kind, branch_slack, std::nullopt};
 }
 
 trajectory::seconds session::current_time() const noexcept {
     return current_time_;
+}
+
+trajectory::seconds session::remaining_active_duration() const noexcept {
+    if (!active_) {
+        return trajectory::seconds{0.0};
+    }
+
+    // The active's end has to be lifted into global time before the subtraction: current_time_
+    // is global, and after a rebase the epoch is non-zero, so differencing against the
+    // trajectory's own local duration would run negative and stay there.
+    const auto active_end = epoch_ + active_->duration();
+    if (active_end <= current_time_) {
+        return trajectory::seconds{0.0};
+    }
+    return active_end - current_time_;
 }
 
 std::vector<struct trajectory::sample> session::sample_next(std::size_t n) {

@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <new>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
@@ -375,6 +377,35 @@ const char* duplicate_error_string(const char* msg) {
     return buf;
 }
 
+// Translate an extend kind into its C ABI counterpart. Both enumerations pin the same
+// integer values, so a cast would work today, but writing the mapping out means the compiler
+// flags the omission if a kind is ever added on the C++ side alone.
+viam_trajex_totg_streaming_session_extend_kind_t to_capi_extend_kind(viam::trajex::totg::streaming::session::extend_result::kinds kind) {
+    using kinds = viam::trajex::totg::streaming::session::extend_result::kinds;
+    switch (kind) {
+        case kinds::k_first_build:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_FIRST_BUILD;
+        case kinds::k_pivot:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_PIVOT;
+        case kinds::k_staged_branch_sampled:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_BRANCH_SAMPLED;
+        case kinds::k_staged_unsamplable:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_UNSAMPLABLE;
+        case kinds::k_staged_again:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_AGAIN;
+        case kinds::k_noop:
+            return VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP;
+    }
+    throw std::logic_error("unmapped streaming extend kind");
+}
+
+// A time the session did not compute crosses the ABI as NaN. Zero would be indistinguishable
+// from a branch that landed exactly on the last emitted sample, which is reachable, and
+// leaving the parameter alone would oblige every caller to initialize it first.
+double seconds_to_capi(const std::optional<viam::trajex::totg::trajectory::seconds>& value) {
+    return value ? value->count() : std::numeric_limits<double>::quiet_NaN();
+}
+
 }  // namespace
 
 extern "C" {
@@ -588,6 +619,9 @@ void viam_trajex_totg_streaming_session_destroy(viam_trajex_totg_streaming_sessi
 
 int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session_t* session,
                                               const viam_trajex_tensor_map_t* batch,
+                                              viam_trajex_totg_streaming_session_extend_kind_t* kind_out,
+                                              double* branch_slack_sec_out,
+                                              double* delta_active_duration_sec_out,
                                               const char** error_out) {
     if (error_out) {
         *error_out = nullptr;
@@ -611,7 +645,19 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
         // waypoints it retains, so the accumulator's lifetime ending at function exit is
         // fine.
         const viam::trajex::totg::waypoint_accumulator acc(waypoints);
-        session->sess.extend(acc);
+        const auto result = session->sess.extend(acc);
+
+        // Report only once the call has succeeded. A call that threw has no outcome to
+        // describe, and the header promises to leave these parameters as the caller left them.
+        if (kind_out) {
+            *kind_out = to_capi_extend_kind(result.kind);
+        }
+        if (branch_slack_sec_out) {
+            *branch_slack_sec_out = seconds_to_capi(result.branch_slack);
+        }
+        if (delta_active_duration_sec_out) {
+            *delta_active_duration_sec_out = seconds_to_capi(result.delta_active_duration);
+        }
         return 0;
     } catch (const std::exception& e) {
         if (error_out) {
@@ -701,6 +747,10 @@ void viam_trajex_totg_streaming_session_has_active_trajectory(const viam_trajex_
 void viam_trajex_totg_streaming_session_active_duration_sec(const viam_trajex_totg_streaming_session_t* session, double* out) {
     const auto* active = session->sess.active_trajectory();
     *out = active ? active->duration().count() : 0.0;
+}
+
+void viam_trajex_totg_streaming_session_remaining_active_duration_sec(const viam_trajex_totg_streaming_session_t* session, double* out) {
+    *out = session->sess.remaining_active_duration().count();
 }
 
 }  // extern "C"
