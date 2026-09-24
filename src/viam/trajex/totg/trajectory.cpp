@@ -2296,6 +2296,12 @@ trajectory::seconds trajectory::cursor::time() const noexcept {
 }
 
 struct trajectory::sample trajectory::cursor::sample() const {
+    struct sample out;
+    sample(out);
+    return out;
+}
+
+void trajectory::cursor::sample(struct trajectory::sample& into) const {
     if (*this == end()) [[unlikely]] {
         throw std::out_of_range{"Cannot sample cursor at sentinel position"};
     }
@@ -2343,7 +2349,14 @@ struct trajectory::sample trajectory::cursor::sample() const {
     // Kunz & Stilman equation 12
     const auto q_ddot = (q_prime * static_cast<double>(s_ddot)) + q_double_prime * (s_dot_double * s_dot_double);
 
-    return {.time = time_, .configuration = q, .velocity = q_dot, .acceleration = q_ddot};
+    // Assign rather than construct. Where `into` already carries arrays of the right shape --
+    // which it does for every sample after the first of a run -- xtensor writes through them
+    // instead of allocating, and the lazily-built expressions above are evaluated straight
+    // into the caller's storage.
+    into.time = time_;
+    into.configuration = q;
+    into.velocity = q_dot;
+    into.acceleration = q_ddot;
 }
 
 void trajectory::cursor::update_path_cursor_position_(seconds t) {

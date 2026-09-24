@@ -32,8 +32,14 @@ namespace trajectory_details {
 /// A sampler decides the next sample time given cursor state.
 /// Parameterized to work with any cursor and sample types.
 ///
+/// `advance` is the primitive: it positions the cursor at the next sample time and reports
+/// whether there was one. `next` is the convenience built on top, producing the sample as a
+/// value. Ranges use `advance` so they can refill storage they already own, where `next`
+/// necessarily builds a new sample per call.
+///
 template <typename S, typename Cursor, typename Sample>
 concept sampler = requires(S s, Cursor& c) {
+    { s.advance(c) } -> std::same_as<bool>;
     { s.next(c) } -> std::convertible_to<std::optional<Sample>>;
 };
 
@@ -656,6 +662,19 @@ class trajectory::cursor {
     struct trajectory::sample sample() const;
 
     ///
+    /// Samples trajectory at current cursor position into caller-provided storage.
+    ///
+    /// The value-returning overload allocates three arrays per call. This one writes into
+    /// arrays the caller already holds, which is what lets a sampling run of any length cost
+    /// a fixed number of allocations. Arrays already sized to the path's degrees of freedom
+    /// are written in place; differently sized ones are resized first.
+    ///
+    /// @param into Destination sample, overwritten entirely
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    ///
+    void sample(struct trajectory::sample& into) const;
+
+    ///
     /// Seeks cursor to specific time (absolute positioning).
     ///
     /// Sets cursor position to target time. Clamps to [0, infinity).
@@ -823,6 +842,11 @@ class trajectory::sampled<S>::iterator {
     friend class sampled;
     iterator(cursor cursor, S* sampler);
 
+    // Advances the sampler and refills `current_` in place, or disengages it when the
+    // sampler is exhausted. Filling through the engaged optional is what preserves the
+    // sample's storage across steps; assigning a new optional would not.
+    void fill_or_disengage_();
+
     cursor cursor_;
     S* sampler_;
     std::optional<struct trajectory::sample> current_;
@@ -852,9 +876,24 @@ std::default_sentinel_t trajectory::sampled<S>::end() const noexcept {
 
 // Implementation of trajectory::sampled::iterator methods
 
+// `current_` is engaged once here and refilled in place from then on. Assigning a fresh
+// optional per step, as this once did, would allocate a new sample each time and free the
+// previous one -- for a long trajectory that is three allocations per sample for storage the
+// iterator never stopped owning. It is disengaged only at exhaustion.
 template <typename S>
-trajectory::sampled<S>::iterator::iterator(cursor cursor, S* sampler)
-    : cursor_{std::move(cursor)}, sampler_{sampler}, current_{sampler_->next(cursor_)} {}
+trajectory::sampled<S>::iterator::iterator(cursor cursor, S* sampler) : cursor_{std::move(cursor)}, sampler_{sampler} {
+    current_.emplace();
+    fill_or_disengage_();
+}
+
+template <typename S>
+void trajectory::sampled<S>::iterator::fill_or_disengage_() {
+    if (sampler_->advance(cursor_)) {
+        cursor_.sample(*current_);
+    } else {
+        current_.reset();
+    }
+}
 
 template <typename S>
 const struct trajectory::sample& trajectory::sampled<S>::iterator::operator*() const noexcept {
@@ -868,7 +907,7 @@ const struct trajectory::sample* trajectory::sampled<S>::iterator::operator->() 
 
 template <typename S>
 typename trajectory::sampled<S>::iterator& trajectory::sampled<S>::iterator::operator++() {
-    current_ = sampler_->next(cursor_);
+    fill_or_disengage_();
     return *this;
 }
 
