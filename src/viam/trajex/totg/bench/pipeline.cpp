@@ -1,5 +1,5 @@
-// Benchmarks for the core trajex pipeline: waypoint accumulation, the marshalling between
-// stages, path construction, trajectory generation, and sampling.
+// Benchmarks for the core trajex pipeline: waypoint accumulation, the store a session keeps
+// them in, path construction, trajectory generation, and sampling.
 //
 // Driven from canonical JSON replay records so the geometry and the limits are ones a real
 // arm produced. Records are parsed once into a fixture and only the pipeline stages
@@ -74,11 +74,11 @@ constexpr double k_warmup_seconds = 0.1;
 // line up across records.
 constexpr std::int64_t k_prefix_sizes[] = {64, 256, 1024, 4096};
 
-// Marshalling is swept over batch size as well as total waypoints, because it is the only
+// The store is swept over batch size as well as total waypoints, because it is the only
 // stage whose cost depends on how the waypoints arrived. B = 1 is point-by-point, which is
 // common in practice.
-constexpr std::int64_t k_marshal_sizes[] = {1024, 4096};
-constexpr std::int64_t k_marshal_batches[] = {1, 8, 64, 256};
+constexpr std::int64_t k_store_sizes[] = {1024, 4096};
+constexpr std::int64_t k_store_batches[] = {1, 8, 64, 256};
 
 struct record {
     planner_base::config config;
@@ -162,7 +162,7 @@ void bm_accumulate(benchmark::State& state, const std::string& filename) {
 // A batch arrives carrying the previous batch's last waypoint as a seam, which the session
 // strips by passing `from = 1`, so a batch delivering B new waypoints is an accumulator of
 // B + 1 rows.
-void bm_marshal_store(benchmark::State& state, const std::string& filename) {
+void bm_waypoint_store(benchmark::State& state, const std::string& filename) {
     const auto& source = loaded_record(filename);
     const auto total = static_cast<std::size_t>(state.range(0));
     const auto batch_size = static_cast<std::size_t>(state.range(1));
@@ -270,19 +270,19 @@ void register_workloads() {
         register_stage("bm_trajectory_create", bm_trajectory_create, benchmark::kMillisecond);
         register_stage("bm_sample", bm_sample, benchmark::kMillisecond);
 
-        const auto marshal_sizes = sizes_for(k_marshal_sizes, total);
-        const auto register_marshal = [&](const char* stage, auto function) {
+        const auto store_sizes = sizes_for(k_store_sizes, total);
+        const auto register_store = [&](const char* stage, auto function) {
             auto* registered = benchmark::RegisterBenchmark(std::string{stage} + "/" + item.label,
                                                             [filename, function](benchmark::State& state) { function(state, filename); });
-            for (const auto size : marshal_sizes) {
-                for (const auto batch : k_marshal_batches) {
+            for (const auto size : store_sizes) {
+                for (const auto batch : k_store_batches) {
                     registered->Args({size, batch});
                 }
             }
             registered->Unit(benchmark::kMillisecond)->MinWarmUpTime(k_warmup_seconds);
         };
 
-        register_marshal("bm_marshal_store", bm_marshal_store);
+        register_store("bm_waypoint_store", bm_waypoint_store);
     }
 }
 
