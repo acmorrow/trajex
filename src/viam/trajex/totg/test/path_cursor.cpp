@@ -1,6 +1,12 @@
 // Path cursor tests: sequential traversal and seeking
 // Extracted from test.cpp lines 2259-2798
 
+#include <cstddef>
+#include <iterator>
+#include <span>
+#include <stdexcept>
+#include <vector>
+
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 
@@ -868,6 +874,288 @@ BOOST_AUTO_TEST_CASE(cursor_boundary_behavior_with_circular_blends) {
         BOOST_CHECK(view.is<path::segment::linear>());
         BOOST_CHECK_EQUAL(view.start(), boundary);
     }
+}
+
+namespace {
+
+// The filling and value-returning accessors run the same arithmetic over the same inputs,
+// so anything short of bit equality means one of them has been reimplemented independently.
+void check_exactly_equal(const xt::xarray<double>& value, std::span<const double> filled) {
+    BOOST_REQUIRE_EQUAL(value.size(), filled.size());
+
+    for (std::size_t i = 0; i < filled.size(); ++i) {
+        BOOST_CHECK_EQUAL(value(i), filled[i]);
+    }
+}
+
+// Two linear runs joined by a circular blend, so both segment kinds get exercised.
+viam::trajex::totg::path make_blended_path() {
+    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+    return viam::trajex::totg::path::create(waypoints);
+}
+
+viam::trajex::arc_length fraction_of(viam::trajex::arc_length length, double f) {
+    return viam::trajex::arc_length{static_cast<double>(length) * f};
+}
+
+}  // namespace
+
+BOOST_AUTO_TEST_CASE(fill_accessors_match_value_accessors) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    path::cursor c = p.create_cursor();
+
+    std::vector<double> filled(p.dof());
+
+    for (int step = 0; step <= 20; ++step) {
+        c.seek(fraction_of(p.length(), static_cast<double>(step) / 20.0));
+
+        c.configuration(filled);
+        check_exactly_equal(c.configuration(), filled);
+
+        c.tangent(filled);
+        check_exactly_equal(c.tangent(), filled);
+
+        c.curvature(filled);
+        check_exactly_equal(c.curvature(), filled);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fill_accessors_reject_wrong_sized_span) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const path::cursor c = p.create_cursor();
+
+    std::vector<double> too_small(p.dof() - 1);
+    std::vector<double> too_large(p.dof() + 1);
+
+    BOOST_CHECK_THROW(c.configuration(too_small), std::invalid_argument);
+    BOOST_CHECK_THROW(c.tangent(too_small), std::invalid_argument);
+    BOOST_CHECK_THROW(c.curvature(too_small), std::invalid_argument);
+
+    BOOST_CHECK_THROW(c.configuration(too_large), std::invalid_argument);
+    BOOST_CHECK_THROW(c.tangent(too_large), std::invalid_argument);
+    BOOST_CHECK_THROW(c.curvature(too_large), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(fill_accessors_throw_at_sentinel) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    const path p = make_blended_path();
+    path::cursor c = p.create_cursor();
+    c.seek(p.length() + arc_length{1.0});
+
+    BOOST_REQUIRE(c == c.end());
+
+    std::vector<double> filled(p.dof());
+
+    BOOST_CHECK_THROW(c.configuration(filled), std::out_of_range);
+    BOOST_CHECK_THROW(c.tangent(filled), std::out_of_range);
+    BOOST_CHECK_THROW(c.curvature(filled), std::out_of_range);
+}
+
+BOOST_AUTO_TEST_CASE(rich_matches_plain_cursor_at_many_positions) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    path::cursor plain = p.create_cursor();
+    path::cursor::rich r = p.create_cursor().enrich();
+
+    for (int step = 0; step <= 20; ++step) {
+        const auto s = fraction_of(p.length(), static_cast<double>(step) / 20.0);
+
+        plain.seek(s);
+        r.seek(s);
+
+        BOOST_CHECK_EQUAL(r.position(), plain.position());
+
+        const auto& configuration = r.configuration();
+        const auto& tangent = r.tangent();
+        const auto& curvature = r.curvature();
+
+        check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
+        check_exactly_equal(plain.tangent(), {tangent.data(), tangent.size()});
+        check_exactly_equal(plain.curvature(), {curvature.data(), curvature.size()});
+    }
+}
+
+BOOST_AUTO_TEST_CASE(rich_storage_address_stable_across_seek) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    path::cursor::rich r = p.create_cursor().enrich();
+
+    // Invalidation must discard the cached *values* without releasing the storage holding
+    // them. Were the fill ever rewritten as an assignment from a returned array, the
+    // move-assignment would swap buffers and this would fail -- along with the guarantee
+    // that a reference handed to a caller keeps referring to live storage.
+    const double* const configuration_storage = r.configuration().data();
+    const double* const tangent_storage = r.tangent().data();
+    const double* const curvature_storage = r.curvature().data();
+
+    for (int step = 1; step <= 5; ++step) {
+        r.seek(fraction_of(p.length(), static_cast<double>(step) / 5.0));
+
+        BOOST_CHECK_EQUAL(r.configuration().data(), configuration_storage);
+        BOOST_CHECK_EQUAL(r.tangent().data(), tangent_storage);
+        BOOST_CHECK_EQUAL(r.curvature().data(), curvature_storage);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(rich_accessors_lazy_in_any_order) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const auto s = fraction_of(p.length(), 0.4);
+
+    path::cursor plain = p.create_cursor();
+    plain.seek(s);
+
+    // Each component fills on first use, so the order they are first touched after a move
+    // must not matter. Take them in reverse and compare against a plain cursor.
+    path::cursor::rich r = p.create_cursor().enrich();
+    r.seek(s);
+
+    const auto& curvature = r.curvature();
+    check_exactly_equal(plain.curvature(), {curvature.data(), curvature.size()});
+
+    const auto& tangent = r.tangent();
+    check_exactly_equal(plain.tangent(), {tangent.data(), tangent.size()});
+
+    const auto& configuration = r.configuration();
+    check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
+}
+
+BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const auto start = fraction_of(p.length(), 0.25);
+    const auto moved = fraction_of(p.length(), 0.75);
+
+    path::cursor::rich r = p.create_cursor().enrich();
+    r.seek(start);
+
+    const auto& configuration = r.configuration();
+    const std::vector<double> at_start(configuration.begin(), configuration.end());
+
+    // Seeking clears the validity bits but leaves the storage holding the old values, so a
+    // reference taken before the move still reads the old position.
+    r.seek(moved);
+    check_exactly_equal(xt::xarray<double>{configuration}, at_start);
+
+    // Asking again refills the same storage in place, at which point the reference taken
+    // before the move begins reporting the new position. This is the documented hazard; it
+    // is pinned here so that changing it cannot pass silently.
+    const auto& refilled = r.configuration();
+    BOOST_CHECK_EQUAL(&refilled, &configuration);
+
+    path::cursor plain = p.create_cursor();
+    plain.seek(moved);
+    check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
+}
+
+BOOST_AUTO_TEST_CASE(rich_plain_is_independent_copy) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const auto start = fraction_of(p.length(), 0.3);
+
+    path::cursor::rich r = p.create_cursor().enrich();
+    r.seek(start);
+
+    path::cursor extracted = r.plain();
+    BOOST_CHECK_EQUAL(extracted.position(), r.position());
+    BOOST_CHECK_EQUAL(&extracted.path(), &p);
+
+    // Moving the extracted cursor must not drag the rich one along with it.
+    extracted.seek(fraction_of(p.length(), 0.9));
+    BOOST_CHECK_EQUAL(r.position(), start);
+    BOOST_CHECK(extracted.position() != r.position());
+}
+
+BOOST_AUTO_TEST_CASE(rich_enrich_leaves_source_unchanged) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const auto start = fraction_of(p.length(), 0.6);
+
+    path::cursor source = p.create_cursor();
+    source.seek(start);
+
+    path::cursor::rich r = source.enrich();
+    BOOST_CHECK_EQUAL(r.position(), start);
+
+    r.seek(fraction_of(p.length(), 0.1));
+    BOOST_CHECK_EQUAL(source.position(), start);
+}
+
+BOOST_AUTO_TEST_CASE(rich_sentinel_comparison) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    const path p = make_blended_path();
+    path::cursor::rich r = p.create_cursor().enrich();
+
+    BOOST_CHECK(r != r.end());
+    BOOST_CHECK(r != end(r));
+
+    r.seek(p.length() + arc_length{1.0});
+
+    BOOST_CHECK(r == r.end());
+    BOOST_CHECK(r == end(r));
+    BOOST_CHECK(std::default_sentinel == r);
+}
+
+BOOST_AUTO_TEST_CASE(rich_failed_query_is_not_cached) {
+    using namespace viam::trajex::totg;
+    using viam::trajex::arc_length;
+
+    const path p = make_blended_path();
+    const auto reachable = fraction_of(p.length(), 0.5);
+
+    path::cursor::rich r = p.create_cursor().enrich();
+    r.seek(p.length() + arc_length{1.0});
+
+    BOOST_CHECK_THROW(static_cast<void>(r.configuration()), std::out_of_range);
+
+    // A throwing fill must leave the validity bit clear. Were it set, this query would hand
+    // back whatever the storage happened to contain instead of computing the position.
+    r.seek(reachable);
+
+    path::cursor plain = p.create_cursor();
+    plain.seek(reachable);
+
+    const auto& configuration = r.configuration();
+    check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
+}
+
+BOOST_AUTO_TEST_CASE(rich_copy_has_independent_storage) {
+    using namespace viam::trajex::totg;
+
+    const path p = make_blended_path();
+    const auto start = fraction_of(p.length(), 0.45);
+
+    path::cursor::rich original = p.create_cursor().enrich();
+    original.seek(start);
+    const auto& original_configuration = original.configuration();
+
+    path::cursor::rich copy = original;
+    const auto& copy_configuration = copy.configuration();
+
+    BOOST_CHECK(copy_configuration.data() != original_configuration.data());
+    check_exactly_equal(xt::xarray<double>{copy_configuration}, {original_configuration.data(), original_configuration.size()});
+
+    // Moving the copy must not disturb the original's cached values.
+    copy.seek(fraction_of(p.length(), 0.05));
+    static_cast<void>(copy.configuration());
+
+    path::cursor plain = p.create_cursor();
+    plain.seek(start);
+    check_exactly_equal(plain.configuration(), {original_configuration.data(), original_configuration.size()});
 }
 
 BOOST_AUTO_TEST_SUITE_END()
