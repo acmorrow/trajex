@@ -335,6 +335,72 @@ void coalesce_lazy(benchmark::State& state) {
     }
 }
 
+// The row container matching a given 2-D container's rank discipline. This is what
+// `xt::eval` would hand back for an expression over rows of that container, spelled out so
+// the benchmark states which type it is testing rather than deriving it from a trait.
+template <typename Array2D>
+struct row_of;
+
+template <>
+struct row_of<xt::xarray<double>> {
+    using type = xt::xarray<double>;
+};
+
+template <>
+struct row_of<xt::xtensor<double, 2>> {
+    using type = xt::xtensor<double, 1>;
+};
+
+template <typename Array2D>
+using row_of_t = typename row_of<Array2D>::type;
+
+// Identical to coalesce_lazy except that the one expression used more than once is evaluated
+// into a container first. In the real code `next - start` is walked five times -- once for the
+// identical-endpoints test, twice inside the squared length, once for the dot product and once
+// for the projection -- and every walk goes through the view steppers again.
+//
+// This trades four of those walks for one allocation per triple. Note when reading the result
+// that the allocation sits at full weight here, where in `path::create` the same allocation is
+// diluted across everything else that stage does per waypoint.
+template <typename Array2D>
+void coalesce_materialized(benchmark::State& state) {
+    const auto rows = make_2d<Array2D>();
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        std::size_t coalesced = 0;
+
+        for (std::size_t i = 0; i + 2 < k_rows; ++i) {
+            const auto start = xt::view(rows, i, xt::all());
+            const auto locus = xt::view(rows, i + 1, xt::all());
+            const auto next = xt::view(rows, i + 2, xt::all());
+
+            const row_of_t<Array2D> start_to_next = next - start;
+            if (xt::all(xt::equal(start_to_next, 0.0))) {
+                continue;
+            }
+
+            const auto start_to_locus = locus - start;
+            const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
+            const double start_to_locus_dot_direction = xt::sum(start_to_locus * start_to_next)();
+
+            if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
+                continue;
+            }
+
+            const double t = start_to_locus_dot_direction / start_to_next_sq;
+            const auto projected_point = start + (t * start_to_next);
+            const auto deviation_vector = locus - projected_point;
+
+            if (xt::norm_l2(deviation_vector)() <= k_coalesce_radius) {
+                ++coalesced;
+            }
+        }
+
+        benchmark::DoNotOptimize(coalesced);
+    }
+}
+
 template <typename Array2D>
 void coalesce_immediate(benchmark::State& state) {
     const auto rows = make_2d<Array2D>();
@@ -434,8 +500,10 @@ void coalesce_scalar_loop(benchmark::State& state) {
 }
 
 BENCHMARK(coalesce_lazy<xt::xarray<double>>)->Name("bm_coalesce/xarray_lazy");
+BENCHMARK(coalesce_materialized<xt::xarray<double>>)->Name("bm_coalesce/xarray_materialized");
 BENCHMARK(coalesce_immediate<xt::xarray<double>>)->Name("bm_coalesce/xarray_immediate");
 BENCHMARK(coalesce_lazy<xt::xtensor<double, 2>>)->Name("bm_coalesce/xtensor2_lazy");
+BENCHMARK(coalesce_materialized<xt::xtensor<double, 2>>)->Name("bm_coalesce/xtensor2_materialized");
 BENCHMARK(coalesce_immediate<xt::xtensor<double, 2>>)->Name("bm_coalesce/xtensor2_immediate");
 BENCHMARK(coalesce_scalar_loop)->Name("bm_coalesce/scalar_loop");
 
