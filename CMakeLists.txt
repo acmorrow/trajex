@@ -512,7 +512,9 @@ if (VIAM_TRAJEX_BUILD_BENCHMARKS)
 
   target_sources(viam-trajex-totg-bench
     PRIVATE
+      src/viam/trajex/totg/bench/main.cpp
       src/viam/trajex/totg/bench/pipeline.cpp
+      src/viam/trajex/totg/bench/xtensor_idioms.cpp
   )
 
   target_link_libraries(viam-trajex-totg-bench

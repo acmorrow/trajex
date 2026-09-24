@@ -28,6 +28,7 @@
 #include <xtensor/xview.hpp>
 #endif
 
+#include <viam/trajex/totg/bench/benchmarks.hpp>
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/streaming/private/waypoint_store.hpp>
 #include <viam/trajex/totg/tools/planner.hpp>
@@ -36,10 +37,6 @@
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/hertz.hpp>
-
-#if defined(__APPLE__)
-#include <pthread/qos.h>
-#endif
 
 namespace {
 
@@ -288,21 +285,10 @@ void register_workloads() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-#if defined(__APPLE__)
-    // macOS offers no hard CPU affinity, but a user-interactive QoS class keeps this thread
-    // on the performance cores. Without it, results wander as the scheduler moves work
-    // between P and E cores.
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-#endif
+namespace viam::trajex::totg::bench {
 
+void register_pipeline_benchmarks() {
     register_workloads();
-
-    benchmark::Initialize(&argc, argv);
-    if (benchmark::ReportUnrecognizedArguments(argc, argv)) {
-        return 1;
-    }
-    benchmark::RunSpecifiedBenchmarks();
-    benchmark::Shutdown();
-    return 0;
 }
+
+}  // namespace viam::trajex::totg::bench
