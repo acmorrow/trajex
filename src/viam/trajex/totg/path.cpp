@@ -9,12 +9,6 @@
 #include <stdexcept>
 #include <utility>
 
-#if __has_include(<xtensor/containers/xadapt.hpp>)
-#include <xtensor/containers/xadapt.hpp>
-#else
-#include <xtensor/xadapt.hpp>
-#endif
-
 #if __has_include(<xtensor/reducers/xnorm.hpp>)
 #include <xtensor/reducers/xnorm.hpp>
 #else
@@ -137,14 +131,6 @@ arc_length path::segment::view::length() const noexcept {
 
 namespace {
 
-// Wraps a caller's span as a one-dimensional adaptor so an expression can be evaluated
-// straight into it. The adaptor owns nothing, so assigning through it writes the caller's
-// memory in place; materializing into an xarray first and copying would reintroduce the
-// allocation these overloads exist to remove.
-auto adapt_out(std::span<double> out) {
-    return xt::adapt(out.data(), out.size(), xt::no_ownership(), std::array<std::size_t, 1>{out.size()});
-}
-
 void require_dof(std::span<const double> out, std::size_t dof) {
     if (out.size() != dof) [[unlikely]] {
         throw std::invalid_argument{"Output span size does not match path degrees of freedom"};
@@ -183,15 +169,22 @@ void path::segment::view::configuration(arc_length s, std::span<double> out) con
                 require_dof(out, seg_data.start.shape(0));
 
                 // Linear interpolation: config = start + local_s * unit_direction
-                auto dest = adapt_out(out);
-                dest = seg_data.start + (static_cast<double>(local_s) * seg_data.unit_direction);
+                const double distance = static_cast<double>(local_s);
+
+                for (std::size_t i = 0; i < out.size(); ++i) {
+                    out[i] = seg_data.start(i) + (distance * seg_data.unit_direction(i));
+                }
             } else if constexpr (std::is_same_v<T, segment::circular>) {
                 require_dof(out, seg_data.center.shape(0));
 
                 // Circular arc configuration - Kunz & Stilman equation 7:
                 const double angle = static_cast<double>(local_s) / seg_data.radius;
-                auto dest = adapt_out(out);
-                dest = seg_data.center + (seg_data.radius * (seg_data.x * std::cos(angle) + seg_data.y * std::sin(angle)));
+                const double cos_angle = std::cos(angle);
+                const double sin_angle = std::sin(angle);
+
+                for (std::size_t i = 0; i < out.size(); ++i) {
+                    out[i] = seg_data.center(i) + (seg_data.radius * ((seg_data.x(i) * cos_angle) + (seg_data.y(i) * sin_angle)));
+                }
             }
         },
         seg_.get().data_);
@@ -213,15 +206,20 @@ void path::segment::view::tangent(arc_length s, std::span<double> out) const {
                 require_dof(out, seg_data.start.shape(0));
 
                 // Linear segment: constant unit tangent
-                auto dest = adapt_out(out);
-                dest = seg_data.unit_direction;
+                for (std::size_t i = 0; i < out.size(); ++i) {
+                    out[i] = seg_data.unit_direction(i);
+                }
             } else if constexpr (std::is_same_v<T, segment::circular>) {
                 require_dof(out, seg_data.center.shape(0));
 
                 // Circular arc unit tangent - Kunz & Stilman equation 8:
                 const double angle = static_cast<double>(local_s) / seg_data.radius;
-                auto dest = adapt_out(out);
-                dest = (-seg_data.x * std::sin(angle)) + (seg_data.y * std::cos(angle));
+                const double cos_angle = std::cos(angle);
+                const double sin_angle = std::sin(angle);
+
+                for (std::size_t i = 0; i < out.size(); ++i) {
+                    out[i] = (-seg_data.x(i) * sin_angle) + (seg_data.y(i) * cos_angle);
+                }
             }
         },
         seg_.get().data_);
@@ -249,8 +247,13 @@ void path::segment::view::curvature(arc_length s, std::span<double> out) const {
 
                 // Circular arc curvature vector - Kunz & Stilman equation 9:
                 const double angle = static_cast<double>(local_s) / seg_data.radius;
-                auto dest = adapt_out(out);
-                dest = (-(1.0 / seg_data.radius)) * (seg_data.x * std::cos(angle) + seg_data.y * std::sin(angle));
+                const double cos_angle = std::cos(angle);
+                const double sin_angle = std::sin(angle);
+                const double negative_inverse_radius = -(1.0 / seg_data.radius);
+
+                for (std::size_t i = 0; i < out.size(); ++i) {
+                    out[i] = negative_inverse_radius * ((seg_data.x(i) * cos_angle) + (seg_data.y(i) * sin_angle));
+                }
             }
         },
         seg_.get().data_);
