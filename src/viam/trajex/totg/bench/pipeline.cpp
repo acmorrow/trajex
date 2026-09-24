@@ -30,6 +30,7 @@
 
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/streaming/private/session_utils.hpp>
+#include <viam/trajex/totg/streaming/private/waypoint_store.hpp>
 #include <viam/trajex/totg/tools/planner.hpp>
 #include <viam/trajex/totg/tools/replay.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
@@ -195,6 +196,41 @@ void bm_marshal(benchmark::State& state, const std::string& filename) {
     }
 }
 
+// The same workload as bm_marshal, driven through `waypoint_store` rather than through the
+// helpers directly.
+//
+// While the store is implemented in terms of those helpers the two report the same cost,
+// and that agreement is the check that the abstraction is free. They diverge once the
+// store's storage strategy changes, at which point this benchmark measures the new
+// strategy and bm_marshal measures what is left of the old one.
+void bm_marshal_store(benchmark::State& state, const std::string& filename) {
+    const auto& source = loaded_record(filename);
+    const auto total = static_cast<std::size_t>(state.range(0));
+    const auto batch_size = static_cast<std::size_t>(state.range(1));
+    const auto waypoints = prefix_of(source.waypoints, total);
+
+    std::vector<xt::xarray<double>> storage;
+    for (std::size_t first = 0; first + 1 < total; first += batch_size) {
+        storage.push_back(slice_of(waypoints, first, std::min(total, first + batch_size + 1)));
+    }
+
+    std::vector<waypoint_accumulator> batches;
+    batches.reserve(storage.size());
+    for (const auto& owned : storage) {
+        batches.emplace_back(owned);
+    }
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        viam::trajex::totg::streaming::waypoint_store store;
+        store.append(batches.front(), 0);
+        for (std::size_t i = 1; i != batches.size(); ++i) {
+            store.append(batches[i], 1);
+        }
+        benchmark::DoNotOptimize(store.size());
+    }
+}
+
 void bm_path_create(benchmark::State& state, const std::string& filename) {
     const auto& source = loaded_record(filename);
     const auto waypoints = prefix_of(source.waypoints, static_cast<std::size_t>(state.range(0)));
@@ -275,14 +311,20 @@ void register_workloads() {
         register_stage("bm_trajectory_create", bm_trajectory_create, benchmark::kMillisecond);
         register_stage("bm_sample", bm_sample, benchmark::kMillisecond);
 
-        auto* marshal = benchmark::RegisterBenchmark(std::string{"bm_marshal/"} + item.label,
-                                                     [filename](benchmark::State& state) { bm_marshal(state, filename); });
-        for (const auto size : sizes_for(k_marshal_sizes, total)) {
-            for (const auto batch : k_marshal_batches) {
-                marshal->Args({size, batch});
+        const auto marshal_sizes = sizes_for(k_marshal_sizes, total);
+        const auto register_marshal = [&](const char* stage, auto function) {
+            auto* registered = benchmark::RegisterBenchmark(std::string{stage} + "/" + item.label,
+                                                            [filename, function](benchmark::State& state) { function(state, filename); });
+            for (const auto size : marshal_sizes) {
+                for (const auto batch : k_marshal_batches) {
+                    registered->Args({size, batch});
+                }
             }
-        }
-        marshal->Unit(benchmark::kMillisecond)->MinWarmUpTime(k_warmup_seconds);
+            registered->Unit(benchmark::kMillisecond)->MinWarmUpTime(k_warmup_seconds);
+        };
+
+        register_marshal("bm_marshal", bm_marshal);
+        register_marshal("bm_marshal_store", bm_marshal_store);
     }
 }
 
