@@ -34,7 +34,6 @@
 #include <xtensor/xview.hpp>
 #endif
 
-#include <viam/trajex/totg/streaming/private/session_utils.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 
 namespace viam::trajex::totg::streaming {
@@ -169,7 +168,14 @@ class waypoint_store {
             throw std::out_of_range("waypoint_store::last: store is empty");
         }
         const auto index = size_ - 1;
-        return detail::row_to_xarray(chunk_at_(index / k_chunk_rows), index % k_chunk_rows);
+        const auto& chunk = chunk_at_(index / k_chunk_rows);
+        const auto offset = index % k_chunk_rows;
+
+        xt::xarray<double> result = xt::xarray<double>::from_shape(std::vector<std::size_t>{dof_});
+        for (std::size_t joint = 0; joint != dof_; ++joint) {
+            result(joint) = chunk(offset, joint);
+        }
+        return result;
     }
 
    private:

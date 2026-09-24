@@ -29,7 +29,6 @@
 #endif
 
 #include <viam/trajex/totg/path.hpp>
-#include <viam/trajex/totg/streaming/private/session_utils.hpp>
 #include <viam/trajex/totg/streaming/private/waypoint_store.hpp>
 #include <viam/trajex/totg/tools/planner.hpp>
 #include <viam/trajex/totg/tools/replay.hpp>
@@ -43,8 +42,6 @@
 #endif
 
 namespace {
-
-namespace detail = viam::trajex::totg::streaming::detail;
 
 using viam::trajex::totg::parse_replay_record;
 using viam::trajex::totg::path;
@@ -163,46 +160,8 @@ void bm_accumulate(benchmark::State& state, const std::string& filename) {
 // Models a session accumulating `state.range(0)` waypoints in batches of `state.range(1)`.
 //
 // A batch arrives carrying the previous batch's last waypoint as a seam, which the session
-// strips by passing `batch_from = 1`, so a batch delivering B new waypoints is an
-// accumulator of B + 1 rows. The base array is rebuilt on every batch, which is where the
-// quadratic behaviour lives: total rows copied is on the order of N^2 / 2B.
-void bm_marshal(benchmark::State& state, const std::string& filename) {
-    const auto& source = loaded_record(filename);
-    const auto total = static_cast<std::size_t>(state.range(0));
-    const auto batch_size = static_cast<std::size_t>(state.range(1));
-    const auto waypoints = prefix_of(source.waypoints, total);
-
-    // Accumulators hold non-owning row-views, so the arrays they view must outlive them.
-    // Every array is built before any accumulator is, so that growing `storage` cannot move
-    // a buffer out from under a view.
-    std::vector<xt::xarray<double>> storage;
-    for (std::size_t first = 0; first + 1 < total; first += batch_size) {
-        storage.push_back(slice_of(waypoints, first, std::min(total, first + batch_size + 1)));
-    }
-
-    std::vector<waypoint_accumulator> batches;
-    batches.reserve(storage.size());
-    for (const auto& owned : storage) {
-        batches.emplace_back(owned);
-    }
-
-    for (auto unused : state) {
-        benchmark::DoNotOptimize(unused);
-        auto base = detail::accumulator_to_xarray(batches.front());
-        for (std::size_t i = 1; i != batches.size(); ++i) {
-            base = detail::concat_active_with_batch_tail(base, batches[i], 1);
-        }
-        benchmark::DoNotOptimize(base);
-    }
-}
-
-// The same workload as bm_marshal, driven through `waypoint_store` rather than through the
-// helpers directly.
-//
-// While the store is implemented in terms of those helpers the two report the same cost,
-// and that agreement is the check that the abstraction is free. They diverge once the
-// store's storage strategy changes, at which point this benchmark measures the new
-// strategy and bm_marshal measures what is left of the old one.
+// strips by passing `from = 1`, so a batch delivering B new waypoints is an accumulator of
+// B + 1 rows.
 void bm_marshal_store(benchmark::State& state, const std::string& filename) {
     const auto& source = loaded_record(filename);
     const auto total = static_cast<std::size_t>(state.range(0));
@@ -323,7 +282,6 @@ void register_workloads() {
             registered->Unit(benchmark::kMillisecond)->MinWarmUpTime(k_warmup_seconds);
         };
 
-        register_marshal("bm_marshal", bm_marshal);
         register_marshal("bm_marshal_store", bm_marshal_store);
     }
 }
