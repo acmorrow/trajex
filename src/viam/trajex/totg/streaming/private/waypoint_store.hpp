@@ -7,12 +7,21 @@
 // may reuse or destroy as soon as `extend` returns. The store keeps its own copy and
 // presents it back as an accumulator, which is the form `path::create` consumes.
 //
+// Waypoints are kept in fixed-size chunks held in a list, which is what makes appending
+// cheap. A session appends to the same set on every extend, so storage that had to be
+// reallocated and recopied to grow would cost O(N) per extend and O(N^2) across a session.
+// Here a chunk is allocated once and filled in place, a new one is linked on when it fills,
+// and neither the list nodes nor the arrays inside them ever move -- which they must not,
+// because the accumulator below holds views referencing those arrays by address.
+//
 // This is a private header: header-only, no library backing, and not installed. It exists
 // so the session and the pipeline benchmarks share one definition of what accumulating
 // waypoints across a session costs, which lets a change to the storage strategy be
 // measured rather than guessed at.
 
 #include <cstddef>
+#include <iterator>
+#include <list>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -35,30 +44,30 @@ class waypoint_store {
     waypoint_store() = default;
 
     // Neither copyable nor movable, because the accumulator returned by `waypoints()` holds
-    // views referencing `storage_` by address. Moving the store would move `storage_` and
-    // leave those views dangling while still appearing valid.
+    // views referencing the chunk arrays by address. Moving the store would move those
+    // arrays and leave the views dangling while still appearing valid.
     waypoint_store(const waypoint_store&) = delete;
     waypoint_store& operator=(const waypoint_store&) = delete;
     waypoint_store(waypoint_store&&) = delete;
     waypoint_store& operator=(waypoint_store&&) = delete;
 
     std::size_t size() const noexcept {
-        return empty() ? 0 : storage_.shape(0);
+        return size_;
     }
 
     std::size_t dof() const noexcept {
-        return empty() ? 0 : storage_.shape(1);
+        return dof_;
     }
 
     bool empty() const noexcept {
-        return storage_.dimension() != 2 || storage_.shape(0) == 0;
+        return size_ == 0;
     }
 
     // Appends rows `[from, batch.size())`, copying them out of the batch.
     //
-    // A batch arrives carrying the previous batch's final waypoint so the session can
-    // verify the seam, so callers pass `from = 1` for every batch after the first to avoid
-    // storing that waypoint twice.
+    // A batch arrives carrying the previous batch's final waypoint so the session can verify
+    // the seam, so callers pass `from = 1` for every batch after the first to avoid storing
+    // that waypoint twice.
     void append(const waypoint_accumulator& batch, std::size_t from) {
         if (from > batch.size()) {
             throw std::out_of_range("waypoint_store::append: `from` exceeds batch size");
@@ -66,12 +75,32 @@ class waypoint_store {
         if (from == batch.size()) {
             return;
         }
-        if (!empty() && batch.dof() != dof()) {
+        if (dof_ != 0 && batch.dof() != dof_) {
             throw std::invalid_argument("waypoint_store::append: DOF mismatch");
         }
+        dof_ = batch.dof();
 
-        storage_ = empty() ? detail::accumulator_tail_to_xarray(batch, from) : detail::concat_active_with_batch_tail(storage_, batch, from);
-        invalidate_();
+        auto chunk = chunk_for_write_(size_ / k_chunk_rows);
+        auto offset = size_ % k_chunk_rows;
+
+        for (std::size_t i = from; i != batch.size(); ++i) {
+            if (offset == k_chunk_rows) {
+                ++chunk;
+                offset = 0;
+                if (chunk == chunks_.end()) {
+                    chunk = allocate_chunk_();
+                }
+            }
+
+            const auto& row = batch.at(i);
+            for (std::size_t joint = 0; joint != dof_; ++joint) {
+                (*chunk)(offset, joint) = row(joint);
+            }
+            extend_accumulator_(*chunk, offset);
+
+            ++offset;
+            ++size_;
+        }
     }
 
     // Shrinks the store to its first `count` rows.
@@ -79,40 +108,57 @@ class waypoint_store {
     // The session builds a candidate trajectory before it knows whether that candidate can
     // be pivoted onto, so an append is provisional. Recording `size()` beforehand and
     // truncating back to it abandons the candidate without disturbing what came before.
+    //
+    // Chunks left with nothing in them are kept rather than released, because appending and
+    // truncating is the session's ordinary rhythm and freeing a chunk the moment it empties
+    // would reallocate it on the next batch.
     void truncate(std::size_t count) {
-        if (count > size()) {
+        if (count > size_) {
             throw std::out_of_range("waypoint_store::truncate: `count` exceeds stored size");
         }
-        if (count == size()) {
-            return;
-        }
 
-        storage_ = xt::xarray<double>{xt::view(storage_, xt::range(std::size_t{0}, count), xt::all())};
-        invalidate_();
+        while (size_ != count) {
+            accumulator_->pop_back();
+            --size_;
+        }
+        if (size_ == 0) {
+            accumulator_.reset();
+        }
     }
 
-    // Discards every row but the last, which remains as the seam that following batches
-    // are checked and joined against.
+    // Discards every row but the last, which remains as the seam that following batches are
+    // checked and joined against.
     //
     // A rebase abandons the trajectory the session has finished emitting and starts a new
     // one from where that trajectory ended, so nothing before its final waypoint can
     // influence what comes next.
     void reset_to_last() {
-        if (empty()) {
+        if (size_ <= 1) {
             return;
         }
-        storage_ = detail::row_to_xarray(storage_, size() - 1);
-        storage_.reshape({std::size_t{1}, storage_.size()});
-        invalidate_();
+
+        // Copied out before anything is overwritten, since the surviving waypoint is about
+        // to be written over row zero and may currently live there.
+        const auto surviving = last();
+
+        accumulator_.reset();
+        size_ = 0;
+
+        auto& first = chunks_.front();
+        for (std::size_t joint = 0; joint != dof_; ++joint) {
+            first(0, joint) = surviving(joint);
+        }
+        size_ = 1;
+        extend_accumulator_(first, 0);
     }
 
     // The stored waypoints in the form `path::create` accepts.
     //
-    // The returned reference is invalidated by any subsequent mutation of the store, since
-    // the accumulator's views reference the storage that mutation replaces.
+    // The returned reference is invalidated by any subsequent mutation of the store, which
+    // may append to or pop from the accumulator it refers to.
     const waypoint_accumulator& waypoints() const {
         if (!accumulator_) {
-            accumulator_.emplace(storage_);
+            throw std::out_of_range("waypoint_store::waypoints: store is empty");
         }
         return *accumulator_;
     }
@@ -122,22 +168,52 @@ class waypoint_store {
         if (empty()) {
             throw std::out_of_range("waypoint_store::last: store is empty");
         }
-        return detail::row_to_xarray(storage_, size() - 1);
+        const auto index = size_ - 1;
+        return detail::row_to_xarray(chunk_at_(index / k_chunk_rows), index % k_chunk_rows);
     }
 
    private:
-    // Dropped rather than rebuilt, because most mutations are followed by another mutation
-    // rather than by a read, and rebuilding costs a view per stored waypoint.
-    void invalidate_() {
-        accumulator_.reset();
+    // Rows per chunk. At six degrees of freedom a chunk is roughly 48 KiB, so a session
+    // holding tens of thousands of waypoints costs a few dozen allocations, and a short
+    // move wastes at most one chunk's worth of unused rows.
+    static constexpr std::size_t k_chunk_rows = 1024;
+
+    using chunk_list = std::list<xt::xarray<double>>;
+
+    // Every chunk but the one currently being filled is exactly full, so a row's position
+    // follows from its index alone and chunks need carry no fill count of their own.
+    chunk_list::iterator allocate_chunk_() {
+        chunks_.emplace_back(xt::xarray<double>::from_shape(std::vector<std::size_t>{k_chunk_rows, dof_}));
+        return std::prev(chunks_.end());
     }
 
-    xt::xarray<double> storage_;
+    chunk_list::iterator chunk_for_write_(std::size_t index) {
+        while (chunks_.size() <= index) {
+            allocate_chunk_();
+        }
+        return std::next(chunks_.begin(), static_cast<chunk_list::difference_type>(index));
+    }
 
-    // Built on first read after a mutation. Mutable so that `waypoints()` can stay const,
-    // which is what its callers want; there is no thread-safety consideration here because
-    // a session is driven from a single thread.
-    mutable std::optional<waypoint_accumulator> accumulator_;
+    const xt::xarray<double>& chunk_at_(std::size_t index) const {
+        return *std::next(chunks_.begin(), static_cast<chunk_list::difference_type>(index));
+    }
+
+    // Grown one waypoint at a time as rows are written, rather than rebuilt when read,
+    // because rebuilding costs a view per stored waypoint and the session reads it on every
+    // extend. The views stay valid because chunk arrays are never reallocated or moved.
+    void extend_accumulator_(const xt::xarray<double>& chunk, std::size_t offset) {
+        auto row = xt::view(chunk, offset, xt::all());
+        if (accumulator_) {
+            accumulator_->add_waypoint(row);
+        } else {
+            accumulator_.emplace(row);
+        }
+    }
+
+    chunk_list chunks_;
+    std::size_t size_ = 0;
+    std::size_t dof_ = 0;
+    std::optional<waypoint_accumulator> accumulator_;
 };
 
 }  // namespace viam::trajex::totg::streaming
