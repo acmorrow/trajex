@@ -15,113 +15,21 @@
 #include <xtensor/xview.hpp>
 #endif
 
+#include <viam/trajex/totg/streaming/private/session_utils.hpp>
+
 namespace viam::trajex::totg::streaming {
 
 namespace {
 
-// These helpers materialize accumulator row-views and 2D-xarray slices into owned xarrays.
-// The session needs stable storage independent of caller-provided accumulators because
-// waypoint_accumulator holds row-views into source arrays it does not own.
-
-xt::xarray<double> view_to_xarray(const waypoint_accumulator::value_type& row) {
-    const std::size_t dof = row.shape(0);
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
-    for (std::size_t j = 0; j < dof; ++j) {
-        result(j) = row(j);
-    }
-    return result;
-}
-
-xt::xarray<double> row_to_xarray(const xt::xarray<double>& arr, std::size_t row) {
-    const std::size_t dof = arr.shape(1);
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
-    for (std::size_t j = 0; j < dof; ++j) {
-        result(j) = arr(row, j);
-    }
-    return result;
-}
-
-bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xt::xarray<double>& b) {
-    if (a.shape(0) != b.shape(0)) {
-        return false;
-    }
-    for (std::size_t i = 0; i < b.shape(0); ++i) {
-        if (a(i) != b(i)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-xt::xarray<double> accumulator_to_xarray(const waypoint_accumulator& batch) {
-    const std::size_t count = batch.size();
-    const std::size_t dof = batch.dof();
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{count, dof});
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto& row = batch.at(i);
-        for (std::size_t j = 0; j < dof; ++j) {
-            result(i, j) = row(j);
-        }
-    }
-    return result;
-}
-
-// Caller must ensure batch.size() > from.
-xt::xarray<double> accumulator_tail_to_xarray(const waypoint_accumulator& batch, std::size_t from) {
-    const std::size_t count = batch.size() - from;
-    const std::size_t dof = batch.dof();
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{count, dof});
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto& row = batch.at(from + i);
-        for (std::size_t j = 0; j < dof; ++j) {
-            result(i, j) = row(j);
-        }
-    }
-    return result;
-}
-
-xt::xarray<double> concat_active_with_batch_tail(const xt::xarray<double>& base,
-                                                 const waypoint_accumulator& batch,
-                                                 std::size_t batch_from) {
-    const std::size_t n_base = base.shape(0);
-    const std::size_t n_add = batch.size() - batch_from;
-    const std::size_t dof = base.shape(1);
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{n_base + n_add, dof});
-    for (std::size_t i = 0; i < n_base; ++i) {
-        for (std::size_t j = 0; j < dof; ++j) {
-            result(i, j) = base(i, j);
-        }
-    }
-    for (std::size_t i = 0; i < n_add; ++i) {
-        const auto& row = batch.at(batch_from + i);
-        for (std::size_t j = 0; j < dof; ++j) {
-            result(n_base + i, j) = row(j);
-        }
-    }
-    return result;
-}
-
-xt::xarray<double> stack_anchor_and_staged(const xt::xarray<double>& anchor, const std::vector<xt::xarray<double>>& staged) {
-    const std::size_t dof = anchor.shape(0);
-    std::size_t total_rows = 1;
-    for (const auto& s : staged) {
-        total_rows += s.shape(0);
-    }
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{total_rows, dof});
-    for (std::size_t j = 0; j < dof; ++j) {
-        result(0, j) = anchor(j);
-    }
-    std::size_t row = 1;
-    for (const auto& s : staged) {
-        for (std::size_t i = 0; i < s.shape(0); ++i) {
-            for (std::size_t j = 0; j < dof; ++j) {
-                result(row, j) = s(i, j);
-            }
-            ++row;
-        }
-    }
-    return result;
-}
+// The materialization helpers live in the private header so the pipeline benchmarks can
+// measure them without duplicating them.
+using detail::accumulator_tail_to_xarray;
+using detail::accumulator_to_xarray;
+using detail::concat_active_with_batch_tail;
+using detail::row_to_xarray;
+using detail::rows_bit_exact;
+using detail::stack_anchor_and_staged;
+using detail::view_to_xarray;
 
 // Returns the local time of the first divergence between `active`'s integration points
 // and `candidate`'s integration points, walking them in lockstep. If `active`'s entire
