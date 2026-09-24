@@ -621,7 +621,7 @@ class trajectory::integration_event_observer : public trajectory::integration_ob
 ///
 /// Maintains position and dual hint state for O(1) amortized sequential access:
 /// - Time hint: Iterator into samples_ vector for O(1) time lookups
-/// - Path hint: Embedded path::cursor for O(1) path geometry queries
+/// - Path hint: Embedded path::cursor::rich for O(1) path geometry queries, reusing its storage
 ///
 /// Sequential sampling (the common case) is O(1) amortized because both hints
 /// follow along as the cursor advances through time.
@@ -722,7 +722,11 @@ class trajectory::cursor {
     // Path cursor for O(1) amortized path geometry queries
     // Positioned at interpolated arc length corresponding to current time_
     // Invariant: After seek(), path_cursor_ is at the s corresponding to time_
-    path::cursor path_cursor_;
+    //
+    // Rich rather than plain: a sampling run queries all three geometry components at every
+    // sample, and a plain cursor allocates a fresh array for each. This one allocates once
+    // when the cursor is built and refills that storage in place as it advances.
+    path::cursor::rich path_cursor_;
 };
 
 ///

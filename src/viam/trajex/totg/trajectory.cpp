@@ -2281,7 +2281,7 @@ trajectory::cursor trajectory::create_cursor() const {
 }
 
 trajectory::cursor::cursor(const class trajectory* traj)
-    : traj_{traj}, time_hint_{traj->integration_points_.begin()}, path_cursor_{traj->path_.create_cursor()} {
+    : traj_{traj}, time_hint_{traj->integration_points_.begin()}, path_cursor_{traj->path_.create_cursor().enrich()} {
     // Constructor initializes cursor at trajectory start (t=0, s=0)
     // time_hint_ points to first integration point (if any)
     // path_cursor_ is at arc length 0 by default
@@ -2316,9 +2316,15 @@ struct trajectory::sample trajectory::cursor::sample() const {
 
     // Query the path geometry at the current arc length position. The path_cursor_ has
     // already been positioned by update_path_cursor_position_ in seek().
-    const auto q = path_cursor_.configuration();
-    const auto q_prime = path_cursor_.tangent();
-    const auto q_double_prime = path_cursor_.curvature();
+    //
+    // These bind by reference to storage the cursor owns and refills on its next move, so
+    // they are good only until this cursor seeks again. Nothing below seeks, and the
+    // expressions built from them are evaluated into the returned sample before this function
+    // returns, so the values escape by copy. Introducing a seek between here and the return
+    // would silently change what these refer to.
+    const auto& q = path_cursor_.configuration();
+    const auto& q_prime = path_cursor_.tangent();
+    const auto& q_double_prime = path_cursor_.curvature();
 
     // Convert from path space (s, s_dot, s_ddot) to joint space (q, q_dot, q_ddot) using the chain rule.
     //
