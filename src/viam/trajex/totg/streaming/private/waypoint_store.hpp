@@ -91,6 +91,10 @@ class waypoint_store {
                 }
             }
 
+            // Copied element by element rather than as `xt::view(...) = batch.at(i)`, which
+            // reads better but measured 27 to 40 percent slower across every benchmark cell.
+            // At six degrees of freedom, building two views and evaluating an xtensor
+            // assignment through them costs more than the six stores it performs.
             const auto& row = batch.at(i);
             for (std::size_t joint = 0; joint != dof_; ++joint) {
                 (*chunk)(offset, joint) = row(joint);
@@ -144,9 +148,7 @@ class waypoint_store {
         size_ = 0;
 
         auto& first = chunks_.front();
-        for (std::size_t joint = 0; joint != dof_; ++joint) {
-            first(0, joint) = surviving(joint);
-        }
+        xt::view(first, 0, xt::all()) = surviving;
         size_ = 1;
         extend_accumulator_(first, 0);
     }
@@ -168,14 +170,7 @@ class waypoint_store {
             throw std::out_of_range("waypoint_store::last: store is empty");
         }
         const auto index = size_ - 1;
-        const auto& chunk = chunk_at_(index / k_chunk_rows);
-        const auto offset = index % k_chunk_rows;
-
-        xt::xarray<double> result = xt::xarray<double>::from_shape(std::vector<std::size_t>{dof_});
-        for (std::size_t joint = 0; joint != dof_; ++joint) {
-            result(joint) = chunk(offset, joint);
-        }
-        return result;
+        return xt::xarray<double>{xt::view(chunk_at_(index / k_chunk_rows), index % k_chunk_rows, xt::all())};
     }
 
    private:

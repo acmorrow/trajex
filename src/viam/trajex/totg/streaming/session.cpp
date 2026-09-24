@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <stdexcept>
@@ -23,59 +24,39 @@ namespace {
 // the caller's accumulator to do so, because that accumulator views memory the caller owns.
 // These copy the rows it needs into arrays the session owns.
 
-xt::xarray<double> view_to_xarray(const waypoint_accumulator::value_type& row) {
-    const std::size_t dof = row.shape(0);
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{dof});
-    for (std::size_t j = 0; j < dof; ++j) {
-        result(j) = row(j);
-    }
-    return result;
-}
-
+// Compared bitwise rather than within a tolerance, because the seam waypoint is one the
+// caller was handed back and is expected to return unmodified; anything else is a protocol
+// error on their side rather than drift worth accommodating.
 bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xt::xarray<double>& b) {
-    if (a.shape(0) != b.shape(0)) {
-        return false;
-    }
-    for (std::size_t i = 0; i < b.shape(0); ++i) {
-        if (a(i) != b(i)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::equal(a, b);
 }
 
 // Caller must ensure batch.size() > from.
 xt::xarray<double> accumulator_tail_to_xarray(const waypoint_accumulator& batch, std::size_t from) {
-    const std::size_t count = batch.size() - from;
-    const std::size_t dof = batch.dof();
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{count, dof});
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto& row = batch.at(from + i);
-        for (std::size_t j = 0; j < dof; ++j) {
-            result(i, j) = row(j);
-        }
+    // Allocated without initialising, since every element is written below.
+    auto result = xt::xarray<double>::from_shape(std::vector<std::size_t>{batch.size() - from, batch.dof()});
+
+    std::size_t row = 0;
+    for (const auto& waypoint : batch | std::views::drop(from)) {
+        xt::view(result, row++, xt::all()) = waypoint;
     }
     return result;
 }
 
 xt::xarray<double> stack_anchor_and_staged(const xt::xarray<double>& anchor, const std::vector<xt::xarray<double>>& staged) {
-    const std::size_t dof = anchor.shape(0);
-    std::size_t total_rows = 1;
-    for (const auto& s : staged) {
-        total_rows += s.shape(0);
-    }
-    xt::xarray<double> result = xt::zeros<double>(std::vector<std::size_t>{total_rows, dof});
-    for (std::size_t j = 0; j < dof; ++j) {
-        result(0, j) = anchor(j);
-    }
+    const auto staged_rows =
+        std::transform_reduce(staged.begin(), staged.end(), std::size_t{0}, std::plus{}, [](const auto& batch) { return batch.shape(0); });
+
+    auto result = xt::xarray<double>::from_shape(std::vector<std::size_t>{staged_rows + 1, anchor.shape(0)});
+    xt::view(result, 0, xt::all()) = anchor;
+
+    // Each staged batch is already a contiguous block of rows, so it lands in one assignment
+    // rather than a row at a time.
     std::size_t row = 1;
-    for (const auto& s : staged) {
-        for (std::size_t i = 0; i < s.shape(0); ++i) {
-            for (std::size_t j = 0; j < dof; ++j) {
-                result(row, j) = s(i, j);
-            }
-            ++row;
-        }
+    for (const auto& batch : staged) {
+        const auto rows = batch.shape(0);
+        xt::view(result, xt::range(row, row + rows), xt::all()) = batch;
+        row += rows;
     }
     return result;
 }
@@ -164,7 +145,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
             return {kinds::k_noop, std::nullopt, std::nullopt};
         }
         staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
-        last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
+        last_waypoint_ = batch.at(batch.size() - 1);
         return {kinds::k_staged_again, std::nullopt, std::nullopt};
     }
 
@@ -229,7 +210,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // with it; they will arrive again by way of `staged_batches_` at the next rebase.
     waypoints_.truncate(committed_waypoints);
     staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
-    last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
+    last_waypoint_ = batch.at(batch.size() - 1);
 
     // Both stage conditions can hold at once. Report lateness in that case, because it is the
     // one the caller can do something about: sending sooner fixes a branch that has already
