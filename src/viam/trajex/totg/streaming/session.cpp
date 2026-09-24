@@ -69,15 +69,25 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
     // First extend: build the initial trajectory directly from the batch.
     if (!active_) {
-        auto new_waypoints = accumulator_to_xarray(batch);
-        auto new_active = build_trajectory_from_(new_waypoints);  // throws on validation failure
+        // The store has to be populated before the trajectory can be built from it, so a
+        // failed build leaves waypoints behind that no trajectory corresponds to. Empty it
+        // again before rethrowing, so a caller that retries with a corrected batch starts
+        // from the same state it had before.
+        waypoints_.append(batch, 0);
+        auto new_active = [&] {
+            try {
+                return build_trajectory_from_(waypoints_.waypoints());  // throws on validation failure
+            } catch (...) {
+                waypoints_.truncate(0);
+                throw;
+            }
+        }();
 
         // Build the sampler for the new active before committing any moves so the throw
         // contract (state unchanged on failure) is preserved.
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, trajectory::seconds{0.0});
 
-        last_waypoint_ = row_to_xarray(new_waypoints, new_waypoints.shape(0) - 1);
-        active_waypoints_ = std::move(new_waypoints);
+        last_waypoint_ = waypoints_.last();
         active_ = std::move(new_active);
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
@@ -89,7 +99,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     }
 
     // Subsequent extends: validate DOF and seam before touching any state.
-    if (batch.dof() != active_waypoints_.shape(1)) {
+    if (batch.dof() != waypoints_.dof()) {
         throw std::invalid_argument("streaming::session::extend: DOF mismatch");
     }
     if (!rows_bit_exact(batch.at(0), last_waypoint_)) {
@@ -117,8 +127,20 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // Build a candidate trajectory from the active waypoints plus the batch's new waypoints,
     // then find the branch: the earliest point where the candidate diverges from the current
     // active. Where that branch falls decides whether we can pivot.
-    auto new_waypoints = concat_active_with_batch_tail(active_waypoints_, batch, 1);
-    auto candidate = build_trajectory_from_(new_waypoints);  // throws on validation failure
+    //
+    // Appending is provisional: the candidate may lose to staging below, and building it may
+    // fail outright, so the store is wound back to `committed_waypoints` on either path. Only
+    // a pivot keeps the appended waypoints, because only then do they describe `active_`.
+    const auto committed_waypoints = waypoints_.size();
+    waypoints_.append(batch, 1);
+    auto candidate = [&] {
+        try {
+            return build_trajectory_from_(waypoints_.waypoints());  // throws on validation failure
+        } catch (...) {
+            waypoints_.truncate(committed_waypoints);
+            throw;
+        }
+    }();
 
     const auto branch_local = find_branch_local_time(*active_, candidate);
     const auto branch_global = epoch_ + branch_local;
@@ -146,8 +168,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
 
-        last_waypoint_ = row_to_xarray(new_waypoints, new_waypoints.shape(0) - 1);
-        active_waypoints_ = std::move(new_waypoints);
+        last_waypoint_ = waypoints_.last();
         active_ = std::move(candidate);
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
@@ -155,6 +176,9 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         return {kinds::k_pivot, branch_slack, delta_active_duration};
     }
 
+    // Staging instead of pivoting, so the candidate is discarded and its waypoints along
+    // with it; they will arrive again by way of `staged_batches_` at the next rebase.
+    waypoints_.truncate(committed_waypoints);
     staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
     last_waypoint_ = view_to_xarray(batch.at(batch.size() - 1));
 
@@ -225,9 +249,8 @@ std::size_t session::trajectory_generation_count() const noexcept {
     return generation_count_;
 }
 
-trajectory session::build_trajectory_from_(const xt::xarray<double>& waypoints) const {
-    const waypoint_accumulator acc(waypoints);
-    path p = path::create(acc, path_options_);
+trajectory session::build_trajectory_from_(const waypoint_accumulator& waypoints) const {
+    path p = path::create(waypoints, path_options_);
     return trajectory::create(std::move(p), trajectory_options_);
 }
 
@@ -268,10 +291,14 @@ void session::rebase_() {
     // path-coalescing tolerances can react badly to that difference. Keep the streaming layer
     // in the waypoint domain.
     const auto old_duration = active_->duration();
-    auto anchor = row_to_xarray(active_waypoints_, active_waypoints_.shape(0) - 1);
+    auto anchor = waypoints_.last();
 
+    // Assembled into a flat array first, and loaded into the store only once the trajectory
+    // has been built from it, so that a failed build leaves the session's waypoints as they
+    // were rather than half-replaced.
     auto new_waypoints = stack_anchor_and_staged(anchor, staged_batches_);
-    auto new_active = build_trajectory_from_(new_waypoints);
+    const waypoint_accumulator replacement{new_waypoints};
+    auto new_active = build_trajectory_from_(replacement);
 
     // The previous chain's terminal was emitted as its last sample at global time
     // (epoch_ + old_duration). Start the new sampler one nominal sample period past that, so
@@ -290,7 +317,12 @@ void session::rebase_() {
                                       ? uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, sample_period_)
                                       : uniform_sampler{std::size_t{1}};
 
-    active_waypoints_ = std::move(new_waypoints);
+    // The anchor is already the store's last waypoint and also row zero of `new_waypoints`,
+    // so reducing the store to it and appending the remainder replaces the contents without
+    // storing that waypoint twice.
+    waypoints_.reset_to_last();
+    waypoints_.append(replacement, 1);
+
     active_ = std::move(new_active);
     cursor_.emplace(active_->create_cursor());
     sampler_.emplace(std::move(new_sampler));
