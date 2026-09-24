@@ -244,6 +244,53 @@ void bm_sample(benchmark::State& state, const std::string& filename) {
     }
 }
 
+void bm_sample_collect(benchmark::State& state, const std::string& filename) {
+    const auto& source = loaded_record(filename);
+    const auto waypoints = prefix_of(source.waypoints, static_cast<std::size_t>(state.range(0)));
+    const waypoint_accumulator accumulator{waypoints};
+    auto p = path::create(accumulator, path_options_for(source.config));
+    const auto traj = trajectory::create(std::move(p), trajectory_options_for(source.config));
+
+    const auto n_dof = traj.path().dof();
+    const auto n_samples = uniform_sampler::calculate_quantized_samples(traj.duration().count(), k_sampling_freq_hz);
+
+    // Marshal each sample into the flat per-quantity arrays a caller receives when it wants a
+    // trajectory whole rather than a sample at a time. `bm_sample` above reads the same values
+    // into a scalar; the difference between the two is what the row writes cost.
+    //
+    // The destinations are built once. Allocating three arrays of this size per iteration
+    // would measure the allocation rather than the row writes, and the row writes are what
+    // scales with the length of the trajectory.
+    using shape_t = typename xt::xarray<double>::shape_type;
+    xt::xarray<double> times(shape_t{n_samples});
+    xt::xarray<double> configurations(shape_t{n_samples, n_dof});
+    xt::xarray<double> velocities(shape_t{n_samples, n_dof});
+    xt::xarray<double> accelerations(shape_t{n_samples, n_dof});
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        auto sampler = uniform_sampler::quantized_for_trajectory(traj, viam::trajex::types::hertz{k_sampling_freq_hz});
+
+        std::size_t idx = 0;
+        for (const auto& sample : traj.samples(sampler)) {
+            times(idx) = sample.time.count();
+            xt::view(configurations, idx, xt::all()) = sample.configuration;
+            xt::view(velocities, idx, xt::all()) = sample.velocity;
+            xt::view(accelerations, idx, xt::all()) = sample.acceleration;
+            ++idx;
+        }
+
+        // Naming the destinations individually, not just clobbering memory: the copy
+        // benchmarks in xtensor_idioms.cpp measured a deleted loop at one cycle for 12 KB
+        // because ClobberMemory alone left the optimiser free to drop the stores.
+        benchmark::DoNotOptimize(times.data());
+        benchmark::DoNotOptimize(configurations.data());
+        benchmark::DoNotOptimize(velocities.data());
+        benchmark::DoNotOptimize(accelerations.data());
+        benchmark::ClobberMemory();
+    }
+}
+
 // Benchmarks are registered at runtime rather than with the BENCHMARK macro so each one can
 // be named for the record it runs against: `bm_path_create/VIK-182-stall/4096`. That makes
 // --benchmark_filter select by stage or by record, whichever is wanted.
@@ -266,6 +313,7 @@ void register_workloads() {
         register_stage("bm_path_create", bm_path_create, benchmark::kMillisecond);
         register_stage("bm_trajectory_create", bm_trajectory_create, benchmark::kMillisecond);
         register_stage("bm_sample", bm_sample, benchmark::kMillisecond);
+        register_stage("bm_sample_collect", bm_sample_collect, benchmark::kMillisecond);
 
         const auto store_sizes = sizes_for(k_store_sizes, total);
         const auto register_store = [&](const char* stage, auto function) {
