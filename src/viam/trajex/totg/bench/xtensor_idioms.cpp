@@ -278,4 +278,165 @@ BENCHMARK(limit_scalar_loop<fixed_row>)->Name("bm_limit/xtensor_fixed_scalar_loo
 BENCHMARK(limit_scalar_loop<raw_row>)->Name("bm_limit/std_array_scalar_loop");
 BENCHMARK(limit_expression)->Name("bm_limit/xarray_expression");
 
+//
+// The waypoint coalescing test from `path::create`, which a profile put at roughly three
+// quarters of that stage. For each triple of consecutive rows it asks whether the middle one
+// lies close enough to the line between its neighbours to be dropped: a squared length, a
+// dot product, a projection, and a norm, all over six doubles.
+//
+// The point of the grid is to separate two effects that the existing `bm_limit` numbers
+// conflate. Rank varies across `xarray` (runtime rank, shape carried in an svector) and
+// `xtensor<double, 2>` (rank fixed at compile time, size still dynamic). Reduction strategy
+// varies across xtensor's default lazy stepper and its immediate path. The scalar loop is
+// the floor: the same arithmetic with no container machinery at all.
+//
+// The lazy cells reproduce the real code faithfully, including binding `start_to_next` once
+// and using it five times, because that repetition is part of what is being measured.
+//
+
+constexpr double k_coalesce_radius = 1.0;
+
+template <typename Array2D>
+void coalesce_lazy(benchmark::State& state) {
+    const auto rows = make_2d<Array2D>();
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        std::size_t coalesced = 0;
+
+        for (std::size_t i = 0; i + 2 < k_rows; ++i) {
+            const auto start = xt::view(rows, i, xt::all());
+            const auto locus = xt::view(rows, i + 1, xt::all());
+            const auto next = xt::view(rows, i + 2, xt::all());
+
+            const auto start_to_next = next - start;
+            if (xt::all(xt::equal(start_to_next, 0.0))) {
+                continue;
+            }
+
+            const auto start_to_locus = locus - start;
+            const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
+            const double start_to_locus_dot_direction = xt::sum(start_to_locus * start_to_next)();
+
+            if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
+                continue;
+            }
+
+            const double t = start_to_locus_dot_direction / start_to_next_sq;
+            const auto projected_point = start + (t * start_to_next);
+            const auto deviation_vector = locus - projected_point;
+
+            if (xt::norm_l2(deviation_vector)() <= k_coalesce_radius) {
+                ++coalesced;
+            }
+        }
+
+        benchmark::DoNotOptimize(coalesced);
+    }
+}
+
+template <typename Array2D>
+void coalesce_immediate(benchmark::State& state) {
+    const auto rows = make_2d<Array2D>();
+    constexpr auto immediate = xt::evaluation_strategy::immediate;
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        std::size_t coalesced = 0;
+
+        for (std::size_t i = 0; i + 2 < k_rows; ++i) {
+            const auto start = xt::view(rows, i, xt::all());
+            const auto locus = xt::view(rows, i + 1, xt::all());
+            const auto next = xt::view(rows, i + 2, xt::all());
+
+            const auto start_to_next = next - start;
+            if (xt::all(xt::equal(start_to_next, 0.0))) {
+                continue;
+            }
+
+            const auto start_to_locus = locus - start;
+            const double start_to_next_sq = xt::sum(start_to_next * start_to_next, immediate)();
+            const double start_to_locus_dot_direction = xt::sum(start_to_locus * start_to_next, immediate)();
+
+            if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
+                continue;
+            }
+
+            const double t = start_to_locus_dot_direction / start_to_next_sq;
+            const auto projected_point = start + (t * start_to_next);
+            const auto deviation_vector = locus - projected_point;
+
+            if (xt::norm_l2(deviation_vector, immediate)() <= k_coalesce_radius) {
+                ++coalesced;
+            }
+        }
+
+        benchmark::DoNotOptimize(coalesced);
+    }
+}
+
+void coalesce_scalar_loop(benchmark::State& state) {
+    const auto rows = make_2d<xt::xtensor<double, 2>>();
+    const double* const data = rows.data();
+
+    // Degrees of freedom is a runtime property everywhere in trajex, and the expression cells
+    // above carry it as runtime data inside the container whatever happens. Taking it from the
+    // shape and hiding it from the optimiser keeps this loop honest: against a constexpr bound
+    // it unrolls completely and the comparison measures something no production call site gets.
+    std::size_t dof = rows.shape(1);
+    benchmark::DoNotOptimize(dof);
+
+    for (auto unused : state) {
+        benchmark::DoNotOptimize(unused);
+        std::size_t coalesced = 0;
+
+        for (std::size_t i = 0; i + 2 < k_rows; ++i) {
+            const double* const start = data + (i * dof);
+            const double* const locus = data + ((i + 1) * dof);
+            const double* const next = data + ((i + 2) * dof);
+
+            // One pass covers the identical-endpoints test, the squared length and the dot
+            // product; the expression forms above need three traversals for the same three
+            // answers because each is a separate reduction.
+            bool identical = true;
+            double start_to_next_sq = 0.0;
+            double start_to_locus_dot_direction = 0.0;
+
+            for (std::size_t joint = 0; joint != dof; ++joint) {
+                const double direction = next[joint] - start[joint];
+                identical = identical && (direction == 0.0);
+                start_to_next_sq += direction * direction;
+                start_to_locus_dot_direction += (locus[joint] - start[joint]) * direction;
+            }
+
+            if (identical) {
+                continue;
+            }
+            if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
+                continue;
+            }
+
+            const double t = start_to_locus_dot_direction / start_to_next_sq;
+            double deviation_sq = 0.0;
+
+            for (std::size_t joint = 0; joint != dof; ++joint) {
+                const double deviation = locus[joint] - (start[joint] + (t * (next[joint] - start[joint])));
+                deviation_sq += deviation * deviation;
+            }
+
+            if (std::sqrt(deviation_sq) <= k_coalesce_radius) {
+                ++coalesced;
+            }
+        }
+
+        benchmark::DoNotOptimize(coalesced);
+    }
+}
+
+BENCHMARK(coalesce_lazy<xt::xarray<double>>)->Name("bm_coalesce/xarray_lazy");
+BENCHMARK(coalesce_immediate<xt::xarray<double>>)->Name("bm_coalesce/xarray_immediate");
+BENCHMARK(coalesce_lazy<xt::xtensor<double, 2>>)->Name("bm_coalesce/xtensor2_lazy");
+BENCHMARK(coalesce_immediate<xt::xtensor<double, 2>>)->Name("bm_coalesce/xtensor2_immediate");
+BENCHMARK(coalesce_scalar_loop)->Name("bm_coalesce/scalar_loop");
+
 }  // namespace
