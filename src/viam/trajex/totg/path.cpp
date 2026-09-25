@@ -7,6 +7,7 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 #if __has_include(<xtensor/reducers/xnorm.hpp>)
@@ -327,7 +328,17 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
 
         const double radius = max_deviation / 2.0;
 
-        const auto start_to_next = next - start;
+        // Evaluated rather than left lazy because it has five uses below: the zero
+        // test, both halves of the squared length, the dot product, and the
+        // projection. A lazy binding would walk the subtraction once per use.
+        const auto start_to_next = xt::eval(next - start);
+
+        // eval yields the expression's temporary_type, which inherits the operands' shape
+        // type: it materializes into a statically ranked vector only because the waypoints
+        // are statically ranked. Should that stop being true, eval would quietly go back to
+        // handing out a dynamically ranked array and the saving above would evaporate with
+        // nothing to show for it, so pin the type rather than trust the inheritance.
+        static_assert(std::is_same_v<std::decay_t<decltype(start_to_next)>, xvector<>>);
 
         // Check if start and next are exactly the same position (all components identically zero)
         if (xt::all(xt::equal(start_to_next, 0.0))) {
