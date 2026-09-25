@@ -38,8 +38,8 @@ namespace viam::trajex::totg {
 class planner_base {
    public:
     struct config {
-        xvector<> velocity_limits;
-        xvector<> acceleration_limits;
+        rank_checked<xvector<>> velocity_limits;
+        rank_checked<xvector<>> acceleration_limits;
         double path_blend_tolerance = 0.0;
         std::optional<double> colinearization_ratio{};
         // Curvature bounds for blend construction. nullopt leaves path::options at its
@@ -55,7 +55,7 @@ class planner_base {
         // tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table) jacobian can
         // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
         // validated at planner construction.
-        std::optional<xmatrix<>> model_table{};
+        std::optional<rank_checked<xmatrix<>>> model_table{};
     };
 
     ///
@@ -435,10 +435,10 @@ class planner : public planner_base {
 
                 Path legacy_path(eigen_waypoints, get_config().path_blend_tolerance);
 
-                auto vel_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().velocity_limits.data(),
-                                                                   static_cast<Eigen::Index>(get_config().velocity_limits.size()));
-                auto acc_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().acceleration_limits.data(),
-                                                                   static_cast<Eigen::Index>(get_config().acceleration_limits.size()));
+                auto vel_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().velocity_limits->data(),
+                                                                   static_cast<Eigen::Index>(get_config().velocity_limits->size()));
+                auto acc_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().acceleration_limits->data(),
+                                                                   static_cast<Eigen::Index>(get_config().acceleration_limits->size()));
 
                 Trajectory traj(legacy_path, vel_eigen, acc_eigen);
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);

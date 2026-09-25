@@ -68,8 +68,9 @@ double path::options::min_blend_curvature() const noexcept {
     return min_blend_curvature_;
 }
 
-path::segment::linear::linear(xvector<> start, const xvector<>& end) : start{std::move(start)}, length{0.0} {
-    const auto diff = end - this->start;
+path::segment::linear::linear(rank_checked<xvector<>> start, const rank_checked<xvector<>>& end)
+    : start{std::move(start).take()}, length{0.0} {
+    const auto diff = *end - this->start;
     const double norm = xt::norm_l2(diff)();
 
     // The only truly degenerate case is coincident endpoints (norm == 0), which would
@@ -84,15 +85,16 @@ path::segment::linear::linear(xvector<> start, const xvector<>& end) : start{std
     this->length = arc_length{norm};
 }
 
-path::segment::linear::linear(xvector<> start, xvector<> unit_direction, arc_length length)
-    : start{std::move(start)}, unit_direction{std::move(unit_direction)}, length{length} {
+path::segment::linear::linear(rank_checked<xvector<>> start, rank_checked<xvector<>> unit_direction, arc_length length)
+    : start{std::move(start).take()}, unit_direction{std::move(unit_direction).take()}, length{length} {
     if (static_cast<double>(length) <= 0.0) {
         throw std::invalid_argument{"Linear segment: length must be positive"};
     }
 }
 
-path::segment::circular::circular(xvector<> center, xvector<> x, xvector<> y, double radius, double angle_rads)
-    : center{std::move(center)}, x{std::move(x)}, y{std::move(y)}, radius{radius}, angle_rads{angle_rads} {
+path::segment::circular::circular(
+    rank_checked<xvector<>> center, rank_checked<xvector<>> x, rank_checked<xvector<>> y, double radius, double angle_rads)
+    : center{std::move(center).take()}, x{std::move(x).take()}, y{std::move(y).take()}, radius{radius}, angle_rads{angle_rads} {
     const double x_norm = xt::norm_l2(this->x)();
     const double y_norm = xt::norm_l2(this->y)();
 
@@ -606,10 +608,6 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     }
 
     return path{std::move(segments), waypoints.dof(), cumulative_length};
-}
-
-path path::create(const xmatrix<>& waypoints, const options& opts) {
-    return create(waypoint_accumulator{waypoints}, opts);
 }
 
 arc_length path::length() const noexcept {

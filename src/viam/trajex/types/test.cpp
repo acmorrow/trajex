@@ -1,12 +1,22 @@
 #define BOOST_TEST_MODULE trajex_types_test
 
 #include <chrono>
+#include <concepts>
+#include <stdexcept>
+#include <utility>
+
+#if __has_include(<xtensor/containers/xfixed.hpp>)
+#include <xtensor/containers/xfixed.hpp>
+#else
+#include <xtensor/xfixed.hpp>
+#endif
 
 #include <viam/trajex/types/arc_acceleration.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/arc_operations.hpp>
 #include <viam/trajex/types/arc_velocity.hpp>
 #include <viam/trajex/types/epsilon.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnull-dereference"
@@ -601,6 +611,81 @@ BOOST_AUTO_TEST_CASE(epsilon_wrapper_constexpr) {
     constexpr auto w2 = eps.wrap(b);
 
     static_assert((w1 <=> w2) == std::weak_ordering::less, "constexpr comparison should work");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(rank_checked_tests)
+
+BOOST_AUTO_TEST_CASE(construction_checks_every_way_in) {
+    using namespace viam::trajex;
+
+    const auto holdable = []<typename Held, typename From>() { return std::constructible_from<Held, const From&>; };
+
+    using vec = rank_checked<xvector<>>;
+    using mat = rank_checked<xmatrix<>>;
+    using fixed_two = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
+    using rank_three = xt::xtensor<double, 3>;
+
+    // Right rank, nothing to check.
+    BOOST_CHECK((holdable.template operator()<vec, xvector<>>()));
+    BOOST_CHECK((holdable.template operator()<mat, xmatrix<>>()));
+    BOOST_CHECK((holdable.template operator()<mat, fixed_two>()));
+
+    // Rank known only at runtime: admitted here, checked at construction below.
+    BOOST_CHECK((holdable.template operator()<vec, xt::xarray<double>>()));
+    BOOST_CHECK((holdable.template operator()<mat, xt::xarray<double>>()));
+
+    // Fixed at the wrong rank: refused outright.
+    BOOST_CHECK(!(holdable.template operator()<vec, xmatrix<>>()));
+    BOOST_CHECK(!(holdable.template operator()<mat, xvector<>>()));
+    BOOST_CHECK(!(holdable.template operator()<mat, rank_three>()));
+
+    const xt::xarray<double> two_d = {{1.0, 2.0}, {3.0, 4.0}};
+    const xt::xarray<double> one_d = {1.0, 2.0};
+
+    BOOST_CHECK_NO_THROW(static_cast<void>(mat{two_d}));
+    BOOST_CHECK_NO_THROW(static_cast<void>(vec{one_d}));
+    BOOST_CHECK_THROW(static_cast<void>(mat{one_d}), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(vec{two_d}), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
+    using namespace viam::trajex;
+
+    const rank_checked<xvector<>> limits = xvector<>{1.0, 2.0, 3.0};
+
+    // Passing it along needs no ceremony.
+    const auto sum = [](const xvector<>& v) { return v(0) + v(1) + v(2); };
+    BOOST_CHECK_CLOSE(sum(limits), 6.0, 1e-12);
+
+    // Reaching inside does, and reads the same value.
+    BOOST_CHECK_EQUAL(limits->size(), 3U);
+    BOOST_CHECK_CLOSE((*limits)(1), 2.0, 1e-12);
+    BOOST_CHECK_CLOSE(limits.get()(2), 3.0, 1e-12);
+
+    // A default-constructed one is empty rather than absent, and still rank 1.
+    const rank_checked<xvector<>> unset;
+    BOOST_CHECK_EQUAL(unset->dimension(), 1U);
+    BOOST_CHECK_EQUAL(unset->size(), 0U);
+
+    // Reaching inside a temporary would hand back a reference to storage that dies at the
+    // semicolon, so the accessors are refused there. The conversion is not, because an argument
+    // outlives the call it is passed to.
+    using held = rank_checked<xvector<>>;
+    const auto derefs = []<typename T>() { return requires(T&& t) { *std::forward<T>(t); }; };
+    const auto arrows = []<typename T>() { return requires(T&& t) { std::forward<T>(t).operator->(); }; };
+    const auto gets = []<typename T>() { return requires(T&& t) { std::forward<T>(t).get(); }; };
+
+    BOOST_CHECK(derefs.template operator()<held&>());
+    BOOST_CHECK(arrows.template operator()<held&>());
+    BOOST_CHECK(gets.template operator()<held&>());
+
+    BOOST_CHECK(!derefs.template operator()<held>());
+    BOOST_CHECK(!arrows.template operator()<held>());
+    BOOST_CHECK(!gets.template operator()<held>());
+
+    BOOST_CHECK((std::convertible_to<held, const xvector<>&>));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

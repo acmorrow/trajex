@@ -5,19 +5,15 @@
 namespace viam::trajex::totg {
 
 waypoint_accumulator::waypoint_accumulator(const xmatrix<>& waypoints) {
-    if (waypoints.dimension() != 2) {
-        throw std::invalid_argument{"Waypoints must be 2-dimensional"};
-    }
-    if (waypoints.shape()[0] == 0) {
-        throw std::invalid_argument{"Waypoints cannot be empty"};
-    }
+    // No rank check here, unlike the overload taking a dynamically ranked array: an xmatrix is
+    // rank two by construction and the question cannot arise.
+    require_non_empty_(waypoints);
 
     dof_ = waypoints.shape()[1];
 
-    // Create views into the waypoint array rather than copying. This zero-copy approach
-    // is efficient for path creation, which needs to iterate through waypoints but doesn't
-    // need to modify them. The caller must ensure the waypoint array outlives this accumulator.
-    add_waypoints(waypoints);
+    // Rows adapt the caller's array rather than copying it, which is what makes path creation
+    // cheap to feed. The caller must ensure the array outlives this accumulator.
+    append_rows_(waypoints);
 }
 
 waypoint_accumulator::waypoint_accumulator(const waypoint_view_t& first_waypoint) {
@@ -28,11 +24,10 @@ waypoint_accumulator::waypoint_accumulator(const waypoint_view_t& first_waypoint
 waypoint_accumulator::waypoint_accumulator(const waypoint_accumulator&) = default;
 waypoint_accumulator::waypoint_accumulator(waypoint_accumulator&&) noexcept = default;
 
-// Copy assignment via copy-and-swap. Default copy assignment fails because
-// std::vector::operator= tries to assign through existing xview elements,
-// and xtensor interprets xview assignment as data copy -- which fails when
-// the views reference const data. Copy construction works correctly (creates
-// new views of the same data), so we lean on that.
+// Copy assignment goes the long way round because the default cannot work: std::vector assigns
+// through the elements it already holds, and assigning to a row adaptor means copying data into
+// whatever that row points at, which is const. Copy construction has no such problem, since it
+// builds fresh adaptors over the same storage, so lean on it.
 waypoint_accumulator& waypoint_accumulator::operator=(const waypoint_accumulator& other) {
     if (this != &other) {
         auto copy = other;
@@ -44,19 +39,8 @@ waypoint_accumulator& waypoint_accumulator::operator=(const waypoint_accumulator
 waypoint_accumulator& waypoint_accumulator::operator=(waypoint_accumulator&&) noexcept = default;
 
 waypoint_accumulator& waypoint_accumulator::add_waypoints(const xmatrix<>& waypoints) {
-    if (waypoints.dimension() != 2) {
-        throw std::invalid_argument{"Waypoints must be 2-dimensional"};
-    }
-
-    if (waypoints.shape()[1] != dof_) {
-        throw std::invalid_argument{"Waypoints dimensions must match existing DOF"};
-    }
-
-    const size_t num_waypoints = waypoints.shape()[0];
-    for (size_t i = 0; i < num_waypoints; ++i) {
-        waypoints_.push_back(xt::view(waypoints, i, xt::all()));
-    }
-
+    require_matching_dof_(waypoints.shape()[1]);
+    append_rows_(waypoints);
     return *this;
 }
 

@@ -64,7 +64,7 @@ class path {
             /// @param end Ending configuration
             /// @throws std::invalid_argument if start == end
             ///
-            linear(xvector<> start, const xvector<>& end);
+            linear(rank_checked<xvector<>> start, const rank_checked<xvector<>>& end);
 
             ///
             /// Constructs linear segment from precomputed components.
@@ -77,8 +77,11 @@ class path {
             /// @param length Arc length (must be positive)
             /// @throws std::invalid_argument if length is not positive
             ///
-            linear(xvector<> start, xvector<> unit_direction, arc_length length);
+            linear(rank_checked<xvector<>> start, rank_checked<xvector<>> unit_direction, arc_length length);
 
+            // Stored unwrapped. The constructors are the only way to build one, so the rank is
+            // settled by the time these exist, and the geometry accessors read them at every
+            // integration step and should not pay for a wrapper to say so again.
             xvector<> start;           ///< Starting configuration
             xvector<> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
             arc_length length;         ///< Precomputed length (norm of end-start)
@@ -98,7 +101,8 @@ class path {
             /// @param angle_rads Total angle swept by arc (radians)
             /// @throws std::invalid_argument if x,y are not orthonormal
             ///
-            circular(xvector<> center, xvector<> x, xvector<> y, double radius, double angle_rads);
+            circular(
+                rank_checked<xvector<>> center, rank_checked<xvector<>> x, rank_checked<xvector<>> y, double radius, double angle_rads);
 
             xvector<> center;   ///< Center of arc in configuration space
             xvector<> x;        ///< First basis vector (defines rotation plane)
@@ -394,15 +398,27 @@ class path {
     [[nodiscard]] static path create(const waypoint_accumulator& waypoints, const options& opts = options{});
 
     ///
-    /// Creates path directly from waypoint array.
+    /// Creates path directly from anything a waypoint accumulator will accept.
     ///
-    /// Convenience overload that constructs waypoint_accumulator internally.
-    ///
-    /// @param waypoints 2D array (num_waypoints, dof) of waypoints
+    /// @param waypoints Waypoint set, 2D and densely stored, of any rank-2 array type
     /// @param opts Path creation options (coalescing and blending parameters)
     /// @return Constructed path with segments
+    /// @throws std::invalid_argument if the rank is only known at runtime and is not 2
     ///
-    [[nodiscard]] static path create(const xmatrix<>& waypoints, const options& opts = options{});
+    /// What counts as a waypoint set is the accumulator's rule and is not restated here, so
+    /// this widens and narrows with it. The constraint forwards the question rather than
+    /// answering it, which also keeps the overload detectable: an unconstrained template would
+    /// claim to accept everything and then fail to compile on use.
+    ///
+    /// A temporary is safe to pass despite the accumulator refusing to be built from one. The
+    /// parameter is an lvalue by the time the accumulator sees it, the caller's temporary
+    /// outlives the full expression, and a path copies the geometry it keeps.
+    ///
+    template <typename T>
+        requires std::constructible_from<waypoint_accumulator, const T&>
+    [[nodiscard]] static path create(const T& waypoints, const options& opts = options{}) {
+        return create(waypoint_accumulator{waypoints}, opts);
+    }
 
     ///
     /// Gets total arc length of path.

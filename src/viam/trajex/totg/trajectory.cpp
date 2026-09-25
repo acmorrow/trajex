@@ -68,11 +68,12 @@ arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                         const xvector<>& q_prime,
                                         const trajectory::tcp_limits& tcp,
                                         class epsilon epsilon) {
-    const auto J = tcp.linear_jacobian(q);
-    if (J.dimension() != 2) {
-        throw std::invalid_argument{"tcp.linear_jacobian must return a 2-dimensional (3, N) matrix, got dimension " +
-                                    std::to_string(J.dimension())};
-    }
+    // Held by value: binding a reference straight to *callback() would point into a temporary
+    // that dies at the end of the statement, since lifetime extension does not reach through a
+    // member function's returned reference. Rank is the return type's problem now, so only the
+    // shape is left to check here.
+    const auto J_checked = tcp.linear_jacobian(q);
+    const auto& J = *J_checked;
     if (J.shape(0) != 3) {
         throw std::invalid_argument{"tcp.linear_jacobian must return 3 rows, got " + std::to_string(J.shape(0))};
     }
@@ -1245,10 +1246,10 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
     on_event(traj, std::move(event));
 }
 
-trajectory::tcp_limits trajectory::tcp_limits::from(const xmatrix<>& model_table, double max_linear_velocity) {
+trajectory::tcp_limits trajectory::tcp_limits::from_chain_(jacobian::kinematic_chain chain_in, double max_linear_velocity) {
     // One chain, shared by both callbacks, so the limit value and its slope cannot describe
     // different kinematics.
-    auto chain = std::make_shared<jacobian::kinematic_chain>(jacobian::kinematic_chain::from(model_table));
+    auto chain = std::make_shared<jacobian::kinematic_chain>(std::move(chain_in));
 
     return tcp_limits{
         .max_linear_velocity = max_linear_velocity,
@@ -1292,19 +1293,19 @@ trajectory::trajectory(class path p, options opt, integration_points points)
 trajectory::trajectory(class path p, options opt) : path_{std::move(p)}, options_{std::move(opt)} {}
 
 trajectory trajectory::create(class path p, options opt, integration_points points) {
-    if (opt.max_velocity.shape(0) != p.dof()) {
+    if (opt.max_velocity->shape(0) != p.dof()) {
         throw std::invalid_argument{"max_velocity DOF doesn't match path DOF"};
     }
 
-    if (opt.max_acceleration.shape(0) != p.dof()) {
+    if (opt.max_acceleration->shape(0) != p.dof()) {
         throw std::invalid_argument{"max_acceleration DOF doesn't match path DOF"};
     }
 
-    if (!xt::all(xt::isfinite(opt.max_velocity) && opt.max_velocity >= 0.0)) {
+    if (!xt::all(xt::isfinite(*opt.max_velocity) && *opt.max_velocity >= 0.0)) {
         throw std::invalid_argument{"max_velocity must be finite and non-negative"};
     }
 
-    if (!xt::all(xt::isfinite(opt.max_acceleration) && opt.max_acceleration >= 0.0)) {
+    if (!xt::all(xt::isfinite(*opt.max_acceleration) && *opt.max_acceleration >= 0.0)) {
         throw std::invalid_argument{"max_acceleration must be finite and non-negative"};
     }
 
@@ -1345,7 +1346,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // the unit-tangent constraint sum_i t_i^2 = 1, max_i |t_i| >= 1/sqrt(N) at every s, which
         // collapses |q_dot_i| <= v_max_i down to s_dot <= sqrt(N) * max v_max regardless of path
         // geometry. Used as a runaway detector for the backward solver's bracket expansion.
-        const auto s_dot_upper_bound = std::sqrt(traj.path().dof()) * arc_velocity{xt::amax(traj.options_.max_velocity)()};
+        const auto s_dot_upper_bound = std::sqrt(traj.path().dof()) * arc_velocity{xt::amax(*traj.options_.max_velocity)()};
 
         // TODO(RSDK-12769): Investigate how integration_cache fits into the future phase_plane and
         // phase_plane::cursor concepts. It isn't either of those things, but its path_cursor will

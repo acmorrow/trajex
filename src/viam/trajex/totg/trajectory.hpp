@@ -93,7 +93,10 @@ class trajectory {
     ///
     struct tcp_limits {
         /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
-        using linear_jacobian_fn = std::function<xmatrix<>(const xvector<>&)>;
+        ///
+        /// The argument is ours and needs no guard; the result is the caller's, and a result of
+        /// the wrong rank would otherwise be reshaped on its way back rather than reported.
+        using linear_jacobian_fn = std::function<rank_checked<xmatrix<>>(const xvector<>&)>;
 
         /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
         using linear_velocity_gain_fn =
@@ -108,8 +111,20 @@ class trajectory {
         /// @return A limits object whose callbacks share a single chain
         /// @throws std::invalid_argument on a malformed model table
         ///
-        [[nodiscard]] static tcp_limits from(const xmatrix<>& model_table, double max_linear_velocity);
+        /// What counts as a model table is kinematic_chain::from's rule and is not restated
+        /// here, so this accepts exactly what that accepts and no more.
+        ///
+        template <typename T>
+            requires requires(const T& t) { jacobian::kinematic_chain::from(t); }
+        [[nodiscard]] static tcp_limits from(const T& model_table, double max_linear_velocity) {
+            return from_chain_(jacobian::kinematic_chain::from(model_table), max_linear_velocity);
+        }
 
+       private:
+        // Holds the lambda plumbing in the source file; the chain is already validated.
+        static tcp_limits from_chain_(jacobian::kinematic_chain chain, double max_linear_velocity);
+
+       public:
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
         double max_linear_velocity = 0.0;
@@ -124,12 +139,12 @@ class trajectory {
         ///
         /// Maximum velocity per DOF (units match configuration space).
         ///
-        xvector<> max_velocity;
+        rank_checked<xvector<>> max_velocity;
 
         ///
         /// Maximum acceleration per DOF (units match configuration space).
         ///
-        xvector<> max_acceleration;
+        rank_checked<xvector<>> max_acceleration;
 
         ///
         /// Default integration time step for phase plane integration.

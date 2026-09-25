@@ -14,7 +14,8 @@ planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {
     // Validate model_table shape here rather than in serialize_for_replay: serialization runs
     // on failure paths to record diagnostics, and a throw there would destroy the replay record
     // for the original error.
-    if (config_.model_table && (config_.model_table->dimension() != 2 || config_.model_table->shape(1) != 10)) {
+    // Rank two is now the member's own guarantee, so only the column count is left to check.
+    if (config_.model_table && (*config_.model_table)->shape(1) != 10) {
         throw std::invalid_argument("planner config model_table must be an (n, 10) tensor");
     }
 }
@@ -83,13 +84,13 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
     }
 
     Json::Value vel_array(Json::arrayValue);
-    for (const double v : get_config().velocity_limits) {
+    for (const double v : *get_config().velocity_limits) {
         vel_array.append(v);
     }
     root["max_velocity_vec_rads_per_sec"] = std::move(vel_array);
 
     Json::Value acc_array(Json::arrayValue);
-    for (const double a : get_config().acceleration_limits) {
+    for (const double a : *get_config().acceleration_limits) {
         acc_array.append(a);
     }
     root["max_acceleration_vec_rads_per_sec2"] = std::move(acc_array);
@@ -104,7 +105,7 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
     if (get_config().tcp && get_config().model_table) {
         // The (n, 10) shape was validated at planner construction, so writing the table here
         // cannot fail on the failure paths that call this to record diagnostics.
-        const auto& table = *get_config().model_table;
+        const auto& table = **get_config().model_table;
         root["tcp_max_linear_velocity"] = get_config().tcp->max_linear_velocity;
 
         Json::Value model_table_array(Json::arrayValue);

@@ -28,7 +28,19 @@ class kinematic_chain {
     ///         joint type (continuous or prismatic), or a revolute row with
     ///         zero-magnitude axis
     ///
-    [[nodiscard]] static kinematic_chain from(const xmatrix<>& tensor);
+    /// Takes the table as whatever the caller holds it in rather than as an xmatrix. A
+    /// parameter of concrete type would accept anything convertible to one, and that
+    /// conversion fabricates or discards extents to reach rank two -- so a table of the wrong
+    /// rank would arrive already reshaped, and the check below would be inspecting a shape
+    /// this function invented. Deduction leaves the caller's type alone and makes the check
+    /// mean something. Anything whose rank is fixed at something other than two is refused
+    /// outright; anything that settles its rank at runtime reaches the check.
+    ///
+    template <rank_or_runtime<2> T>
+    [[nodiscard]] static kinematic_chain from(const T& tensor) {
+        require_rank_two_(tensor.dimension());
+        return from_rank_two_(tensor);
+    }
 
     ///
     /// Computes the geometric Jacobian at joint positions q.
@@ -40,9 +52,18 @@ class kinematic_chain {
     ///         are the angular-velocity columns J_w_i = w_i, with w_i the
     ///         world-frame axis of revolute joint i, p_i its world position,
     ///         and p_e the end-effector position.
-    /// @throws std::invalid_argument on q-size mismatch
+    /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
-    [[nodiscard]] xmatrix<> jacobian(const xvector<>& q) const;
+    /// Deduces q rather than naming it, for the reason given on from(): a concrete parameter
+    /// would reshape a wrong-ranked argument on the way in. Deduction also means a caller who
+    /// already holds an xvector passes it with no copy, which matters because the integrator
+    /// calls these once per step.
+    ///
+    template <rank_or_runtime<1> Q>
+    [[nodiscard]] xmatrix<> jacobian(const Q& q) const {
+        require_rank_one_(q.dimension());
+        return jacobian_rank_one_(q);
+    }
 
     ///
     /// Computes the linear-velocity block of the geometric Jacobian at joint
@@ -51,9 +72,13 @@ class kinematic_chain {
     /// @param q (N_actuated,) vector with one element per revolute row in the
     ///        table, in chain order. Fixed rows do not consume a q entry.
     /// @return A (3, N_actuated) matrix of linear-velocity columns.
-    /// @throws std::invalid_argument on q-size mismatch
+    /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
-    [[nodiscard]] xmatrix<> linear_jacobian(const xvector<>& q) const;
+    template <rank_or_runtime<1> Q>
+    [[nodiscard]] xmatrix<> linear_jacobian(const Q& q) const {
+        require_rank_one_(q.dimension());
+        return linear_jacobian_rank_one_(q);
+    }
 
     /// Linear velocity gain ||J_v*f'||: task-space length per unit of path arc length, in
     /// whatever length unit the model table uses, with its rate of change along the path.
@@ -72,11 +97,15 @@ class kinematic_chain {
     /// @param q_prime (N_actuated,) path tangent dq/ds
     /// @param q_double_prime (N_actuated,) path curvature d^2q/ds^2
     /// @return the gain and its s-derivative
-    /// @throws std::invalid_argument on a q, q_prime, or q_double_prime size mismatch
+    /// @throws std::invalid_argument on a size mismatch, or if any argument is not 1-dimensional
     ///
-    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const xvector<>& q,
-                                                               const xvector<>& q_prime,
-                                                               const xvector<>& q_double_prime) const;
+    template <rank_or_runtime<1> Q, rank_or_runtime<1> QP, rank_or_runtime<1> QPP>
+    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const Q& q, const QP& q_prime, const QPP& q_double_prime) const {
+        require_rank_one_(q.dimension());
+        require_rank_one_(q_prime.dimension());
+        require_rank_one_(q_double_prime.dimension());
+        return linear_velocity_gain_at_rank_one_(q, q_prime, q_double_prime);
+    }
 
    private:
     // URDF joint type, restricted to arm-relevant joints. Underlying values
@@ -116,6 +145,22 @@ class kinematic_chain {
     // precomputes the per-row constants; all public construction funnels
     // through here via `from`.
     explicit kinematic_chain(std::vector<joint_row_> rows);
+
+    // Split out of `from` so the parsing stays in the source file. Converting to an xmatrix
+    // here is safe in a way it would not have been at the parameter, because the rank has
+    // been established by then; for a caller who already had one it is not even a copy.
+    static void require_rank_two_(std::size_t dimension);
+    static void require_rank_one_(std::size_t dimension);
+
+    static kinematic_chain from_rank_two_(const xmatrix<>& tensor);
+
+    // The real work, behind the rank checks above. A caller who already holds an xvector binds
+    // straight through with no copy; one who does not pays a conversion that is safe by then.
+    [[nodiscard]] xmatrix<> jacobian_rank_one_(const xvector<>& q) const;
+    [[nodiscard]] xmatrix<> linear_jacobian_rank_one_(const xvector<>& q) const;
+    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at_rank_one_(const xvector<>& q,
+                                                                         const xvector<>& q_prime,
+                                                                         const xvector<>& q_double_prime) const;
 
     // Evaluates the forward kinematics at joint positions q, capturing the
     // per-joint quantities the Jacobian assemblies need. Throws

@@ -1,14 +1,23 @@
 // Basic path tests: creation, validation, queries, segment lookup
 // Extracted from test.cpp lines 150-376
 
+#include <concepts>
+
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/xt.hpp>
 
+#if __has_include(<xtensor/containers/xfixed.hpp>)
+#include <xtensor/containers/xfixed.hpp>
+#else
+#include <xtensor/xfixed.hpp>
+#endif
+
 #include <boost/test/unit_test.hpp>
 
 using viam::trajex::xmatrix;
+using viam::trajex::xvector;
 
 BOOST_AUTO_TEST_SUITE(path_tests)
 
@@ -196,6 +205,46 @@ BOOST_AUTO_TEST_CASE(multiple_segments_lookup) {
     auto v3 = p(arc_length{5.0});
     BOOST_CHECK_EQUAL(static_cast<double>(v3.start()), 3.0);
     BOOST_CHECK_EQUAL(static_cast<double>(v3.end()), 6.0);
+}
+
+// create defers entirely to what a waypoint accumulator accepts. Pin that it does, in both
+// directions, so the delegation cannot quietly stop matching: an unconstrained template here
+// would claim every one of these and only fail once instantiated.
+BOOST_AUTO_TEST_CASE(create_accepts_exactly_what_the_accumulator_does) {
+    using namespace viam::trajex;
+    using namespace viam::trajex::totg;
+
+    const auto creatable = []<typename T>() { return requires(const T& t) { path::create(t); }; };
+    const auto accumulable = []<typename T>() { return std::constructible_from<waypoint_accumulator, const T&>; };
+
+    const auto agrees = [&]<typename T>() { return creatable.template operator()<T>() == accumulable.template operator()<T>(); };
+
+    using rank_three = xt::xtensor<double, 3>;
+    using fixed_shape = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
+
+    BOOST_CHECK(creatable.template operator()<xmatrix<>>());
+    BOOST_CHECK(creatable.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(creatable.template operator()<fixed_shape>());
+    BOOST_CHECK(!creatable.template operator()<xvector<>>());
+    BOOST_CHECK(!creatable.template operator()<rank_three>());
+
+    BOOST_CHECK(agrees.template operator()<xmatrix<>>());
+    BOOST_CHECK(agrees.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(agrees.template operator()<fixed_shape>());
+    BOOST_CHECK(agrees.template operator()<xvector<>>());
+    BOOST_CHECK(agrees.template operator()<rank_three>());
+}
+
+// A rank whose value is only known at runtime reaches the accumulator's check rather than
+// being converted on the way in.
+BOOST_AUTO_TEST_CASE(create_validates_dynamic_rank) {
+    using namespace viam::trajex::totg;
+
+    const xt::xarray<double> good = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    BOOST_CHECK_NO_THROW(static_cast<void>(path::create(good)));
+
+    const xt::xarray<double> rank_one = {1.0, 2.0, 3.0};
+    BOOST_CHECK_THROW(static_cast<void>(path::create(rank_one)), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

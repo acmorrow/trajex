@@ -1,19 +1,26 @@
 // Waypoint accumulator tests
 // Extracted from test.cpp lines 18-148
 
+#include <array>
+#include <concepts>
+#include <vector>
+
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/totg/waypoint_utils.hpp>
 #include <viam/trajex/types/xt.hpp>
 
 #if __has_include(<xtensor/core/xmath.hpp>)
+#include <xtensor/containers/xfixed.hpp>
 #include <xtensor/core/xmath.hpp>
 #else
+#include <xtensor/xfixed.hpp>
 #include <xtensor/xmath.hpp>
 #endif
 
 #include <boost/test/unit_test.hpp>
 
 using viam::trajex::xmatrix;
+using viam::trajex::xvector;
 
 BOOST_AUTO_TEST_SUITE(waypoint_accumulator_tests)
 
@@ -329,6 +336,228 @@ BOOST_AUTO_TEST_CASE(deduplicate_preserves_last_waypoint) {
     BOOST_REQUIRE_EQUAL(result.size(), 2);
     BOOST_CHECK_EQUAL(result[0](0), 0.0);
     BOOST_CHECK_EQUAL(result[1](0), 55.0);
+}
+
+// Rank is checked where waypoints enter, because an array of the wrong rank converts rather
+// than failing and the result is a waypoint set the caller did not pass. The accepting cases
+// are here too: a guard that also turned away the arguments people legitimately have would be
+// caught by nothing else, since the rest of the suite only ever constructs from an xmatrix<>.
+BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
+    using namespace viam::trajex;
+    using namespace viam::trajex::totg;
+
+    const auto constructible = []<typename T>() { return std::constructible_from<waypoint_accumulator, const T&>; };
+    const auto appendable = []<typename T>() { return requires(waypoint_accumulator& a, const T& t) { a.add_waypoints(t); }; };
+
+    BOOST_CHECK(constructible.template operator()<xmatrix<>>());
+    BOOST_CHECK(appendable.template operator()<xmatrix<>>());
+
+    // Dynamic rank is admitted, because the rank it will turn out to have is not knowable here.
+    // What it turns out to be is checked at runtime, in the case below.
+    BOOST_CHECK(constructible.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(appendable.template operator()<xt::xarray<double>>());
+
+    // Dynamic rank with nothing to adapt: a lazy expression owns no storage, and a view may
+    // stride over the array it reads, so neither offers rows that can be pointed at.
+    using an_expression = decltype(std::declval<const xt::xarray<double>&>() + 1.0);
+    BOOST_CHECK(!constructible.template operator()<an_expression>());
+    BOOST_CHECK(!appendable.template operator()<an_expression>());
+
+    // Static but wrong rank, which is the quiet case: converting a rank 1 array to a rank 2 one
+    // reads the missing extent from the adjacent stride and yields a plausible N x 1 shape.
+    BOOST_CHECK(!constructible.template operator()<xvector<>>());
+    BOOST_CHECK(!appendable.template operator()<xvector<>>());
+
+    // Aliased because a comma in a template argument list is a macro argument separator.
+    using rank_three = xt::xtensor<double, 3>;
+    BOOST_CHECK(!constructible.template operator()<rank_three>());
+    BOOST_CHECK(!appendable.template operator()<rank_three>());
+
+    // The single-waypoint constructor takes a row adaptor. It must keep working: it is a
+    // non-template overload and so wins against the deleted one.
+    BOOST_CHECK(constructible.template operator()<waypoint_accumulator::waypoint_view_t>());
+
+    // Rows are views of the caller's storage, so a temporary must be refused however it is
+    // spelled. The xmatrix case has always been guarded; the runtime-checked one must be too.
+    const auto constructible_from_rvalue = []<typename T>() { return std::constructible_from<waypoint_accumulator, T&&>; };
+    BOOST_CHECK(!constructible_from_rvalue.template operator()<xmatrix<>>());
+    BOOST_CHECK(!constructible_from_rvalue.template operator()<xt::xarray<double>>());
+}
+
+// The rank a dynamically ranked array turns out to have is checked rather than assumed, and
+// the rows it yields must be the same waypoints an equivalent xmatrix would have given.
+BOOST_AUTO_TEST_CASE(dynamically_ranked_waypoints_are_validated) {
+    using namespace viam::trajex;
+    using namespace viam::trajex::totg;
+
+    const xt::xarray<double> good = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const waypoint_accumulator acc{good};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](0), 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+
+    const xt::xarray<double> rank_one = {1.0, 2.0, 3.0};
+    BOOST_CHECK_THROW(waypoint_accumulator{rank_one}, std::invalid_argument);
+
+    const xt::xarray<double> rank_three = xt::zeros<double>({2, 2, 2});
+    BOOST_CHECK_THROW(waypoint_accumulator{rank_three}, std::invalid_argument);
+
+    // Appending checks the same thing, and the DOF besides.
+    waypoint_accumulator target{good};
+    const xt::xarray<double> more = {{7.0, 8.0, 9.0}};
+    BOOST_CHECK_NO_THROW(target.add_waypoints(more));
+    BOOST_CHECK_EQUAL(target.size(), 3);
+
+    BOOST_CHECK_THROW(target.add_waypoints(rank_one), std::invalid_argument);
+
+    const xt::xarray<double> wrong_dof = {{1.0, 2.0}};
+    BOOST_CHECK_THROW(target.add_waypoints(wrong_dof), std::invalid_argument);
+}
+
+// A dynamically ranked source must produce rows that track it, not copies of it, since the
+// accumulator's contract is that the caller's array outlives it and remains the storage.
+BOOST_AUTO_TEST_CASE(dynamically_ranked_waypoints_are_not_copied) {
+    using namespace viam::trajex::totg;
+
+    xt::xarray<double> source = {{1.0, 2.0, 3.0}};
+    const waypoint_accumulator acc{source};
+
+    source(0, 1) = 99.0;
+    BOOST_CHECK_CLOSE(acc[0](1), 99.0, 1e-10);
+}
+
+// An adaptor over a caller's own buffer is the case this generalization is really for: the
+// waypoints never become an xtensor of ours at any point, and nothing is copied.
+BOOST_AUTO_TEST_CASE(waypoints_adapted_over_caller_memory) {
+    using namespace viam::trajex::totg;
+
+    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+    auto adapted = xt::adapt(buffer, shape);
+
+    const waypoint_accumulator acc{adapted};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](0), 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+
+    // Straight through to the caller's vector, with no array of ours in between.
+    buffer[4] = 42.0;
+    BOOST_CHECK_CLOSE(acc[1](1), 42.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(waypoints_in_a_fixed_shape_array) {
+    using namespace viam::trajex::totg;
+
+    const xt::xtensor_fixed<double, xt::xshape<2, 3>> fixed = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+
+    const waypoint_accumulator acc{fixed};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](1), 2.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(appending_from_a_different_rank_two_type) {
+    using namespace viam::trajex::totg;
+
+    const xmatrix<> initial = {{1.0, 2.0, 3.0}};
+    waypoint_accumulator acc{initial};
+
+    const xt::xtensor_fixed<double, xt::xshape<1, 3>> more = {{4.0, 5.0, 6.0}};
+    BOOST_CHECK_NO_THROW(acc.add_waypoints(more));
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_CLOSE(acc[1](0), 4.0, 1e-10);
+
+    const xt::xtensor_fixed<double, xt::xshape<1, 2>> wrong_dof = {{7.0, 8.0}};
+    BOOST_CHECK_THROW(acc.add_waypoints(wrong_dof), std::invalid_argument);
+}
+
+// A row adaptor is built from a pointer to the row's first element and a length, which assumes
+// the source keeps each row contiguous and in order. That assumption is what admits a type at
+// all, so check it directly on every kind of source admitted, rather than inferring it from the
+// layout the type claims.
+BOOST_AUTO_TEST_CASE(accepted_sources_store_rows_contiguously) {
+    using namespace viam::trajex::totg;
+
+    const auto check = [](const char* label, const auto& source) {
+        BOOST_TEST_MESSAGE(label);
+        BOOST_REQUIRE_EQUAL(source.dimension(), 2u);
+
+        const auto rows = source.shape()[0];
+        const auto cols = source.shape()[1];
+
+        // Contiguous within a row, and rows following one another without gaps.
+        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[1]), 1u);
+        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[0]), cols);
+
+        const waypoint_accumulator acc{source};
+        BOOST_REQUIRE_EQUAL(acc.size(), rows);
+
+        for (std::size_t i = 0; i < rows; ++i) {
+            BOOST_REQUIRE_EQUAL(acc[i].size(), cols);
+            for (std::size_t j = 0; j < cols; ++j) {
+                // Same value, and the same object: a row must be the source's own storage.
+                BOOST_CHECK_EQUAL(acc[i](j), source(i, j));
+                BOOST_CHECK_EQUAL(&acc[i](j), &source(i, j));
+            }
+        }
+    };
+
+    const xmatrix<> as_xmatrix = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xmatrix", as_xmatrix);
+
+    const xt::xtensor_fixed<double, xt::xshape<2, 3>> as_fixed = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xtensor_fixed", as_fixed);
+
+    const xt::xarray<double> as_xarray = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xarray, rank checked at runtime", as_xarray);
+
+    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+    const auto as_adapted = xt::adapt(buffer, shape);
+    check("adaptor over a caller's vector", as_adapted);
+}
+
+// no_ownership has to mean what it says, or the accumulator would be freeing storage it was
+// only ever lent.
+BOOST_AUTO_TEST_CASE(rows_never_own_the_storage_they_point_at) {
+    using namespace viam::trajex::totg;
+
+    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+
+    {
+        const auto adapted = xt::adapt(buffer, shape);
+        const waypoint_accumulator acc{adapted};
+        BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+    }
+
+    BOOST_REQUIRE_EQUAL(buffer.size(), 6u);
+    BOOST_CHECK_CLOSE(buffer[0], 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(buffer[5], 6.0, 1e-10);
+}
+
+// Rank two is necessary but not sufficient: a row has to be contiguous and hold the element
+// type a row adaptor holds, or there is nothing to point at.
+BOOST_AUTO_TEST_CASE(rank_two_alone_does_not_qualify) {
+    using namespace viam::trajex::totg;
+
+    const auto constructible = []<typename T>() { return std::constructible_from<waypoint_accumulator, const T&>; };
+
+    // Rows of a column-major array are strided, so they cannot be adapted in place.
+    using column_major = xt::xtensor<double, 2, xt::layout_type::column_major>;
+    BOOST_CHECK(!constructible.template operator()<column_major>());
+
+    using float_matrix = xt::xtensor<float, 2>;
+    BOOST_CHECK(!constructible.template operator()<float_matrix>());
+
+    // And the ones that do qualify, for contrast.
+    using fixed_shape = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
+    using adapted_buffer = decltype(xt::adapt(std::declval<std::vector<double>&>(), std::declval<const std::array<std::size_t, 2>&>()));
+    BOOST_CHECK(constructible.template operator()<fixed_shape>());
+    BOOST_CHECK(constructible.template operator()<adapted_buffer>());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

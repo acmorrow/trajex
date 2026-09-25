@@ -363,17 +363,17 @@ BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
     BOOST_REQUIRE(rc.tcp.has_value());
     BOOST_CHECK_CLOSE(rc.tcp->max_linear_velocity, 0.5, 1e-9);
     BOOST_REQUIRE(rc.model_table.has_value());
-    BOOST_REQUIRE_EQUAL(rc.model_table->dimension(), 2U);
-    BOOST_CHECK_EQUAL(rc.model_table->shape(0), 7U);
-    BOOST_CHECK_EQUAL(rc.model_table->shape(1), 10U);
+    BOOST_REQUIRE_EQUAL((*rc.model_table)->dimension(), 2U);
+    BOOST_CHECK_EQUAL((*rc.model_table)->shape(0), 7U);
+    BOOST_CHECK_EQUAL((*rc.model_table)->shape(1), 10U);
 
     // The rebuilt jacobian is callable and returns the 3xN linear-velocity block for the six
     // actuated joints, confirming the callback was reconstructed (not merely the scalar copied).
     BOOST_REQUIRE(static_cast<bool>(rc.tcp->linear_jacobian));
     const auto J = rc.tcp->linear_jacobian(xvector<>{0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-    BOOST_REQUIRE_EQUAL(J.dimension(), 2U);
-    BOOST_CHECK_EQUAL(J.shape(0), 3U);
-    BOOST_CHECK_EQUAL(J.shape(1), 6U);
+    BOOST_REQUIRE_EQUAL(J->dimension(), 2U);
+    BOOST_CHECK_EQUAL(J->shape(0), 3U);
+    BOOST_CHECK_EQUAL(J->shape(1), 6U);
 
     // The reconstructed limit generates a trajectory end to end.
     auto outcome = replayed.execute([](const auto&, auto tx, const auto&) { return tx; });

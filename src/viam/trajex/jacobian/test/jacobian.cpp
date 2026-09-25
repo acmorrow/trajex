@@ -9,6 +9,12 @@
 #include <stdexcept>
 #include <utility>
 
+#if __has_include(<xtensor/containers/xfixed.hpp>)
+#include <xtensor/containers/xfixed.hpp>
+#else
+#include <xtensor/xfixed.hpp>
+#endif
+
 #include <boost/test/unit_test.hpp>
 
 namespace {
@@ -429,6 +435,98 @@ BOOST_AUTO_TEST_CASE(linear_jacobian_matches_jacobian_linear_block) {
     BOOST_CHECK_SMALL(max_abs_diff, 1e-15);
 }
 
+// A model table is taken as whatever the caller holds it in, so that a rank the caller got
+// wrong is refused or reported rather than fabricated on the way in. Rank two is all this
+// needs: the table is read element by element and copied, never adapted, so a view or an
+// expression is as acceptable as a container.
+BOOST_AUTO_TEST_CASE(from_accepts_any_rank_two_and_refuses_the_rest) {
+    using namespace viam::trajex;
+
+    const auto parseable = []<typename T>() { return requires(const T& t) { kinematic_chain::from(t); }; };
+
+    using rank_three = xt::xtensor<double, 3>;
+    using fixed_shape = xt::xtensor_fixed<double, xt::xshape<2, 10>>;
+
+    BOOST_CHECK(parseable.template operator()<xmatrix<>>());
+    BOOST_CHECK(parseable.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(parseable.template operator()<fixed_shape>());
+
+    BOOST_CHECK(!parseable.template operator()<xvector<>>());
+    BOOST_CHECK(!parseable.template operator()<rank_three>());
+    BOOST_CHECK(!parseable.template operator()<double>());
+}
+
+BOOST_AUTO_TEST_CASE(from_validates_a_rank_known_only_at_runtime) {
+    const xt::xarray<double> good = twolink_table();
+    BOOST_CHECK_NO_THROW(static_cast<void>(kinematic_chain::from(good)));
+
+    const xt::xarray<double> rank_one = {1.0, 2.0, 3.0};
+    BOOST_CHECK_THROW(static_cast<void>(kinematic_chain::from(rank_one)), std::invalid_argument);
+
+    const xt::xarray<double> rank_three = xt::zeros<double>({2, 2, 10});
+    BOOST_CHECK_THROW(static_cast<void>(kinematic_chain::from(rank_three)), std::invalid_argument);
+}
+
+// Evaluating the chain takes the joint vector the same way from() takes the table: deduced, so
+// a wrong rank is refused or reported rather than reshaped into one. These are the only public
+// entry points the integrator itself walks per step, so they take the caller's own type and
+// copy nothing when it is already an xvector.
+BOOST_AUTO_TEST_CASE(evaluation_refuses_a_rank_that_is_not_one) {
+    using namespace viam::trajex;
+
+    const auto chain = kinematic_chain::from(twolink_table());
+
+    const auto evaluable = [&]<typename T>() { return requires(const T& t) { chain.jacobian(t); }; };
+    const auto linear_evaluable = [&]<typename T>() { return requires(const T& t) { chain.linear_jacobian(t); }; };
+    const auto gain_evaluable = [&]<typename T>() { return requires(const T& t) { chain.linear_velocity_gain_at(t, t, t); }; };
+
+    using rank_three = xt::xtensor<double, 3>;
+
+    BOOST_CHECK(evaluable.template operator()<xvector<>>());
+    BOOST_CHECK(evaluable.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(!evaluable.template operator()<xmatrix<>>());
+    BOOST_CHECK(!evaluable.template operator()<rank_three>());
+
+    BOOST_CHECK(linear_evaluable.template operator()<xvector<>>());
+    BOOST_CHECK(!linear_evaluable.template operator()<xmatrix<>>());
+
+    BOOST_CHECK(gain_evaluable.template operator()<xvector<>>());
+    BOOST_CHECK(!gain_evaluable.template operator()<xmatrix<>>());
+
+    // A rank settled at runtime reaches the check.
+    const xt::xarray<double> good = {0.3, -0.7};
+    const xt::xarray<double> two_d = {{0.3, -0.7}, {0.1, 0.2}};
+    BOOST_CHECK_NO_THROW(static_cast<void>(chain.jacobian(good)));
+    BOOST_CHECK_THROW(static_cast<void>(chain.jacobian(two_d)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.linear_jacobian(two_d)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.linear_velocity_gain_at(two_d, good, good)), std::invalid_argument);
+}
+
+// tcp_limits::from restates none of that, so the two must agree by construction.
+BOOST_AUTO_TEST_CASE(tcp_limits_from_accepts_exactly_what_the_chain_does) {
+    using namespace viam::trajex;
+    using viam::trajex::totg::trajectory;
+
+    const auto tcp_takes = []<typename T>() { return requires(const T& t) { trajectory::tcp_limits::from(t, 1.0); }; };
+    const auto chain_takes = []<typename T>() { return requires(const T& t) { kinematic_chain::from(t); }; };
+    const auto agrees = [&]<typename T>() { return tcp_takes.template operator()<T>() == chain_takes.template operator()<T>(); };
+
+    using rank_three = xt::xtensor<double, 3>;
+    using fixed_shape = xt::xtensor_fixed<double, xt::xshape<2, 10>>;
+
+    BOOST_CHECK(agrees.template operator()<xmatrix<>>());
+    BOOST_CHECK(agrees.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(agrees.template operator()<fixed_shape>());
+    BOOST_CHECK(agrees.template operator()<xvector<>>());
+    BOOST_CHECK(agrees.template operator()<rank_three>());
+
+    BOOST_CHECK(tcp_takes.template operator()<xmatrix<>>());
+    BOOST_CHECK(!tcp_takes.template operator()<xvector<>>());
+
+    const xt::xarray<double> rank_one = {1.0, 2.0, 3.0};
+    BOOST_CHECK_THROW(static_cast<void>(trajectory::tcp_limits::from(rank_one, 1.0)), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // The tests in this suite validate linear_velocity_gain_at: the gain ||J*f'|| and its
@@ -486,7 +584,7 @@ BOOST_AUTO_TEST_CASE(sixdof_typical) {
 // NaN that would propagate into the phase-plane slope downstream.
 BOOST_AUTO_TEST_CASE(singular_gain_yields_finite_derivative) {
     const auto chain = kinematic_chain::from(twolink_table());
-    const auto vg = chain.linear_velocity_gain_at({0.3, -0.7}, {0.0, 0.0}, {0.2, -0.4});
+    const auto vg = chain.linear_velocity_gain_at(xvector<>{0.3, -0.7}, xvector<>{0.0, 0.0}, xvector<>{0.2, -0.4});
     BOOST_CHECK_SMALL(vg.gain_per_arc_unit, 1e-15);
     BOOST_CHECK(std::isfinite(vg.d_gain_ds));
 }
@@ -504,10 +602,10 @@ BOOST_AUTO_TEST_CASE(matches_linear_jacobian) {
 
     const auto limits = viam::trajex::totg::trajectory::tcp_limits::from(table, 0.5);
     const auto J3 = limits.linear_jacobian(q);
-    BOOST_REQUIRE_EQUAL(J3.shape()[0], 3U);
-    BOOST_REQUIRE_EQUAL(J3.shape()[1], 2U);
+    BOOST_REQUIRE_EQUAL(J3->shape()[0], 3U);
+    BOOST_REQUIRE_EQUAL(J3->shape()[1], 2U);
 
-    BOOST_CHECK_SMALL(matrix_diff_norm(J3, kinematic_chain::from(table).linear_jacobian(q)), 1e-15);
+    BOOST_CHECK_SMALL(matrix_diff_norm(*J3, kinematic_chain::from(table).linear_jacobian(q)), 1e-15);
 
     // The captured chain is reused: a second call returns identical values.
     BOOST_CHECK_SMALL(matrix_diff_norm(J3, limits.linear_jacobian(q)), 1e-15);

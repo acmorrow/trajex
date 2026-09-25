@@ -637,8 +637,8 @@ struct trajectory_test_fixture {
             Eigen::VectorXd legacy_max_vel(static_cast<Eigen::Index>(dof_));
             Eigen::VectorXd legacy_max_acc(static_cast<Eigen::Index>(dof_));
             for (size_t i = 0; i < dof_; ++i) {
-                legacy_max_vel(static_cast<Eigen::Index>(i)) = traj_opts.max_velocity(i);
-                legacy_max_acc(static_cast<Eigen::Index>(i)) = traj_opts.max_acceleration(i);
+                legacy_max_vel(static_cast<Eigen::Index>(i)) = (*traj_opts.max_velocity)(i);
+                legacy_max_acc(static_cast<Eigen::Index>(i)) = (*traj_opts.max_acceleration)(i);
             }
 
             // Create legacy path and trajectory with timing

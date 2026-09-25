@@ -208,7 +208,7 @@ class waypoint_store {
     // because rebuilding costs a view per stored waypoint and the session reads it on every
     // extend. The views stay valid because chunk arrays are never reallocated or moved.
     void extend_accumulator_(const xmatrix<>& chunk, std::size_t offset) {
-        auto row = xt::view(chunk, offset, xt::all());
+        const auto row = xt::adapt(&chunk(offset, 0), dof_, xt::no_ownership());
         if (accumulator_) {
             accumulator_->add_waypoint(row);
         } else {

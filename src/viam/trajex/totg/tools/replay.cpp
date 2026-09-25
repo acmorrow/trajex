@@ -110,7 +110,9 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
         if (!cfg.model_table) {
             throw std::runtime_error("tcp_max_linear_velocity given without a model_table to build the TCP jacobian");
         }
-        cfg.tcp = trajectory::tcp_limits::from(*cfg.model_table, root["tcp_max_linear_velocity"].asDouble());
+        // Two unwraps: the optional, then the rank guard. kinematic_chain::from deduces its
+        // argument, and deduction does not see through the guard's conversion.
+        cfg.tcp = trajectory::tcp_limits::from(**cfg.model_table, root["tcp_max_linear_velocity"].asDouble());
     }
 
     return {std::move(cfg), std::move(waypoints)};
