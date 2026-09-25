@@ -5,18 +5,13 @@
 #include <optional>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/streaming/private/waypoint_store.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/hertz.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg::streaming {
 
@@ -306,11 +301,11 @@ class session {
 
     // Batches received while staging, each pre-stripped of its seam point. Drained
     // into the new active during the next rebase.
-    std::vector<xt::xarray<double>> staged_batches_;
+    std::vector<xmatrix<>> staged_batches_;
 
     // The most recently received waypoint, against which the next extend's seam is
     // bit-exactly validated. Empty (shape (0,)) before the first extend.
-    xt::xarray<double> last_waypoint_;
+    xvector<> last_waypoint_;
 
     // Cumulative count of trajectories the session has installed as active. Increments
     // on first build, on each pivot, and on each rebase.

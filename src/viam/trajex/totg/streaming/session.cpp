@@ -27,14 +27,14 @@ namespace {
 // Compared bitwise rather than within a tolerance, because the seam waypoint is one the
 // caller was handed back and is expected to return unmodified; anything else is a protocol
 // error on their side rather than drift worth accommodating.
-bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xt::xarray<double>& b) {
+bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xvector<>& b) {
     return std::ranges::equal(a, b);
 }
 
 // Caller must ensure batch.size() > from.
-xt::xarray<double> accumulator_tail_to_xarray(const waypoint_accumulator& batch, std::size_t from) {
+xmatrix<> accumulator_tail_to_matrix(const waypoint_accumulator& batch, std::size_t from) {
     // Allocated without initialising, since every element is written below.
-    auto result = xt::xarray<double>::from_shape(std::vector<std::size_t>{batch.size() - from, batch.dof()});
+    auto result = xmatrix<>::from_shape(std::vector<std::size_t>{batch.size() - from, batch.dof()});
 
     std::size_t row = 0;
     for (const auto& waypoint : batch | std::views::drop(from)) {
@@ -43,11 +43,11 @@ xt::xarray<double> accumulator_tail_to_xarray(const waypoint_accumulator& batch,
     return result;
 }
 
-xt::xarray<double> stack_anchor_and_staged(const xt::xarray<double>& anchor, const std::vector<xt::xarray<double>>& staged) {
+xmatrix<> stack_anchor_and_staged(const xvector<>& anchor, const std::vector<xmatrix<>>& staged) {
     const auto staged_rows =
         std::transform_reduce(staged.begin(), staged.end(), std::size_t{0}, std::plus{}, [](const auto& batch) { return batch.shape(0); });
 
-    auto result = xt::xarray<double>::from_shape(std::vector<std::size_t>{staged_rows + 1, anchor.shape(0)});
+    auto result = xmatrix<>::from_shape(std::vector<std::size_t>{staged_rows + 1, anchor.shape(0)});
     xt::view(result, 0, xt::all()) = anchor;
 
     // Each staged batch is already a contiguous block of rows, so it lands in one assignment
@@ -144,7 +144,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         if (post_seam_count == 0) {
             return {kinds::k_noop, std::nullopt, std::nullopt};
         }
-        staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
+        staged_batches_.push_back(accumulator_tail_to_matrix(batch, 1));
         last_waypoint_ = batch.at(batch.size() - 1);
         return {kinds::k_staged_again, std::nullopt, std::nullopt};
     }
@@ -209,7 +209,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // Staging instead of pivoting, so the candidate is discarded and its waypoints along
     // with it; they will arrive again by way of `staged_batches_` at the next rebase.
     waypoints_.truncate(committed_waypoints);
-    staged_batches_.push_back(accumulator_tail_to_xarray(batch, 1));
+    staged_batches_.push_back(accumulator_tail_to_matrix(batch, 1));
     last_waypoint_ = batch.at(batch.size() - 1);
 
     // Both stage conditions can hold at once. Report lateness in that case, because it is the

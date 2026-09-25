@@ -22,6 +22,7 @@
 #include <viam/trajex/types/arc_operations.hpp>
 #include <viam/trajex/types/arc_velocity.hpp>
 #include <viam/trajex/types/epsilon.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg {
 
@@ -50,9 +51,7 @@ struct switching_point_cache {
 };
 
 // Joint velocity limit curve (Kunz & Stilman Eq. 36): min_i q_dot_max(i) / |q'(i)|.
-[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xt::xarray<double>& q_prime,
-                                                        const xt::xarray<double>& q_dot_max,
-                                                        class epsilon epsilon) {
+[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xvector<>& q_prime, const xvector<>& q_dot_max, class epsilon epsilon) {
     arc_velocity s_dot_max_vel{std::numeric_limits<double>::infinity()};
     for (size_t i = 0; i < q_prime.size(); ++i) {
         if (std::abs(q_prime(i)) < epsilon) {
@@ -65,8 +64,8 @@ struct switching_point_cache {
 
 // TCP velocity limit: v_TCP / ||J_v(q)*f'(s)||.
 // Returns +inf at a singularity (||J*f'|| < eps) or NaN Jacobian (non-constraining).
-arc_velocity compute_tcp_velocity_limit(const xt::xarray<double>& q,
-                                        const xt::xarray<double>& q_prime,
+arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
+                                        const xvector<>& q_prime,
                                         const trajectory::tcp_limits& tcp,
                                         class epsilon epsilon) {
     const auto J = tcp.linear_jacobian(q);
@@ -100,10 +99,10 @@ arc_velocity compute_tcp_velocity_limit(const xt::xarray<double>& q,
 // Two constraints apply: centripetal acceleration from path curvature (eq 31) and
 // direct velocity limits (eq 36). Returns both so caller can take the minimum.
 // See Kunz & Stilman equations 31 and 36.
-[[gnu::pure]] trajectory::velocity_limits compute_velocity_limits(const xt::xarray<double>& q_prime,
-                                                                  const xt::xarray<double>& q_double_prime,
-                                                                  const xt::xarray<double>& q_dot_max,
-                                                                  const xt::xarray<double>& q_ddot_max,
+[[gnu::pure]] trajectory::velocity_limits compute_velocity_limits(const xvector<>& q_prime,
+                                                                  const xvector<>& q_double_prime,
+                                                                  const xvector<>& q_dot_max,
+                                                                  const xvector<>& q_ddot_max,
                                                                   class epsilon epsilon) {
     // Compute the path velocity limit imposed by joint acceleration constraints (equation 31).
     // This is the acceleration limit curve in the phase plane. The derivation in the paper
@@ -179,9 +178,9 @@ struct velocity_limits_with_components {
 // Computes the velocity limits plus their joint and TCP components. A caller that also needs the
 // limit-curve slope hands the components to compute_velocity_limit_derivative_with_tcp instead of
 // re-evaluating the Jacobian there to re-decide which curve is active.
-[[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xt::xarray<double>& q_prime,
-                                                                                     const xt::xarray<double>& q_double_prime,
-                                                                                     const xt::xarray<double>& q,
+[[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xvector<>& q_prime,
+                                                                                     const xvector<>& q_double_prime,
+                                                                                     const xvector<>& q,
                                                                                      const trajectory::options& opt) {
     const auto base = compute_velocity_limits(q_prime, q_double_prime, opt.max_velocity, opt.max_acceleration, opt.epsilon);
     const arc_velocity joint = base.s_dot_max_vel;
@@ -195,9 +194,9 @@ struct velocity_limits_with_components {
 // Drop-in for compute_velocity_limits at call sites that have q available. Folds TCP into
 // s_dot_max_vel only; s_dot_max_acc is untouched. The joint velocity/acceleration limits and
 // epsilon are read from opt.
-[[nodiscard]] trajectory::velocity_limits compute_velocity_limits_with_tcp(const xt::xarray<double>& q_prime,
-                                                                           const xt::xarray<double>& q_double_prime,
-                                                                           const xt::xarray<double>& q,
+[[nodiscard]] trajectory::velocity_limits compute_velocity_limits_with_tcp(const xvector<>& q_prime,
+                                                                           const xvector<>& q_double_prime,
+                                                                           const xvector<>& q,
                                                                            const trajectory::options& opt) {
     const auto limits = compute_velocity_limits_and_components(q_prime, q_double_prime, q, opt);
     return {limits.s_dot_max_acc, limits.s_dot_max_vel};
@@ -207,8 +206,8 @@ struct velocity_limits_with_components {
 // cursor.configuration() materializes a fresh array and the joint-only path never reads it, so
 // the configuration is evaluated only when a TCP limit is set. Call sites whose configuration
 // comes from a segment rather than a cursor use the q-taking overloads above.
-[[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xt::xarray<double>& q_prime,
-                                                                                     const xt::xarray<double>& q_double_prime,
+[[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xvector<>& q_prime,
+                                                                                     const xvector<>& q_double_prime,
                                                                                      const path::cursor& cursor,
                                                                                      const trajectory::options& opt) {
     if (!opt.tcp.has_value()) {
@@ -218,8 +217,8 @@ struct velocity_limits_with_components {
     return compute_velocity_limits_and_components(q_prime, q_double_prime, cursor.configuration(), opt);
 }
 
-[[nodiscard]] trajectory::velocity_limits compute_velocity_limits_with_tcp(const xt::xarray<double>& q_prime,
-                                                                           const xt::xarray<double>& q_double_prime,
+[[nodiscard]] trajectory::velocity_limits compute_velocity_limits_with_tcp(const xvector<>& q_prime,
+                                                                           const xvector<>& q_double_prime,
                                                                            const path::cursor& cursor,
                                                                            const trajectory::options& opt) {
     const auto limits = compute_velocity_limits_and_components(q_prime, q_double_prime, cursor, opt);
@@ -230,11 +229,8 @@ struct velocity_limits_with_components {
 // bounds are well-defined and continuous above the limit curve, so this is safe to call at any
 // phase plane position. Used by the backward integration bisection solve, where evaluation above
 // the limit curve is expected during bracket probing.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(const xt::xarray<double>& q_prime,
-                                                                                    const xt::xarray<double>& q_double_prime,
-                                                                                    arc_velocity s_dot,
-                                                                                    const xt::xarray<double>& q_ddot_max,
-                                                                                    class epsilon epsilon) {
+[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(
+    const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
     arc_acceleration s_ddot_min{-std::numeric_limits<double>::infinity()};
     arc_acceleration s_ddot_max{std::numeric_limits<double>::infinity()};
 
@@ -268,11 +264,8 @@ struct velocity_limits_with_components {
 // Computes the feasible range of path acceleration (s_ddot) given current path velocity (s_dot)
 // and joint acceleration limits. Throws if the bounds are infeasible (above the limit curve).
 // See Kunz & Stilman equations 22-23.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds(const xt::xarray<double>& q_prime,
-                                                                          const xt::xarray<double>& q_double_prime,
-                                                                          arc_velocity s_dot,
-                                                                          const xt::xarray<double>& q_ddot_max,
-                                                                          class epsilon epsilon) {
+[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds(
+    const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
     auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds_unchecked(q_prime, q_double_prime, s_dot, q_ddot_max, epsilon);
 
     if (epsilon.wrap(s_ddot_min) > epsilon.wrap(s_ddot_max)) [[unlikely]] {
@@ -292,9 +285,9 @@ struct velocity_limits_with_components {
 // This is d/ds s_dot_max_vel(s), which tells us the slope of the velocity limit curve.
 // Used in Algorithm Step 3 to determine if we can leave the curve or must search for switching points.
 // See Kunz & Stilman equation 37.
-[[gnu::pure]] auto compute_velocity_limit_derivative(const xt::xarray<double>& q_prime,
-                                                     const xt::xarray<double>& q_double_prime,
-                                                     const xt::xarray<double>& q_dot_max,
+[[gnu::pure]] auto compute_velocity_limit_derivative(const xvector<>& q_prime,
+                                                     const xvector<>& q_double_prime,
+                                                     const xvector<>& q_dot_max,
                                                      class epsilon epsilon) {
     // Find which joint is the limiting constraint (has minimum q_dot_max / |q'|)
     double min_limit = std::numeric_limits<double>::infinity();
@@ -345,8 +338,8 @@ struct velocity_limits_with_components {
 // (`Extension 1`, see README.md) where TCP is the binding constraint. joint and tcp are the
 // component velocity limits already computed at this cursor by compute_velocity_limits_and_components;
 // passing them in lets this pick the active curve without re-evaluating the Jacobian.
-phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xt::xarray<double>& q_prime,
-                                                             const xt::xarray<double>& q_double_prime,
+phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_prime,
+                                                             const xvector<>& q_double_prime,
                                                              path::cursor cursor,
                                                              const trajectory::options& opt,
                                                              arc_velocity joint,
@@ -1233,16 +1226,16 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
     on_event(traj, std::move(event));
 }
 
-trajectory::tcp_limits trajectory::tcp_limits::from(const xt::xarray<double>& model_table, double max_linear_velocity) {
+trajectory::tcp_limits trajectory::tcp_limits::from(const xmatrix<>& model_table, double max_linear_velocity) {
     // One chain, shared by both callbacks, so the limit value and its slope cannot describe
     // different kinematics.
     auto chain = std::make_shared<jacobian::kinematic_chain>(jacobian::kinematic_chain::from(model_table));
 
     return tcp_limits{
         .max_linear_velocity = max_linear_velocity,
-        .linear_jacobian = [chain](const xt::xarray<double>& q) -> xt::xarray<double> { return chain->linear_jacobian(q); },
+        .linear_jacobian = [chain](const xvector<>& q) -> xmatrix<> { return chain->linear_jacobian(q); },
         .linear_velocity_gain =
-            [chain](const xt::xarray<double>& q, const xt::xarray<double>& q_prime, const xt::xarray<double>& q_double_prime) {
+            [chain](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 return chain->linear_velocity_gain_at(q, q_prime, q_double_prime);
             },
     };

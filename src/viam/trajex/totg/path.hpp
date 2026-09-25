@@ -9,14 +9,9 @@
 #include <variant>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/arc_length.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg {
 
@@ -32,7 +27,7 @@ namespace viam::trajex::totg {
 /// Example usage:
 /// @code
 ///   // Create path from waypoints
-///   xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+///   xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
 ///   path p = path::create(waypoints);
 ///
 ///   // Query path at specific arc length
@@ -69,7 +64,7 @@ class path {
             /// @param end Ending configuration
             /// @throws std::invalid_argument if start == end
             ///
-            linear(xt::xarray<double> start, const xt::xarray<double>& end);
+            linear(xvector<> start, const xvector<>& end);
 
             ///
             /// Constructs linear segment from precomputed components.
@@ -82,11 +77,11 @@ class path {
             /// @param length Arc length (must be positive)
             /// @throws std::invalid_argument if length is not positive
             ///
-            linear(xt::xarray<double> start, xt::xarray<double> unit_direction, arc_length length);
+            linear(xvector<> start, xvector<> unit_direction, arc_length length);
 
-            xt::xarray<double> start;           ///< Starting configuration
-            xt::xarray<double> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
-            arc_length length;                  ///< Precomputed length (norm of end-start)
+            xvector<> start;           ///< Starting configuration
+            xvector<> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
+            arc_length length;         ///< Precomputed length (norm of end-start)
         };
 
         ///
@@ -103,13 +98,13 @@ class path {
             /// @param angle_rads Total angle swept by arc (radians)
             /// @throws std::invalid_argument if x,y are not orthonormal
             ///
-            circular(xt::xarray<double> center, xt::xarray<double> x, xt::xarray<double> y, double radius, double angle_rads);
+            circular(xvector<> center, xvector<> x, xvector<> y, double radius, double angle_rads);
 
-            xt::xarray<double> center;  ///< Center of arc in configuration space
-            xt::xarray<double> x;       ///< First basis vector (defines rotation plane)
-            xt::xarray<double> y;       ///< Second basis vector (perpendicular to x)
-            double radius;              ///< Radius of the circular arc (units: configuration space distance)
-            double angle_rads;          ///< Total angle swept by arc (units: radians)
+            xvector<> center;   ///< Center of arc in configuration space
+            xvector<> x;        ///< First basis vector (defines rotation plane)
+            xvector<> y;        ///< Second basis vector (perpendicular to x)
+            double radius;      ///< Radius of the circular arc (units: configuration space distance)
+            double angle_rads;  ///< Total angle swept by arc (units: radians)
         };
 
         ///
@@ -186,7 +181,7 @@ class path {
             /// @param s Global arc length on path
             /// @return Configuration vector at arc length s
             ///
-            xt::xarray<double> configuration(arc_length s) const;
+            xvector<> configuration(arc_length s) const;
 
             ///
             /// Gets tangent vector at global arc length.
@@ -194,7 +189,7 @@ class path {
             /// @param s Global arc length on path
             /// @return Unit tangent vector at arc length s
             ///
-            xt::xarray<double> tangent(arc_length s) const;
+            xvector<> tangent(arc_length s) const;
 
             ///
             /// Gets curvature vector at global arc length.
@@ -202,7 +197,7 @@ class path {
             /// @param s Global arc length on path
             /// @return Curvature vector at arc length s
             ///
-            xt::xarray<double> curvature(arc_length s) const;
+            xvector<> curvature(arc_length s) const;
 
             ///
             /// Writes configuration at global arc length into caller-provided storage.
@@ -407,7 +402,7 @@ class path {
     /// @param opts Path creation options (coalescing and blending parameters)
     /// @return Constructed path with segments
     ///
-    [[nodiscard]] static path create(const xt::xarray<double>& waypoints, const options& opts = options{});
+    [[nodiscard]] static path create(const xmatrix<>& waypoints, const options& opts = options{});
 
     ///
     /// Gets total arc length of path.
@@ -484,7 +479,7 @@ class path {
     /// @param s Arc length along path
     /// @return Configuration vector at s
     ///
-    xt::xarray<double> configuration(arc_length s) const;
+    xvector<> configuration(arc_length s) const;
 
     ///
     /// Gets tangent at arc length.
@@ -492,7 +487,7 @@ class path {
     /// @param s Arc length along path
     /// @return Unit tangent vector at s
     ///
-    xt::xarray<double> tangent(arc_length s) const;
+    xvector<> tangent(arc_length s) const;
 
     ///
     /// Gets curvature at arc length.
@@ -500,7 +495,7 @@ class path {
     /// @param s Arc length along path
     /// @return Curvature vector at s
     ///
-    xt::xarray<double> curvature(arc_length s) const;
+    xvector<> curvature(arc_length s) const;
 
     ///
     /// Cursor for efficient sequential traversal.
@@ -713,7 +708,7 @@ class path::cursor {
     /// @return Configuration vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> configuration() const;
+    xvector<> configuration() const;
 
     ///
     /// Gets tangent at current position.
@@ -721,7 +716,7 @@ class path::cursor {
     /// @return Unit tangent vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> tangent() const;
+    xvector<> tangent() const;
 
     ///
     /// Gets curvature at current position.
@@ -729,7 +724,7 @@ class path::cursor {
     /// @return Curvature vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> curvature() const;
+    xvector<> curvature() const;
 
     ///
     /// Writes configuration at current position into caller-provided storage.
@@ -909,7 +904,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xt::xarray<double>& configuration() const;
+    const xvector<>& configuration() const;
 
     ///
     /// Gets tangent at current position, computing it if not already cached.
@@ -917,7 +912,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xt::xarray<double>& tangent() const;
+    const xvector<>& tangent() const;
 
     ///
     /// Gets curvature at current position, computing it if not already cached.
@@ -925,7 +920,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xt::xarray<double>& curvature() const;
+    const xvector<>& curvature() const;
 
     ///
     /// Compares cursor with end sentinel.
@@ -963,7 +958,7 @@ class path::cursor::rich : private path::cursor {
     // Fills `storage` if `bit` is not already set, then sets it. A throwing fill leaves the
     // bit clear, so a query that failed is not later mistaken for one that succeeded.
     template <typename Fill>
-    const xt::xarray<double>& cached_(xt::xarray<double>& storage, std::size_t bit, Fill&& fill) const {
+    const xvector<>& cached_(xvector<>& storage, std::size_t bit, Fill&& fill) const {
         if (!cached_bits_.test(bit)) {
             std::forward<Fill>(fill)(std::span<double>{storage.data(), storage.size()});
             cached_bits_.set(bit);
@@ -976,9 +971,9 @@ class path::cursor::rich : private path::cursor {
     // never released while the cursor lives, which is what lets the accessors return
     // references at all -- an optional<> here would free and reallocate on every
     // invalidation, reintroducing exactly the cost this type exists to remove.
-    mutable xt::xarray<double> configuration_;
-    mutable xt::xarray<double> tangent_;
-    mutable xt::xarray<double> curvature_;
+    mutable xvector<> configuration_;
+    mutable xvector<> tangent_;
+    mutable xvector<> curvature_;
     mutable std::bitset<k_cached_bit_count_> cached_bits_;
 };
 
@@ -999,9 +994,9 @@ concept cursor_like = requires(C& c, const C& cc, arc_length s) {
     { cc.end() } -> std::same_as<std::default_sentinel_t>;
     { c.seek(s) } -> std::same_as<C&>;
     { c.seek_by(s) } -> std::same_as<C&>;
-    { cc.configuration() } -> std::convertible_to<const xt::xarray<double>&>;
-    { cc.tangent() } -> std::convertible_to<const xt::xarray<double>&>;
-    { cc.curvature() } -> std::convertible_to<const xt::xarray<double>&>;
+    { cc.configuration() } -> std::convertible_to<const xvector<>&>;
+    { cc.tangent() } -> std::convertible_to<const xvector<>&>;
+    { cc.curvature() } -> std::convertible_to<const xvector<>&>;
     { cc == std::default_sentinel } -> std::same_as<bool>;
 };
 

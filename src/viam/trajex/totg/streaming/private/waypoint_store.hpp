@@ -26,15 +26,14 @@
 #include <stdexcept>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
+#if __has_include(<xtensor/views/xview.hpp>)
 #include <xtensor/views/xview.hpp>
 #else
-#include <xtensor/xarray.hpp>
 #include <xtensor/xview.hpp>
 #endif
 
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg::streaming {
 
@@ -165,12 +164,12 @@ class waypoint_store {
     }
 
     // The final stored row, copied out so it survives later mutation.
-    xt::xarray<double> last() const {
+    xvector<> last() const {
         if (empty()) {
             throw std::out_of_range("waypoint_store::last: store is empty");
         }
         const auto index = size_ - 1;
-        return xt::xarray<double>{xt::view(chunk_at_(index / k_chunk_rows), index % k_chunk_rows, xt::all())};
+        return xvector<>{xt::view(chunk_at_(index / k_chunk_rows), index % k_chunk_rows, xt::all())};
     }
 
    private:
@@ -179,12 +178,12 @@ class waypoint_store {
     // move wastes at most one chunk's worth of unused rows.
     static constexpr std::size_t k_chunk_rows = 1024;
 
-    using chunk_list = std::list<xt::xarray<double>>;
+    using chunk_list = std::list<xmatrix<>>;
 
     // Every chunk but the one currently being filled is exactly full, so a row's position
     // follows from its index alone and chunks need carry no fill count of their own.
     chunk_list::iterator allocate_chunk_() {
-        chunks_.emplace_back(xt::xarray<double>::from_shape(std::vector<std::size_t>{k_chunk_rows, dof_}));
+        chunks_.emplace_back(xmatrix<>::from_shape(std::vector<std::size_t>{k_chunk_rows, dof_}));
         return std::prev(chunks_.end());
     }
 
@@ -195,14 +194,14 @@ class waypoint_store {
         return std::next(chunks_.begin(), static_cast<chunk_list::difference_type>(index));
     }
 
-    const xt::xarray<double>& chunk_at_(std::size_t index) const {
+    const xmatrix<>& chunk_at_(std::size_t index) const {
         return *std::next(chunks_.begin(), static_cast<chunk_list::difference_type>(index));
     }
 
     // Grown one waypoint at a time as rows are written, rather than rebuilt when read,
     // because rebuilding costs a view per stored waypoint and the session reads it on every
     // extend. The views stay valid because chunk arrays are never reallocated or moved.
-    void extend_accumulator_(const xt::xarray<double>& chunk, std::size_t offset) {
+    void extend_accumulator_(const xmatrix<>& chunk, std::size_t offset) {
         auto row = xt::view(chunk, offset, xt::all());
         if (accumulator_) {
             accumulator_->add_waypoint(row);

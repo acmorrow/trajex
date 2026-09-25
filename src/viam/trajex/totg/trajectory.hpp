@@ -6,18 +6,13 @@
 #include <memory>
 #include <optional>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/trajex/jacobian/jacobian.hpp>
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_acceleration.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/arc_velocity.hpp>
 #include <viam/trajex/types/epsilon.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg {
 
@@ -64,10 +59,10 @@ class trajectory {
     /// Sample from a trajectory.
     ///
     struct sample {
-        seconds time;                      ///< Sample time
-        xt::xarray<double> configuration;  ///< Configuration at sample time
-        xt::xarray<double> velocity;       ///< Velocity at sample time
-        xt::xarray<double> acceleration;   ///< Acceleration at sample time
+        seconds time;             ///< Sample time
+        xvector<> configuration;  ///< Configuration at sample time
+        xvector<> velocity;       ///< Velocity at sample time
+        xvector<> acceleration;   ///< Acceleration at sample time
     };
 
     // Forward declaration for observer interface.
@@ -98,11 +93,11 @@ class trajectory {
     ///
     struct tcp_limits {
         /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
-        using linear_jacobian_fn = std::function<xt::xarray<double>(const xt::xarray<double>&)>;
+        using linear_jacobian_fn = std::function<xmatrix<>(const xvector<>&)>;
 
         /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
-        using linear_velocity_gain_fn = std::function<jacobian::kinematic_chain::linear_velocity_gain(
-            const xt::xarray<double>&, const xt::xarray<double>&, const xt::xarray<double>&)>;
+        using linear_velocity_gain_fn =
+            std::function<jacobian::kinematic_chain::linear_velocity_gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
 
         ///
         /// Builds both callbacks from one kinematic chain parsed from a model table.
@@ -113,7 +108,7 @@ class trajectory {
         /// @return A limits object whose callbacks share a single chain
         /// @throws std::invalid_argument on a malformed model table
         ///
-        [[nodiscard]] static tcp_limits from(const xt::xarray<double>& model_table, double max_linear_velocity);
+        [[nodiscard]] static tcp_limits from(const xmatrix<>& model_table, double max_linear_velocity);
 
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
@@ -129,12 +124,12 @@ class trajectory {
         ///
         /// Maximum velocity per DOF (units match configuration space).
         ///
-        xt::xarray<double> max_velocity;
+        xvector<> max_velocity;
 
         ///
         /// Maximum acceleration per DOF (units match configuration space).
         ///
-        xt::xarray<double> max_acceleration;
+        xvector<> max_acceleration;
 
         ///
         /// Default integration time step for phase plane integration.

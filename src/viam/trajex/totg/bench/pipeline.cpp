@@ -20,11 +20,9 @@
 #include <utility>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
+#if __has_include(<xtensor/views/xview.hpp>)
 #include <xtensor/views/xview.hpp>
 #else
-#include <xtensor/xarray.hpp>
 #include <xtensor/xview.hpp>
 #endif
 
@@ -37,9 +35,12 @@
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/hertz.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace {
 
+using viam::trajex::xmatrix;
+using viam::trajex::xvector;
 using viam::trajex::totg::parse_replay_record;
 using viam::trajex::totg::path;
 using viam::trajex::totg::planner_base;
@@ -79,7 +80,7 @@ constexpr std::int64_t k_store_batches[] = {1, 8, 64, 256};
 
 struct record {
     planner_base::config config;
-    xt::xarray<double> waypoints;
+    xmatrix<> waypoints;
 };
 
 // Parsed on first request and cached. Registration asks each record for its waypoint count,
@@ -112,11 +113,11 @@ std::vector<std::int64_t> sizes_for(std::span<const std::int64_t> candidates, st
     return sizes;
 }
 
-xt::xarray<double> slice_of(const xt::xarray<double>& waypoints, std::size_t first, std::size_t last) {
-    return xt::xarray<double>{xt::view(waypoints, xt::range(first, last), xt::all())};
+xmatrix<> slice_of(const xmatrix<>& waypoints, std::size_t first, std::size_t last) {
+    return xmatrix<>{xt::view(waypoints, xt::range(first, last), xt::all())};
 }
 
-xt::xarray<double> prefix_of(const xt::xarray<double>& waypoints, std::size_t count) {
+xmatrix<> prefix_of(const xmatrix<>& waypoints, std::size_t count) {
     return slice_of(waypoints, 0, count);
 }
 
@@ -165,7 +166,7 @@ void bm_waypoint_store(benchmark::State& state, const std::string& filename) {
     const auto batch_size = static_cast<std::size_t>(state.range(1));
     const auto waypoints = prefix_of(source.waypoints, total);
 
-    std::vector<xt::xarray<double>> storage;
+    std::vector<xmatrix<>> storage;
     for (std::size_t first = 0; first + 1 < total; first += batch_size) {
         storage.push_back(slice_of(waypoints, first, std::min(total, first + batch_size + 1)));
     }
@@ -261,11 +262,10 @@ void bm_sample_collect(benchmark::State& state, const std::string& filename) {
     // The destinations are built once. Allocating three arrays of this size per iteration
     // would measure the allocation rather than the row writes, and the row writes are what
     // scales with the length of the trajectory.
-    using shape_t = typename xt::xarray<double>::shape_type;
-    xt::xarray<double> times(shape_t{n_samples});
-    xt::xarray<double> configurations(shape_t{n_samples, n_dof});
-    xt::xarray<double> velocities(shape_t{n_samples, n_dof});
-    xt::xarray<double> accelerations(shape_t{n_samples, n_dof});
+    xvector<> times(xvector<>::shape_type{n_samples});
+    xmatrix<> configurations(xmatrix<>::shape_type{n_samples, n_dof});
+    xmatrix<> velocities(xmatrix<>::shape_type{n_samples, n_dof});
+    xmatrix<> accelerations(xmatrix<>::shape_type{n_samples, n_dof});
 
     for (auto unused : state) {
         benchmark::DoNotOptimize(unused);

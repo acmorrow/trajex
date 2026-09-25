@@ -67,7 +67,7 @@ double path::options::min_blend_curvature() const noexcept {
     return min_blend_curvature_;
 }
 
-path::segment::linear::linear(xt::xarray<double> start, const xt::xarray<double>& end) : start{std::move(start)}, length{0.0} {
+path::segment::linear::linear(xvector<> start, const xvector<>& end) : start{std::move(start)}, length{0.0} {
     const auto diff = end - this->start;
     const double norm = xt::norm_l2(diff)();
 
@@ -83,14 +83,14 @@ path::segment::linear::linear(xt::xarray<double> start, const xt::xarray<double>
     this->length = arc_length{norm};
 }
 
-path::segment::linear::linear(xt::xarray<double> start, xt::xarray<double> unit_direction, arc_length length)
+path::segment::linear::linear(xvector<> start, xvector<> unit_direction, arc_length length)
     : start{std::move(start)}, unit_direction{std::move(unit_direction)}, length{length} {
     if (static_cast<double>(length) <= 0.0) {
         throw std::invalid_argument{"Linear segment: length must be positive"};
     }
 }
 
-path::segment::circular::circular(xt::xarray<double> center, xt::xarray<double> x, xt::xarray<double> y, double radius, double angle_rads)
+path::segment::circular::circular(xvector<> center, xvector<> x, xvector<> y, double radius, double angle_rads)
     : center{std::move(center)}, x{std::move(x)}, y{std::move(y)}, radius{radius}, angle_rads{angle_rads} {
     const double x_norm = xt::norm_l2(this->x)();
     const double y_norm = xt::norm_l2(this->y)();
@@ -259,20 +259,20 @@ void path::segment::view::curvature(arc_length s, std::span<double> out) const {
         seg_.get().data_);
 }
 
-xt::xarray<double> path::segment::view::configuration(arc_length s) const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{dof_()});
+xvector<> path::segment::view::configuration(arc_length s) const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{dof_()});
     configuration(s, std::span<double>{result.data(), result.size()});
     return result;
 }
 
-xt::xarray<double> path::segment::view::tangent(arc_length s) const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{dof_()});
+xvector<> path::segment::view::tangent(arc_length s) const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{dof_()});
     tangent(s, std::span<double>{result.data(), result.size()});
     return result;
 }
 
-xt::xarray<double> path::segment::view::curvature(arc_length s) const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{dof_()});
+xvector<> path::segment::view::curvature(arc_length s) const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{dof_()});
     curvature(s, std::span<double>{result.data(), result.size()});
     return result;
 }
@@ -370,9 +370,8 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     // Kunz & Stilman Section IV. The blend arc is tangent to both the incoming and
     // outgoing segments, trimming equal distances from each side. The blend keeps
     // the path within max_blend_deviation of the original corner waypoint.
-    const auto try_create_blend = [&opts](const xt::xarray<double>& current_pos,
-                                          const xt::xarray<double>& corner,
-                                          const xt::xarray<double>& next_waypoint) -> std::optional<blend_geometry> {
+    const auto try_create_blend =
+        [&opts](const xvector<>& current_pos, const xvector<>& corner, const xvector<>& next_waypoint) -> std::optional<blend_geometry> {
         if (opts.max_blend_deviation() <= 0.0) {
             return std::nullopt;
         }
@@ -525,7 +524,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     // configuration copy (not just an iterator) because after creating a circular blend, the
     // current position becomes the blend exit point, which is a computed position between
     // waypoints rather than one of the original waypoints in the accumulator.
-    xt::xarray<double> current_position = *segment_start;
+    xvector<> current_position = *segment_start;
 
     for (auto locus = std::next(waypoints_range.begin()); locus != waypoints_range.end(); ++locus) {
         auto next = std::next(locus);
@@ -598,7 +597,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     return path{std::move(segments), waypoints.dof(), cumulative_length};
 }
 
-path path::create(const xt::xarray<double>& waypoints, const options& opts) {
+path path::create(const xmatrix<>& waypoints, const options& opts) {
     return create(waypoint_accumulator{waypoints}, opts);
 }
 
@@ -698,15 +697,15 @@ path::segment::view path::operator()(arc_length s) const {
     return {it->seg, segment_start, segment_end};
 }
 
-xt::xarray<double> path::configuration(arc_length s) const {
+xvector<> path::configuration(arc_length s) const {
     return (*this)(s).configuration(s);
 }
 
-xt::xarray<double> path::tangent(arc_length s) const {
+xvector<> path::tangent(arc_length s) const {
     return (*this)(s).tangent(s);
 }
 
-xt::xarray<double> path::curvature(arc_length s) const {
+xvector<> path::curvature(arc_length s) const {
     return (*this)(s).curvature(s);
 }
 
@@ -801,20 +800,20 @@ void path::cursor::curvature(std::span<double> out) const {
     view.curvature(position_, out);
 }
 
-xt::xarray<double> path::cursor::configuration() const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{path_->dof()});
+xvector<> path::cursor::configuration() const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{path_->dof()});
     configuration(std::span<double>{result.data(), result.size()});
     return result;
 }
 
-xt::xarray<double> path::cursor::tangent() const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{path_->dof()});
+xvector<> path::cursor::tangent() const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{path_->dof()});
     tangent(std::span<double>{result.data(), result.size()});
     return result;
 }
 
-xt::xarray<double> path::cursor::curvature() const {
-    auto result = xt::xarray<double>::from_shape(std::array<std::size_t, 1>{path_->dof()});
+xvector<> path::cursor::curvature() const {
+    auto result = xvector<>::from_shape(std::array<std::size_t, 1>{path_->dof()});
     curvature(std::span<double>{result.data(), result.size()});
     return result;
 }
@@ -828,9 +827,9 @@ path::cursor::rich::rich(cursor c) : cursor{std::move(c)} {
     // a path whose dof is zero would still be well-formed; the accessors would fill nothing.
     const std::array<std::size_t, 1> shape{this->path().dof()};
 
-    configuration_ = xt::xarray<double>::from_shape(shape);
-    tangent_ = xt::xarray<double>::from_shape(shape);
-    curvature_ = xt::xarray<double>::from_shape(shape);
+    configuration_ = xvector<>::from_shape(shape);
+    tangent_ = xvector<>::from_shape(shape);
+    curvature_ = xvector<>::from_shape(shape);
 }
 
 path::cursor path::cursor::rich::plain() const {
@@ -853,15 +852,15 @@ path::cursor::rich& path::cursor::rich::seek_by(arc_length delta) noexcept {
     return *this;
 }
 
-const xt::xarray<double>& path::cursor::rich::configuration() const {
+const xvector<>& path::cursor::rich::configuration() const {
     return cached_(configuration_, k_configuration_bit_, [this](std::span<double> out) { cursor::configuration(out); });
 }
 
-const xt::xarray<double>& path::cursor::rich::tangent() const {
+const xvector<>& path::cursor::rich::tangent() const {
     return cached_(tangent_, k_tangent_bit_, [this](std::span<double> out) { cursor::tangent(out); });
 }
 
-const xt::xarray<double>& path::cursor::rich::curvature() const {
+const xvector<>& path::cursor::rich::curvature() const {
     return cached_(curvature_, k_curvature_bit_, [this](std::span<double> out) { cursor::curvature(out); });
 }
 

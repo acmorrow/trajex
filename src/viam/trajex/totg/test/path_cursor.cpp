@@ -9,6 +9,7 @@
 
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_length.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #if __has_include(<xtensor/reducers/xnorm.hpp>)
 #include <xtensor/reducers/xnorm.hpp>
@@ -18,12 +19,15 @@
 
 #include <boost/test/unit_test.hpp>
 
+using viam::trajex::xmatrix;
+using viam::trajex::xvector;
+
 BOOST_AUTO_TEST_SUITE(path_cursor_tests)
 
 BOOST_AUTO_TEST_CASE(construct_and_get_path_reference) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
     const path p = path::create(waypoints);
 
     const path::cursor cursor = p.create_cursor();
@@ -37,7 +41,7 @@ BOOST_AUTO_TEST_CASE(construct_with_minimal_path) {
     using namespace viam::trajex::totg;
 
     // Create minimal valid path (2 distinct waypoints)
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     // Should be able to construct cursor with minimal path
@@ -51,7 +55,7 @@ BOOST_AUTO_TEST_CASE(initial_position_at_start) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
     const path p = path::create(waypoints);
 
     const path::cursor cursor = p.create_cursor();
@@ -65,7 +69,7 @@ BOOST_AUTO_TEST_CASE(forward_integration_small_steps) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -88,7 +92,7 @@ BOOST_AUTO_TEST_CASE(forward_integration_to_end) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -103,7 +107,7 @@ BOOST_AUTO_TEST_CASE(backward_integration_small_steps) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -130,7 +134,7 @@ BOOST_AUTO_TEST_CASE(backward_integration_to_start) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -147,7 +151,7 @@ BOOST_AUTO_TEST_CASE(bidirectional_integration) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -171,7 +175,7 @@ BOOST_AUTO_TEST_CASE(reset_to_start_and_end) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -191,7 +195,7 @@ BOOST_AUTO_TEST_CASE(reset_to_specific_position) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -213,7 +217,7 @@ BOOST_AUTO_TEST_CASE(reset_to_specific_position) {
 BOOST_AUTO_TEST_CASE(configuration_query_at_positions) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -240,7 +244,7 @@ BOOST_AUTO_TEST_CASE(tangent_query) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -259,7 +263,7 @@ BOOST_AUTO_TEST_CASE(tangent_query) {
 BOOST_AUTO_TEST_CASE(curvature_query) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     const path::cursor cursor = p.create_cursor();
@@ -275,7 +279,7 @@ BOOST_AUTO_TEST_CASE(integration_across_multiple_segments) {
     using viam::trajex::arc_length;
 
     // Create path with circular blend
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
     path::options opts;
     opts.set_max_blend_deviation(0.1);
     const path p = path::create(waypoints, opts);
@@ -306,7 +310,7 @@ BOOST_AUTO_TEST_CASE(backward_integration_across_multiple_segments) {
     using viam::trajex::arc_length;
 
     // Create path with circular blend
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
     path::options opts;
     opts.set_max_blend_deviation(0.1);
     const path p = path::create(waypoints, opts);
@@ -330,7 +334,7 @@ BOOST_AUTO_TEST_CASE(hint_optimization_forward_sequential) {
     using viam::trajex::arc_length;
 
     // Create path with many segments
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}, {4.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}, {4.0, 0.0}};
     const path p = path::create(waypoints);
 
     path::cursor cursor = p.create_cursor();
@@ -351,7 +355,7 @@ BOOST_AUTO_TEST_CASE(advance_by_and_sentinel_detection) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
     path::cursor cursor = p.create_cursor();
 
@@ -375,7 +379,7 @@ BOOST_AUTO_TEST_CASE(advance_by_negative_and_start_clamping) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
     path::cursor cursor = p.create_cursor(p.length());  // Start at end
 
@@ -402,7 +406,7 @@ BOOST_AUTO_TEST_CASE(seek_to_position_and_clamping) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
     path::cursor cursor = p.create_cursor();
 
@@ -424,7 +428,7 @@ BOOST_AUTO_TEST_CASE(create_cursor_at_various_positions) {
     using namespace viam::trajex::totg;
     using viam::trajex::arc_length;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}};
     const path p = path::create(waypoints);
 
     // Create at start (default)
@@ -457,7 +461,7 @@ BOOST_AUTO_TEST_CASE(large_jumps_across_many_segments) {
     using viam::trajex::arc_length;
 
     // Create path with many segments (12 segments: 6 linear + 6 circular blends)
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}, {3.0, 1.0}, {3.0, 2.0}, {2.0, 2.0}, {1.0, 2.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}, {3.0, 0.0}, {3.0, 1.0}, {3.0, 2.0}, {2.0, 2.0}, {1.0, 2.0}};
     path::options opts;
     opts.set_max_blend_deviation(0.1);
     const path p = path::create(waypoints, opts);
@@ -517,7 +521,7 @@ BOOST_AUTO_TEST_CASE(dereference_operator_returns_segment_view) {
     using viam::trajex::arc_length;
 
     // Create path with circular blend to have different segment types
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
     path::options opts;
     opts.set_max_blend_deviation(0.1);
     const path p = path::create(waypoints, opts);
@@ -567,7 +571,7 @@ BOOST_AUTO_TEST_CASE(cursor_at_boundary_advances_to_next_segment) {
     path::options opts;
     opts.set_max_deviation(0.0);  // No blending - hard corners
 
-    const xt::xarray<double> waypoints = {
+    const xmatrix<> waypoints = {
         {0.0, 0.0},  // Start
         {1.0, 0.0},  // First corner
         {1.0, 1.0},  // Second corner
@@ -620,7 +624,7 @@ BOOST_AUTO_TEST_CASE(segment_view_accepts_query_at_start) {
     path::options opts;
     opts.set_max_deviation(0.0);
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
 
     const path p = path::create(waypoints, opts);
     BOOST_REQUIRE_GE(p.size(), 2);
@@ -650,7 +654,7 @@ BOOST_AUTO_TEST_CASE(segment_view_accepts_query_at_end) {
     path::options opts;
     opts.set_max_deviation(0.0);
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
 
     const path p = path::create(waypoints, opts);
     BOOST_REQUIRE_GE(p.size(), 2);
@@ -681,7 +685,7 @@ BOOST_AUTO_TEST_CASE(adjacent_segments_differ_at_boundary) {
     opts.set_max_deviation(0.0);
 
     // Create path with a sharp corner to ensure geometric discontinuity
-    const xt::xarray<double> waypoints = {
+    const xmatrix<> waypoints = {
         {0.0, 0.0},  // Start - moving in +x direction
         {1.0, 0.0},  // Corner - 90 degree turn
         {1.0, 1.0}   // End - now moving in +y direction
@@ -732,7 +736,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_behavior_around_boundary) {
     path::options opts;
     opts.set_max_deviation(0.0);
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
 
     const path p = path::create(waypoints, opts);
     BOOST_REQUIRE_EQUAL(p.size(), 2);
@@ -792,7 +796,7 @@ BOOST_AUTO_TEST_CASE(safe_boundary_sampling_workflow) {
     path::options opts;
     opts.set_max_deviation(0.0);
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
 
     const path p = path::create(waypoints, opts);
 
@@ -835,7 +839,7 @@ BOOST_AUTO_TEST_CASE(cursor_boundary_behavior_with_circular_blends) {
     opts.set_max_deviation(0.1);  // Enable blending
 
     // Create path that will have blend
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}};
 
     const path p = path::create(waypoints, opts);
 
@@ -880,7 +884,7 @@ namespace {
 
 // The filling and value-returning accessors run the same arithmetic over the same inputs,
 // so anything short of bit equality means one of them has been reimplemented independently.
-void check_exactly_equal(const xt::xarray<double>& value, std::span<const double> filled) {
+void check_exactly_equal(const xvector<>& value, std::span<const double> filled) {
     BOOST_REQUIRE_EQUAL(value.size(), filled.size());
 
     for (std::size_t i = 0; i < filled.size(); ++i) {
@@ -890,7 +894,7 @@ void check_exactly_equal(const xt::xarray<double>& value, std::span<const double
 
 // Two linear runs joined by a circular blend, so both segment kinds get exercised.
 viam::trajex::totg::path make_blended_path() {
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
     return viam::trajex::totg::path::create(waypoints);
 }
 
@@ -1045,7 +1049,7 @@ BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
     // Seeking clears the validity bits but leaves the storage holding the old values, so a
     // reference taken before the move still reads the old position.
     r.seek(moved);
-    check_exactly_equal(xt::xarray<double>{configuration}, at_start);
+    check_exactly_equal(xvector<>{configuration}, at_start);
 
     // Asking again refills the same storage in place, at which point the reference taken
     // before the move begins reporting the new position. This is the documented hazard; it
@@ -1147,7 +1151,7 @@ BOOST_AUTO_TEST_CASE(rich_copy_has_independent_storage) {
     const auto& copy_configuration = copy.configuration();
 
     BOOST_CHECK(copy_configuration.data() != original_configuration.data());
-    check_exactly_equal(xt::xarray<double>{copy_configuration}, {original_configuration.data(), original_configuration.size()});
+    check_exactly_equal(xvector<>{copy_configuration}, {original_configuration.data(), original_configuration.size()});
 
     // Moving the copy must not disturb the original's cached values.
     copy.seek(fraction_of(p.length(), 0.05));

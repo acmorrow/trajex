@@ -7,8 +7,11 @@
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/arc_velocity.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #include <boost/test/unit_test.hpp>
+
+using viam::trajex::xmatrix;
 
 BOOST_AUTO_TEST_SUITE(uniform_sampler_tests)
 
@@ -91,7 +94,7 @@ BOOST_AUTO_TEST_CASE(no_duplicate_timestamps_at_end) {
     using viam::trajex::arc_velocity;
 
     // Create a simple path
-    const xt::xarray<double> waypoints = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
     path p = path::create(waypoints);
 
     // Create trajectory with explicit integration points to have precise control over duration.
@@ -171,7 +174,7 @@ viam::trajex::totg::trajectory build_unit_duration_trajectory() {
     using viam::trajex::arc_length;
     using viam::trajex::arc_velocity;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}};
     path p = path::create(waypoints);
 
     std::vector<trajectory::integration_point> points = {

@@ -11,18 +11,13 @@
 
 #include <boost/variant/get.hpp>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/sdk/log/logging.hpp>
 
 #include <viam/trajex/totg/tools/planner.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/totg/waypoint_utils.hpp>
 #include <viam/trajex/types/hertz.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #if defined(VIAM_TRAJEX_LEGACY_ENABLED)
 #include <Eigen/Dense>
@@ -89,7 +84,7 @@ double get_scalar_double(const mlmodel::named_tensor_views& inputs, std::string_
 // planner config can record it as serializable provenance for replay.
 struct parsed_tcp_limits {
     totg::trajectory::tcp_limits limits;
-    xt::xarray<double> model_table;
+    xmatrix<> model_table;
 };
 
 std::optional<parsed_tcp_limits> parse_tcp_limits(const mlmodel::named_tensor_views& inputs) {
@@ -109,7 +104,7 @@ std::optional<parsed_tcp_limits> parse_tcp_limits(const mlmodel::named_tensor_vi
         throw std::invalid_argument("kinematics_model_table must be 2-dimensional [n_joints, 10]");
     }
 
-    xt::xarray<double> table(table_view);
+    xmatrix<> table(table_view);
     return parsed_tcp_limits{
         .limits = totg::trajectory::tcp_limits::from(table, tcp_max_linear_velocity),
         .model_table = std::move(table),
@@ -224,8 +219,8 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
     const auto sampling_freq = static_cast<double>(sampling_freq_view.flat(0));
 
     // Copy inputs into owned xtensor arrays for the planner
-    xt::xarray<double> velocity_limits(velocity_limits_view);
-    xt::xarray<double> acceleration_limits(acceleration_limits_view);
+    xvector<> velocity_limits(velocity_limits_view);
+    xvector<> acceleration_limits(acceleration_limits_view);
 
     // Optional TCP Cartesian-speed limit
     auto tcp_input = parse_tcp_limits(inputs);
@@ -242,7 +237,7 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
     // Split the parsed TCP input into the callback limit and its model-table provenance; the
     // planner records the table in replay records so the limit survives a replay round-trip.
     std::optional<totg::trajectory::tcp_limits> tcp_limits;
-    std::optional<xt::xarray<double>> model_table;
+    std::optional<xmatrix<>> model_table;
     if (tcp_input) {
         tcp_limits = std::move(tcp_input->limits);
         model_table = std::move(tcp_input->model_table);
@@ -265,7 +260,7 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         .with_waypoint_provider([&](auto& p) {
             // TODO(zero-copy): waypoint_accumulator should accept tensor views
             // directly to avoid this copy for large waypoint sets.
-            auto wp = p.stash(xt::xarray<double>(waypoints_view));
+            auto wp = p.stash(xmatrix<>(waypoints_view));
             return totg::waypoint_accumulator{*wp};
         })
         .with_waypoint_preprocessor([dedup_tolerance](auto&, totg::waypoint_accumulator& accumulator) {
