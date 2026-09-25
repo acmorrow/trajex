@@ -178,6 +178,12 @@ class waypoint_store {
     // move wastes at most one chunk's worth of unused rows.
     static constexpr std::size_t k_chunk_rows = 1024;
 
+    // A node-based container is a requirement rather than a preference, for the reason given at
+    // the top of this file: the accumulator holds views referencing chunk arrays by address.
+    //
+    // TODO: std::vector<std::unique_ptr<xmatrix<>>> would keep that guarantee, since the arrays
+    // stay put and only the pointer array reallocates, and would make chunk lookup O(1).
+    // chunk_for_write_ and chunk_at_ currently walk the list with std::next on every access.
     using chunk_list = std::list<xmatrix<>>;
 
     // Every chunk but the one currently being filled is exactly full, so a row's position
