@@ -203,12 +203,15 @@ struct velocity_limits_with_components {
 }
 
 // Cursor-taking overloads for call sites whose configuration comes from a positioned cursor.
-// cursor.configuration() materializes a fresh array and the joint-only path never reads it, so
-// the configuration is evaluated only when a TCP limit is set. Call sites whose configuration
-// comes from a segment rather than a cursor use the q-taking overloads above.
+// Templated on cursor_like so that a rich cursor reaches them as itself: it does not convert to a
+// plain cursor, and taking one by value here would put the caller back to allocating a fresh array
+// on every geometry query. The configuration is read only when a TCP limit is set, because on a
+// plain cursor that read allocates and the joint-only path never looks at it. Call sites whose
+// configuration comes from a segment rather than a cursor use the q-taking overloads above.
+template <cursor_like C>
 [[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xvector<>& q_prime,
                                                                                      const xvector<>& q_double_prime,
-                                                                                     const path::cursor& cursor,
+                                                                                     const C& cursor,
                                                                                      const trajectory::options& opt) {
     if (!opt.tcp.has_value()) {
         const auto base = compute_velocity_limits(q_prime, q_double_prime, opt.max_velocity, opt.max_acceleration, opt.epsilon);
@@ -217,9 +220,10 @@ struct velocity_limits_with_components {
     return compute_velocity_limits_and_components(q_prime, q_double_prime, cursor.configuration(), opt);
 }
 
+template <cursor_like C>
 [[nodiscard]] trajectory::velocity_limits compute_velocity_limits_with_tcp(const xvector<>& q_prime,
                                                                            const xvector<>& q_double_prime,
-                                                                           const path::cursor& cursor,
+                                                                           const C& cursor,
                                                                            const trajectory::options& opt) {
     const auto limits = compute_velocity_limits_and_components(q_prime, q_double_prime, cursor, opt);
     return {limits.s_dot_max_acc, limits.s_dot_max_vel};
@@ -338,9 +342,10 @@ struct velocity_limits_with_components {
 // (`Extension 1`, see README.md) where TCP is the binding constraint. joint and tcp are the
 // component velocity limits already computed at this cursor by compute_velocity_limits_and_components;
 // passing them in lets this pick the active curve without re-evaluating the Jacobian.
+template <cursor_like C>
 phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_prime,
                                                              const xvector<>& q_double_prime,
-                                                             path::cursor cursor,
+                                                             const C& cursor,
                                                              const trajectory::options& opt,
                                                              arc_velocity joint,
                                                              arc_velocity tcp) {
@@ -1332,10 +1337,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         // phase_plane::cursor concepts. It isn't either of those things, but its path_cursor will
         // likely become a phase_plane::cursor.
         struct integration_cache {
-            path::cursor path_cursor;
+            path::cursor::rich path_cursor;
             switching_point_cache switching_points;
         } cache{
-            .path_cursor = traj.path_.create_cursor(),
+            .path_cursor = traj.path_.create_cursor().enrich(),
             .switching_points = {},
         };
 
@@ -1384,8 +1389,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
                     }
 
-                    const auto q_prime = cache.path_cursor.tangent();
-                    const auto q_double_prime = cache.path_cursor.curvature();
+                    const auto& q_prime = cache.path_cursor.tangent();
+                    const auto& q_double_prime = cache.path_cursor.curvature();
 
                     // Check if we are currently at the velocity limit. If so, use tangent acceleration
                     // to follow the curve rather than max acceleration, which would immediately breach
@@ -1523,8 +1528,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                                                  .s_dot = midpoint(next_point.s_dot, breach_point.s_dot)};
 
                         cache.path_cursor.seek(mid.s);
-                        const auto mid_q_prime = cache.path_cursor.tangent();
-                        const auto mid_q_double_prime = cache.path_cursor.curvature();
+                        const auto& mid_q_prime = cache.path_cursor.tangent();
+                        const auto& mid_q_double_prime = cache.path_cursor.curvature();
 
                         // Compute the velocity limits at the midpoint.
                         const auto [midpoint_s_dot_max_acc, midpoint_s_dot_max_vel] =
@@ -1578,8 +1583,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         cache.path_cursor.seek(before_next);
-                        const auto before_next_q_prime = cache.path_cursor.tangent();
-                        const auto before_next_q_double_prime = cache.path_cursor.curvature();
+                        const auto& before_next_q_prime = cache.path_cursor.tangent();
+                        const auto& before_next_q_double_prime = cache.path_cursor.curvature();
 
                         const auto [before_next_s_dot_max_acc, _1] = compute_velocity_limits(before_next_q_prime,
                                                                                              before_next_q_double_prime,
@@ -1611,8 +1616,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // TODO: We might be able to avoid recomputing these since we could track them in the bisection loop
                     // like we do for next.
                     cache.path_cursor.seek(breach_point.s);
-                    const auto breach_q_prime = cache.path_cursor.tangent();
-                    const auto breach_q_double_prime = cache.path_cursor.curvature();
+                    const auto& breach_q_prime = cache.path_cursor.tangent();
+                    const auto& breach_q_double_prime = cache.path_cursor.curvature();
 
                     const auto [breach_s_ddot_min, breach_s_ddot_max] = compute_acceleration_bounds(
                         breach_q_prime, breach_q_double_prime, breach_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
@@ -1671,7 +1676,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         cache.path_cursor.seek(current_point.s);
-                        return find_switching_point(&cache.switching_points, cache.path_cursor, traj.options_);
+                        return find_switching_point(&cache.switching_points, cache.path_cursor.plain(), traj.options_);
                     }
 
                     // Crossed segment boundary without hitting limit - try again with new segment geometry.
@@ -1707,7 +1712,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     }
 
                     cache.path_cursor.seek(next_point.s);
-                    return find_switching_point(&cache.switching_points, cache.path_cursor, traj.options_);
+                    return find_switching_point(&cache.switching_points, cache.path_cursor.plain(), traj.options_);
                 }
 
                 if (next_point.s == traj.path_.length()) {
@@ -1863,8 +1868,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // depart from at this point. This is the same land-side semantics applied
                     // above when computing s_ddot_desired at current_point.
                     backwards_cursor.seek(next_point.s);
-                    const auto q_prime = backwards_cursor.tangent();
-                    const auto q_double_prime = backwards_cursor.curvature();
+                    const auto& q_prime = backwards_cursor.tangent();
+                    const auto& q_double_prime = backwards_cursor.curvature();
 
                     // Residual residual(s_dot) = required_s_ddot(s_dot) - s_ddot_min(next_point.s,
                     // s_dot). The root is the velocity where kinematic consistency and the
@@ -2126,8 +2131,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                 // Backward integration hitting a limit curve indicates the trajectory is infeasible -
                 // we cannot decelerate from the switching point without violating joint constraints.
                 backwards_cursor.seek(next_point.s);
-                const auto next_q_prime = backwards_cursor.tangent();
-                const auto next_q_double_prime = backwards_cursor.curvature();
+                const auto& next_q_prime = backwards_cursor.tangent();
+                const auto& next_q_double_prime = backwards_cursor.curvature();
 
                 const auto [s_dot_max_acc, s_dot_max_vel] =
                     compute_velocity_limits_with_tcp(next_q_prime, next_q_double_prime, backwards_cursor, traj.options_);
