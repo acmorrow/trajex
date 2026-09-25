@@ -202,6 +202,20 @@ struct velocity_limits_with_components {
     return {limits.s_dot_max_acc, limits.s_dot_max_vel};
 }
 
+// The configuration at a cursor, avoiding the allocation where the cursor can.
+// rich_cursor_like refines cursor_like, so the borrowing form wins by subsumption and neither
+// caller below needs to know which kind it has. Both callers consume the result within the full
+// expression, which is well inside the window rule the borrowed form carries.
+template <cursor_like C>
+[[nodiscard]] xvector<> configuration_of(const C& cursor) {
+    return cursor.configuration();
+}
+
+template <rich_cursor_like C>
+[[nodiscard]] const xvector<>& configuration_of(const C& cursor) {
+    return cursor.configuration_ref();
+}
+
 // Cursor-taking overloads for call sites whose configuration comes from a positioned cursor.
 // Templated on cursor_like so that a rich cursor reaches them as itself: it does not convert to a
 // plain cursor, and taking one by value here would put the caller back to allocating a fresh array
@@ -217,7 +231,7 @@ template <cursor_like C>
         const auto base = compute_velocity_limits(q_prime, q_double_prime, opt.max_velocity, opt.max_acceleration, opt.epsilon);
         return {base.s_dot_max_acc, base.s_dot_max_vel, base.s_dot_max_vel, arc_velocity{std::numeric_limits<double>::infinity()}};
     }
-    return compute_velocity_limits_and_components(q_prime, q_double_prime, cursor.configuration(), opt);
+    return compute_velocity_limits_and_components(q_prime, q_double_prime, configuration_of(cursor), opt);
 }
 
 template <cursor_like C>
@@ -365,7 +379,7 @@ phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_
     }
 
     // TCP binding (gain finite): d/ds s_dot_max_TCP = -v_TCP * (dg/ds) / g^2.
-    const auto gd = opt.tcp->linear_velocity_gain(cursor.configuration(), q_prime, q_double_prime);
+    const auto gd = opt.tcp->linear_velocity_gain(configuration_of(cursor), q_prime, q_double_prime);
     const double slope = -opt.tcp->max_linear_velocity * gd.d_gain_ds / (gd.gain_per_arc_unit * gd.gain_per_arc_unit);
 
     if (!std::isfinite(slope)) {
@@ -1389,8 +1403,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
                     }
 
-                    const auto& q_prime = cache.path_cursor.tangent();
-                    const auto& q_double_prime = cache.path_cursor.curvature();
+                    const auto& q_prime = cache.path_cursor.tangent_ref();
+                    const auto& q_double_prime = cache.path_cursor.curvature_ref();
 
                     // Check if we are currently at the velocity limit. If so, use tangent acceleration
                     // to follow the curve rather than max acceleration, which would immediately breach
@@ -1528,8 +1542,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                                                  .s_dot = midpoint(next_point.s_dot, breach_point.s_dot)};
 
                         cache.path_cursor.seek(mid.s);
-                        const auto& mid_q_prime = cache.path_cursor.tangent();
-                        const auto& mid_q_double_prime = cache.path_cursor.curvature();
+                        const auto& mid_q_prime = cache.path_cursor.tangent_ref();
+                        const auto& mid_q_double_prime = cache.path_cursor.curvature_ref();
 
                         // Compute the velocity limits at the midpoint.
                         const auto [midpoint_s_dot_max_acc, midpoint_s_dot_max_vel] =
@@ -1583,8 +1597,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         cache.path_cursor.seek(before_next);
-                        const auto& before_next_q_prime = cache.path_cursor.tangent();
-                        const auto& before_next_q_double_prime = cache.path_cursor.curvature();
+                        const auto& before_next_q_prime = cache.path_cursor.tangent_ref();
+                        const auto& before_next_q_double_prime = cache.path_cursor.curvature_ref();
 
                         const auto [before_next_s_dot_max_acc, _1] = compute_velocity_limits(before_next_q_prime,
                                                                                              before_next_q_double_prime,
@@ -1616,8 +1630,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // TODO: We might be able to avoid recomputing these since we could track them in the bisection loop
                     // like we do for next.
                     cache.path_cursor.seek(breach_point.s);
-                    const auto& breach_q_prime = cache.path_cursor.tangent();
-                    const auto& breach_q_double_prime = cache.path_cursor.curvature();
+                    const auto& breach_q_prime = cache.path_cursor.tangent_ref();
+                    const auto& breach_q_double_prime = cache.path_cursor.curvature_ref();
 
                     const auto [breach_s_ddot_min, breach_s_ddot_max] = compute_acceleration_bounds(
                         breach_q_prime, breach_q_double_prime, breach_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
@@ -1868,8 +1882,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // depart from at this point. This is the same land-side semantics applied
                     // above when computing s_ddot_desired at current_point.
                     backwards_cursor.seek(next_point.s);
-                    const auto& q_prime = backwards_cursor.tangent();
-                    const auto& q_double_prime = backwards_cursor.curvature();
+                    const auto& q_prime = backwards_cursor.tangent_ref();
+                    const auto& q_double_prime = backwards_cursor.curvature_ref();
 
                     // Residual residual(s_dot) = required_s_ddot(s_dot) - s_ddot_min(next_point.s,
                     // s_dot). The root is the velocity where kinematic consistency and the
@@ -2079,8 +2093,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // Query the path geometry at last_forward_point to validate that our computed acceleration is
                     // actually feasible.
                     backwards_cursor.seek(last_forward_point.s);
-                    const auto q_prime = backwards_cursor.tangent();
-                    const auto q_double_prime = backwards_cursor.curvature();
+                    const auto& q_prime = backwards_cursor.tangent_ref();
+                    const auto& q_double_prime = backwards_cursor.curvature_ref();
 
                     const auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds(
                         q_prime, q_double_prime, last_forward_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
@@ -2131,8 +2145,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                 // Backward integration hitting a limit curve indicates the trajectory is infeasible -
                 // we cannot decelerate from the switching point without violating joint constraints.
                 backwards_cursor.seek(next_point.s);
-                const auto& next_q_prime = backwards_cursor.tangent();
-                const auto& next_q_double_prime = backwards_cursor.curvature();
+                const auto& next_q_prime = backwards_cursor.tangent_ref();
+                const auto& next_q_double_prime = backwards_cursor.curvature_ref();
 
                 const auto [s_dot_max_acc, s_dot_max_vel] =
                     compute_velocity_limits_with_tcp(next_q_prime, next_q_double_prime, backwards_cursor, traj.options_);
@@ -2326,9 +2340,9 @@ void trajectory::cursor::sample(struct trajectory::sample& into) const {
     // expressions built from them are evaluated into the returned sample before this function
     // returns, so the values escape by copy. Introducing a seek between here and the return
     // would silently change what these refer to.
-    const auto& q = path_cursor_.configuration();
-    const auto& q_prime = path_cursor_.tangent();
-    const auto& q_double_prime = path_cursor_.curvature();
+    const auto& q = path_cursor_.configuration_ref();
+    const auto& q_prime = path_cursor_.tangent_ref();
+    const auto& q_double_prime = path_cursor_.curvature_ref();
 
     // Convert from path space (s, s_dot, s_ddot) to joint space (q, q_dot, q_ddot) using the chain rule.
     //

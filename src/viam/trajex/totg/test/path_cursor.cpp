@@ -976,13 +976,19 @@ BOOST_AUTO_TEST_CASE(rich_matches_plain_cursor_at_many_positions) {
 
         BOOST_CHECK_EQUAL(r.position(), plain.position());
 
-        const auto& configuration = r.configuration();
-        const auto& tangent = r.tangent();
-        const auto& curvature = r.curvature();
+        const auto& configuration = r.configuration_ref();
+        const auto& tangent = r.tangent_ref();
+        const auto& curvature = r.curvature_ref();
 
         check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
         check_exactly_equal(plain.tangent(), {tangent.data(), tangent.size()});
         check_exactly_equal(plain.curvature(), {curvature.data(), curvature.size()});
+
+        // The inherited value accessors must agree with the borrowing ones, so that generic
+        // code reaching a rich cursor through cursor_like sees the same geometry.
+        check_exactly_equal(r.configuration(), {configuration.data(), configuration.size()});
+        check_exactly_equal(r.tangent(), {tangent.data(), tangent.size()});
+        check_exactly_equal(r.curvature(), {curvature.data(), curvature.size()});
     }
 }
 
@@ -996,16 +1002,16 @@ BOOST_AUTO_TEST_CASE(rich_storage_address_stable_across_seek) {
     // them. Were the fill ever rewritten as an assignment from a returned array, the
     // move-assignment would swap buffers and this would fail -- along with the guarantee
     // that a reference handed to a caller keeps referring to live storage.
-    const double* const configuration_storage = r.configuration().data();
-    const double* const tangent_storage = r.tangent().data();
-    const double* const curvature_storage = r.curvature().data();
+    const double* const configuration_storage = r.configuration_ref().data();
+    const double* const tangent_storage = r.tangent_ref().data();
+    const double* const curvature_storage = r.curvature_ref().data();
 
     for (int step = 1; step <= 5; ++step) {
         r.seek(fraction_of(p.length(), static_cast<double>(step) / 5.0));
 
-        BOOST_CHECK_EQUAL(r.configuration().data(), configuration_storage);
-        BOOST_CHECK_EQUAL(r.tangent().data(), tangent_storage);
-        BOOST_CHECK_EQUAL(r.curvature().data(), curvature_storage);
+        BOOST_CHECK_EQUAL(r.configuration_ref().data(), configuration_storage);
+        BOOST_CHECK_EQUAL(r.tangent_ref().data(), tangent_storage);
+        BOOST_CHECK_EQUAL(r.curvature_ref().data(), curvature_storage);
     }
 }
 
@@ -1023,13 +1029,13 @@ BOOST_AUTO_TEST_CASE(rich_accessors_lazy_in_any_order) {
     path::cursor::rich r = p.create_cursor().enrich();
     r.seek(s);
 
-    const auto& curvature = r.curvature();
+    const auto& curvature = r.curvature_ref();
     check_exactly_equal(plain.curvature(), {curvature.data(), curvature.size()});
 
-    const auto& tangent = r.tangent();
+    const auto& tangent = r.tangent_ref();
     check_exactly_equal(plain.tangent(), {tangent.data(), tangent.size()});
 
-    const auto& configuration = r.configuration();
+    const auto& configuration = r.configuration_ref();
     check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
 }
 
@@ -1043,23 +1049,32 @@ BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
     path::cursor::rich r = p.create_cursor().enrich();
     r.seek(start);
 
-    const auto& configuration = r.configuration();
-    const std::vector<double> at_start(configuration.begin(), configuration.end());
+    const auto& borrowed = r.configuration_ref();
+    const std::vector<double> at_start(borrowed.begin(), borrowed.end());
+
+    // The value accessor is a copy, so what it yields is a snapshot: safe to hold across any
+    // number of moves. This is what generic code over cursor_like gets, and what a caller who
+    // does not ask for the cache by name gets.
+    const auto snapshot = r.configuration();
 
     // Seeking clears the validity bits but leaves the storage holding the old values, so a
-    // reference taken before the move still reads the old position.
+    // borrowed reference taken before the move still reads the old position.
     r.seek(moved);
-    check_exactly_equal(xvector<>{configuration}, at_start);
+    check_exactly_equal(xvector<>{borrowed}, at_start);
 
-    // Asking again refills the same storage in place, at which point the reference taken
-    // before the move begins reporting the new position. This is the documented hazard; it
-    // is pinned here so that changing it cannot pass silently.
-    const auto& refilled = r.configuration();
-    BOOST_CHECK_EQUAL(&refilled, &configuration);
+    // Asking again refills the same storage in place, at which point the borrowed reference
+    // begins reporting the new position. That is the hazard the _ref name exists to make
+    // deliberate; it is pinned here so that changing it cannot pass silently.
+    const auto& refilled = r.configuration_ref();
+    BOOST_CHECK_EQUAL(&refilled, &borrowed);
 
     path::cursor plain = p.create_cursor();
     plain.seek(moved);
-    check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
+    check_exactly_equal(plain.configuration(), {borrowed.data(), borrowed.size()});
+
+    // The snapshot is unmoved by all of that, which is the property that makes the plain name
+    // the safe default.
+    check_exactly_equal(snapshot, at_start);
 }
 
 BOOST_AUTO_TEST_CASE(rich_plain_is_independent_copy) {
@@ -1124,7 +1139,7 @@ BOOST_AUTO_TEST_CASE(rich_failed_query_is_not_cached) {
     path::cursor::rich r = p.create_cursor().enrich();
     r.seek(p.length() + arc_length{1.0});
 
-    BOOST_CHECK_THROW(static_cast<void>(r.configuration()), std::out_of_range);
+    BOOST_CHECK_THROW(static_cast<void>(r.configuration_ref()), std::out_of_range);
 
     // A throwing fill must leave the validity bit clear. Were it set, this query would hand
     // back whatever the storage happened to contain instead of computing the position.
@@ -1133,7 +1148,7 @@ BOOST_AUTO_TEST_CASE(rich_failed_query_is_not_cached) {
     path::cursor plain = p.create_cursor();
     plain.seek(reachable);
 
-    const auto& configuration = r.configuration();
+    const auto& configuration = r.configuration_ref();
     check_exactly_equal(plain.configuration(), {configuration.data(), configuration.size()});
 }
 
@@ -1145,17 +1160,17 @@ BOOST_AUTO_TEST_CASE(rich_copy_has_independent_storage) {
 
     path::cursor::rich original = p.create_cursor().enrich();
     original.seek(start);
-    const auto& original_configuration = original.configuration();
+    const auto& original_configuration = original.configuration_ref();
 
     path::cursor::rich copy = original;
-    const auto& copy_configuration = copy.configuration();
+    const auto& copy_configuration = copy.configuration_ref();
 
     BOOST_CHECK(copy_configuration.data() != original_configuration.data());
     check_exactly_equal(xvector<>{copy_configuration}, {original_configuration.data(), original_configuration.size()});
 
     // Moving the copy must not disturb the original's cached values.
     copy.seek(fraction_of(p.length(), 0.05));
-    static_cast<void>(copy.configuration());
+    static_cast<void>(copy.configuration_ref());
 
     path::cursor plain = p.create_cursor();
     plain.seek(start);

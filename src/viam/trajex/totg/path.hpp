@@ -841,12 +841,19 @@ class path::cursor {
 /// to it. Where the integrator queries geometry a million times per trajectory, that is the
 /// difference between a million allocations and three.
 ///
-/// **The returned references are windows, not snapshots.** Storage is allocated once and
-/// lives as long as the cursor, so a reference obtained from any accessor stays valid. Its
-/// *contents* track the cursor: after a seek the stale values remain readable until someone
-/// asks for that component again, at which point the reference begins reporting the new
-/// position. Nothing announces the change, and it can be triggered by a query made anywhere
-/// else holding the same cursor. Code that needs a value outliving the next seek must copy it.
+/// **Two sets of accessors, and the name says which you are getting.** `tangent()` and its
+/// siblings are the plain cursor's, inherited unchanged: they recompute, return an owned
+/// array, and are safe to hold across anything. `tangent_ref()` and its siblings hand back
+/// the cache. Asking for the cheap one is therefore something you do on purpose, and it is
+/// visible at the call rather than inferred from how the result is bound.
+///
+/// **The _ref accessors return windows, not snapshots.** Storage is allocated once and lives
+/// as long as the cursor, so the reference stays valid. Its *contents* track the cursor:
+/// after a seek the stale values remain readable until someone asks for that component
+/// again, at which point the reference begins reporting the new position. Nothing announces
+/// the change, and it can be triggered by a query made anywhere else holding the same
+/// cursor. Code that needs a value outliving the next seek must copy it, or use the plain
+/// accessor of the same name, which is a copy by construction.
 ///
 /// **Relationship to path::cursor**: inherited privately, so a rich cursor cannot be handed
 /// out as a plain one. That is deliberate. Relocating through a base reference would move the
@@ -872,6 +879,14 @@ class path::cursor::rich : private path::cursor {
     using cursor::path;
     using cursor::position;
     using cursor::operator*;
+
+    // The plain, value-returning accessors, inherited unchanged. A rich cursor reached through
+    // these behaves exactly as a plain one does: each call recomputes and hands back an owned
+    // array, with no reference to the cache and nothing a later seek can invalidate. Code that
+    // wants the cache asks for it by name, through the _ref accessors below.
+    using cursor::configuration;
+    using cursor::curvature;
+    using cursor::tangent;
 
     ///
     /// Gets an independent plain cursor at this cursor's position.
@@ -904,7 +919,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xvector<>& configuration() const;
+    const xvector<>& configuration_ref() const;
 
     ///
     /// Gets tangent at current position, computing it if not already cached.
@@ -912,7 +927,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xvector<>& tangent() const;
+    const xvector<>& tangent_ref() const;
 
     ///
     /// Gets curvature at current position, computing it if not already cached.
@@ -920,7 +935,7 @@ class path::cursor::rich : private path::cursor {
     /// @return Reference to storage owned by this cursor; see the class note on windows
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    const xvector<>& curvature() const;
+    const xvector<>& curvature_ref() const;
 
     ///
     /// Compares cursor with end sentinel.
@@ -980,10 +995,10 @@ class path::cursor::rich : private path::cursor {
 ///
 /// Requirements shared by path::cursor and path::cursor::rich.
 ///
-/// The two are interchangeable in generic code, with one caveat that the type system cannot
-/// express: a plain cursor returns geometry by value, while a rich cursor returns a reference
-/// into storage the next seek overwrites. Binding with `const auto&` is correct for both, but
-/// generic code must hold such a reference no longer than the rich cursor's rule allows.
+/// Every accessor here returns geometry by value, so the two really are interchangeable:
+/// generic code written against this concept holds owned arrays whatever it is instantiated
+/// on, and there is no lifetime rule for it to get wrong. A rich cursor reached this way
+/// costs what a plain one costs.
 ///
 template <typename C>
 concept cursor_like = requires(C& c, const C& cc, arc_length s) {
@@ -994,14 +1009,31 @@ concept cursor_like = requires(C& c, const C& cc, arc_length s) {
     { cc.end() } -> std::same_as<std::default_sentinel_t>;
     { c.seek(s) } -> std::same_as<C&>;
     { c.seek_by(s) } -> std::same_as<C&>;
-    { cc.configuration() } -> std::convertible_to<const xvector<>&>;
-    { cc.tangent() } -> std::convertible_to<const xvector<>&>;
-    { cc.curvature() } -> std::convertible_to<const xvector<>&>;
+    { cc.configuration() } -> std::same_as<xvector<>>;
+    { cc.tangent() } -> std::same_as<xvector<>>;
+    { cc.curvature() } -> std::same_as<xvector<>>;
     { cc == std::default_sentinel } -> std::same_as<bool>;
+};
+
+///
+/// A cursor that additionally offers its geometry as a reference into storage it owns.
+///
+/// Refines cursor_like, so an overload constrained on this one wins for a rich cursor and
+/// generic code needs no `if constexpr` to prefer it. What it buys is skipping the allocation
+/// per query; what it costs is the window rule described on path::cursor::rich. Code that
+/// takes the refinement is opting into that rule by name.
+///
+template <typename C>
+concept rich_cursor_like = cursor_like<C> && requires(const C& cc) {
+    { cc.configuration_ref() } -> std::same_as<const xvector<>&>;
+    { cc.tangent_ref() } -> std::same_as<const xvector<>&>;
+    { cc.curvature_ref() } -> std::same_as<const xvector<>&>;
 };
 
 static_assert(cursor_like<path::cursor>);
 static_assert(cursor_like<path::cursor::rich>);
+static_assert(rich_cursor_like<path::cursor::rich>);
+static_assert(!rich_cursor_like<path::cursor>);
 
 ///
 /// ADL-findable end sentinel for cursors.

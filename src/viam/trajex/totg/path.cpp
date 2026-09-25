@@ -863,15 +863,15 @@ path::cursor::rich& path::cursor::rich::seek_by(arc_length delta) noexcept {
     return *this;
 }
 
-const xvector<>& path::cursor::rich::configuration() const {
+const xvector<>& path::cursor::rich::configuration_ref() const {
     return cached_(configuration_, k_configuration_bit_, [this](std::span<double> out) { cursor::configuration(out); });
 }
 
-const xvector<>& path::cursor::rich::tangent() const {
+const xvector<>& path::cursor::rich::tangent_ref() const {
     return cached_(tangent_, k_tangent_bit_, [this](std::span<double> out) { cursor::tangent(out); });
 }
 
-const xvector<>& path::cursor::rich::curvature() const {
+const xvector<>& path::cursor::rich::curvature_ref() const {
     return cached_(curvature_, k_curvature_bit_, [this](std::span<double> out) { cursor::curvature(out); });
 }
 
