@@ -192,8 +192,18 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         throw std::invalid_argument("waypoints_rads must be 2-dimensional [n_waypoints, n_dof]");
     }
 
+    // Rank is checked as well as size because these views are copied into statically ranked
+    // arrays below, and that conversion does not check: a rank-2 limit tensor would silently
+    // arrive as a one-element vector rather than being rejected here.
     const auto& velocity_limits_view = get_double_tensor(inputs, "velocity_limits_rads_per_sec");
+    if (velocity_limits_view.dimension() != 1) {
+        throw std::invalid_argument("velocity_limits_rads_per_sec must be 1-dimensional [n_dof]");
+    }
+
     const auto& acceleration_limits_view = get_double_tensor(inputs, "acceleration_limits_rads_per_sec2");
+    if (acceleration_limits_view.dimension() != 1) {
+        throw std::invalid_argument("acceleration_limits_rads_per_sec2 must be 1-dimensional [n_dof]");
+    }
 
     // Derive DOF from velocity limits and validate consistency
     const auto dof = velocity_limits_view.size();

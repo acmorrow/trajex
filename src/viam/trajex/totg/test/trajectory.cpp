@@ -482,7 +482,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_by_advances_position) {
 BOOST_AUTO_TEST_CASE(cursor_seek_within_current_integration_point) {
     // Verify fast path in seek() (lines 258-267 in trajectory.cpp)
     // When seeking within current integration point, hint should remain valid
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 5.0;
     path p = path::create(waypoints);
@@ -517,7 +517,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_within_current_integration_point) {
 
 BOOST_AUTO_TEST_CASE(cursor_seek_to_adjacent_integration_points) {
     // Verify forward-by-one path (lines 269-282) and backward-by-one path (lines 284-293)
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 5.0;
     path p = path::create(waypoints);
@@ -552,7 +552,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_to_adjacent_integration_points) {
 
 BOOST_AUTO_TEST_CASE(cursor_seek_large_jump) {
     // Verify binary search path (lines 295-309) for large time jumps
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 6.0;
     path p = path::create(waypoints);
@@ -659,7 +659,7 @@ BOOST_AUTO_TEST_CASE(trajectory_sampling_on_circular_blend) {
 
 BOOST_AUTO_TEST_CASE(cursor_seek_to_negative_time_becomes_sentinel) {
     // Verify seeking to negative time produces sentinel state
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 2.0;
     path p = path::create(waypoints);
@@ -683,7 +683,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_to_negative_time_becomes_sentinel) {
 
 BOOST_AUTO_TEST_CASE(cursor_seek_beyond_duration_becomes_sentinel) {
     // Verify seeking beyond duration produces sentinel state
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 2.0;
     path p = path::create(waypoints);
@@ -707,7 +707,7 @@ BOOST_AUTO_TEST_CASE(cursor_seek_beyond_duration_becomes_sentinel) {
 
 BOOST_AUTO_TEST_CASE(cursor_seek_by_from_sentinel_state) {
     // Verify seek_by doesn't change sentinel state
-    xmatrix<> waypoints = xvector<>::from_shape({2, 1});
+    xmatrix<> waypoints = xmatrix<>::from_shape({2, 1});
     waypoints(0, 0) = 0.0;
     waypoints(1, 0) = 2.0;
     path p = path::create(waypoints);

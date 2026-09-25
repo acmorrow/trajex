@@ -21,12 +21,12 @@ namespace viam::trajex {
 /// One-dimensional array: a configuration, or a quantity shaped like one.
 ///
 template <typename T = double>
-using xvector = xt::xarray<T>;
+using xvector = xt::xtensor<T, 1>;
 
 ///
 /// Two-dimensional array: a stack of xvector rows.
 ///
 template <typename T = double>
-using xmatrix = xt::xarray<T>;
+using xmatrix = xt::xtensor<T, 2>;
 
 }  // namespace viam::trajex

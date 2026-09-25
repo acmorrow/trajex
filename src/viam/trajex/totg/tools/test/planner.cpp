@@ -5,12 +5,6 @@
 
 #include <boost/test/unit_test.hpp>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/tools/replay.hpp>
 #include <viam/trajex/types/xt.hpp>
@@ -18,9 +12,9 @@
 namespace {
 
 using namespace viam::trajex::totg;
-using viam::trajex::totg::test::gp12_model_table;
 using viam::trajex::xmatrix;
 using viam::trajex::xvector;
+using viam::trajex::totg::test::gp12_model_table;
 
 struct test_receiver {
     int segment_count = 0;
@@ -39,7 +33,7 @@ planner<test_receiver>::config simple_config() {
     };
 }
 
-// waypoint_accumulator views data, doesn't own it, so the xarray must
+// waypoint_accumulator views data, doesn't own it, so the matrix must
 // outlive the accumulator. Stash is the mechanism for that.
 waypoint_accumulator stash_waypoints(planner<test_receiver>& p, xmatrix<> wp) {
     auto data = p.stash(std::move(wp));
@@ -338,18 +332,9 @@ BOOST_AUTO_TEST_CASE(legacy_replay_of_tcp_record_drops_tcp_limit) {
 // serialize_for_replay would throw on the failure paths that call it to record diagnostics,
 // destroying the replay record for the original error.
 BOOST_AUTO_TEST_CASE(malformed_model_table_rejected_at_construction) {
-    {
-        auto cfg = simple_config();
-        // Spelled xt::xarray<double> rather than xmatrix<> because the point is to store the
-        // wrong rank, which only a dynamically ranked container can express.
-        cfg.model_table = xt::xarray<double>{1.0, 2.0, 3.0};  // 1-D, not (n, 10)
-        BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
-    }
-    {
-        auto cfg = simple_config();
-        cfg.model_table = xmatrix<>{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};  // (2, 3), not (n, 10)
-        BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
-    }
+    auto cfg = simple_config();
+    cfg.model_table = xmatrix<>{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};  // (2, 3), not (n, 10)
+    BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
 }
 
 // A config carrying a TCP limit and its model-table provenance survives a

@@ -9,19 +9,13 @@
 #include <stdexcept>
 #include <utility>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <boost/test/unit_test.hpp>
 
 namespace {
 
-using viam::trajex::jacobian::kinematic_chain;
 using viam::trajex::xmatrix;
 using viam::trajex::xvector;
+using viam::trajex::jacobian::kinematic_chain;
 
 // One-shot convenience for tests: parse the tensor and evaluate at q.
 xmatrix<> compute_jacobian(const xmatrix<>& table, const xvector<>& q) {
@@ -563,14 +557,6 @@ BOOST_AUTO_TEST_CASE(rejects_zero_axis_for_revolute) {
 
 BOOST_AUTO_TEST_CASE(rejects_wrong_column_count) {
     const xmatrix<> bad = xt::zeros<double>({std::size_t{1}, std::size_t{9}});
-    const xvector<> q = {0.0};
-    BOOST_CHECK_THROW(compute_jacobian(bad, q), std::invalid_argument);
-}
-
-BOOST_AUTO_TEST_CASE(rejects_non_2d_tensor) {
-    // Spelled xt::xarray<double> rather than xmatrix<> because the point is to hand `from` the
-    // wrong rank, which only a dynamically ranked container can express.
-    const xt::xarray<double> bad = xt::zeros<double>({std::size_t{10}});
     const xvector<> q = {0.0};
     BOOST_CHECK_THROW(compute_jacobian(bad, q), std::invalid_argument);
 }

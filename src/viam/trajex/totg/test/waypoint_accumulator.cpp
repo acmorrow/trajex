@@ -44,13 +44,6 @@ BOOST_AUTO_TEST_CASE(add_waypoints) {
     BOOST_CHECK_EQUAL(acc.size(), 3);
 }
 
-BOOST_AUTO_TEST_CASE(validates_dimension) {
-    using namespace viam::trajex::totg;
-
-    const xmatrix<> waypoints_1d = {1.0, 2.0, 3.0};
-    BOOST_CHECK_THROW(waypoint_accumulator{waypoints_1d}, std::invalid_argument);
-}
-
 BOOST_AUTO_TEST_CASE(validates_dof_consistency) {
     using namespace viam::trajex::totg;
 
