@@ -322,60 +322,6 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     // if the locus can be skipped (coalesced) or if it represents an actual corner that needs
     // either a hard stop or a circular blend.
 
-    const auto can_coalesce = [&opts](const auto& start, const auto& locus, const auto& next) -> bool {
-        const double max_deviation = opts.max_linear_deviation();
-
-        // With zero tolerance, nothing coalesces (every waypoint is a hard constraint)
-        if (max_deviation == 0.0) {
-            return false;
-        }
-
-        const double radius = max_deviation / 2.0;
-
-        // Evaluated rather than left lazy because it has five uses below: the zero
-        // test, both halves of the squared length, the dot product, and the
-        // projection. A lazy binding would walk the subtraction once per use.
-        const auto start_to_next = xt::eval(next - start);
-
-        // eval yields the expression's temporary_type, which inherits the operands' shape
-        // type: it materializes into a statically ranked vector only because the waypoints
-        // are statically ranked. Should that stop being true, eval would quietly go back to
-        // handing out a dynamically ranked array and the saving above would evaporate with
-        // nothing to show for it, so pin the type rather than trust the inheritance.
-        static_assert(std::is_same_v<std::decay_t<decltype(start_to_next)>, xvector<>>);
-
-        // Check if start and next are exactly the same position (all components identically zero)
-        if (xt::all(xt::equal(start_to_next, 0.0))) {
-            // When start == next (returning to same position), the locus represents an
-            // intentional intermediate goal that must be preserved. Cannot coalesce.
-            return false;
-        }
-
-        const auto start_to_locus = locus - start;
-        const double start_to_next_sq = xt::sum(start_to_next * start_to_next)();
-        const double start_to_locus_dot_direction = xt::sum(start_to_locus * start_to_next)();
-
-        // Monotonic advancement check: reject if locus would require going backward from
-        // start or forward past next. This ensures we only skip waypoints that maintain
-        // forward progress along the segment direction.
-        //
-        // We check the bounds BEFORE dividing to avoid division-by-near-zero issues.
-        // Since start_to_next_sq > 0, we can multiply through the inequality:
-        //   t < 0  becomes  dot < 0
-        //   t > 1  becomes  dot > start_to_next_sq
-        if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > start_to_next_sq) {
-            return false;
-        }
-
-        // Now safe to divide: bounds check guarantees 0 <= t <= 1
-        const double t = start_to_locus_dot_direction / start_to_next_sq;
-        const auto projected_point = start + (t * start_to_next);
-        const auto deviation_vector = locus - projected_point;
-        const double deviation = xt::norm_l2(deviation_vector)();
-
-        return deviation <= radius;
-    };
-
     struct blend_geometry {
         segment::circular circular_seg;
         double trim_distance;  // Distance trimmed from both segments
@@ -500,6 +446,64 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     auto waypoints_range = std::views::all(waypoints);
     std::optional<waypoint_accumulator> colinearized;
     if (opts.max_linear_deviation() != 0.0) {
+        // The colinearity test splits into a half that depends only on the segment being
+        // tested against and a half that depends on the locus. The loop below tests every
+        // waypoint it has skipped so far against the same segment, so computing the first half
+        // once per segment rather than once per locus removes most of the work.
+        //
+        // Note that the two lambdas are not independent. `segment_deviation_context` holds
+        // state between them, so `begin_segment` must be called for a segment before any
+        // `locus_within_tolerance` against it, and the scratch vector must not be read across a
+        // later `begin_segment`.
+        struct segment_deviation_context {
+            xvector<> start_to_next;
+            double length_sq;
+        };
+        segment_deviation_context segment_ctx{xvector<>::from_shape(std::array<std::size_t, 1>{waypoints.dof()}), 0.0};
+
+        // Deviation is measured against a tube of this radius around the segment. Hoisted
+        // because the enclosing branch has already established that the tolerance is non-zero.
+        const auto radius = opts.max_linear_deviation() / 2.0;
+
+        // Establishes the segment that loci are tested against. Returns false when start and
+        // next are the same position: the locus is then an intentional intermediate goal
+        // rather than a point along a line, and nothing may be coalesced through it.
+        const auto begin_segment = [&segment_ctx](const auto& start, const auto& next) -> bool {
+            xt::noalias(segment_ctx.start_to_next) = next - start;
+
+            if (xt::all(xt::equal(segment_ctx.start_to_next, 0.0))) {
+                return false;
+            }
+
+            segment_ctx.length_sq = xt::sum(segment_ctx.start_to_next * segment_ctx.start_to_next)();
+            return true;
+        };
+
+        const auto locus_within_tolerance = [&segment_ctx, radius](const auto& start, const auto& locus) -> bool {
+            const auto start_to_locus = locus - start;
+            const auto start_to_locus_dot_direction = xt::sum(start_to_locus * segment_ctx.start_to_next)();
+
+            // Monotonic advancement check: reject if locus would require going backward from
+            // start or forward past next. This ensures we only skip waypoints that maintain
+            // forward progress along the segment direction.
+            //
+            // We check the bounds BEFORE dividing to avoid division-by-near-zero issues.
+            // Since length_sq > 0, we can multiply through the inequality:
+            //   t < 0  becomes  dot < 0
+            //   t > 1  becomes  dot > length_sq
+            if (start_to_locus_dot_direction < 0.0 || start_to_locus_dot_direction > segment_ctx.length_sq) {
+                return false;
+            }
+
+            // Now safe to divide: bounds check guarantees 0 <= t <= 1
+            const auto t = start_to_locus_dot_direction / segment_ctx.length_sq;
+            const auto projected_point = start + (t * segment_ctx.start_to_next);
+            const auto deviation_vector = locus - projected_point;
+            const auto deviation = xt::norm_l2(deviation_vector)();
+
+            return deviation <= radius;
+        };
+
         std::vector<decltype(waypoints_range.begin())> skipped;
         for (auto base = waypoints_range.begin(); base != waypoints_range.end();) {
             if (!colinearized) {
@@ -516,10 +520,13 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
                 if (target == waypoints_range.end()) {
                     break;
                 }
-                if (!can_coalesce(*base, *candidate, *target)) {
+                if (!begin_segment(*base, *target)) {
                     break;
                 }
-                if (!std::ranges::all_of(skipped, [&](auto elt) { return can_coalesce(*base, *elt, *target); })) {
+                if (!locus_within_tolerance(*base, *candidate)) {
+                    break;
+                }
+                if (!std::ranges::all_of(skipped, [&](auto elt) { return locus_within_tolerance(*base, *elt); })) {
                     break;
                 }
                 skipped.push_back(candidate);
