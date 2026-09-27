@@ -848,7 +848,10 @@ path::cursor path::cursor::rich::plain() const {
 }
 
 void path::cursor::rich::invalidate_() noexcept {
-    cached_bits_.reset();
+    // Assigning a fresh bitset rather than calling reset() was worth about 2% of
+    // trajectory::create against libc++, where reset() at this size still went through a
+    // bit-range fill. Unmeasured on other standard libraries.
+    cached_bits_ = decltype(cached_bits_){};
 }
 
 path::cursor::rich& path::cursor::rich::seek(arc_length s) noexcept {
