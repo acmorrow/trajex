@@ -38,8 +38,8 @@ namespace viam::trajex::totg {
 class planner_base {
    public:
     struct config {
-        rank_checked<xvector<>> velocity_limits;
-        rank_checked<xvector<>> acceleration_limits;
+        xrank_checked<xvector<>> velocity_limits;
+        xrank_checked<xvector<>> acceleration_limits;
         double path_blend_tolerance = 0.0;
         std::optional<double> colinearization_ratio{};
         // Curvature bounds for blend construction. nullopt leaves path::options at its
@@ -55,7 +55,7 @@ class planner_base {
         // tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table) jacobian can
         // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
         // validated at planner construction.
-        std::optional<rank_checked<xmatrix<>>> model_table{};
+        std::optional<xrank_checked<xmatrix<>>> model_table{};
     };
 
     ///

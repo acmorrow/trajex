@@ -1,7 +1,9 @@
 #pragma once
 
+#include <concepts>
 #include <ranges>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -19,27 +21,35 @@
 
 namespace viam::trajex::totg {
 
-// What this class needs of a waypoint set is that it be rank two, dense, row-major and hold
-// the same element type a row does. xmatrix is the obvious thing that qualifies but not the
-// only one, and the two concepts below differ only in when the rank becomes known.
+///
+/// Implementation details for waypoint_accumulator.
+///
+namespace waypoint_accumulator_details {
 
 ///
-/// A waypoint set already known at compile time to be shaped like one.
+/// Satisfied when each row of T can be adapted where it lies, rather than copied.
 ///
-/// Admits an adaptor over a caller's own buffer and a fixed-shape array as readily as an
-/// xmatrix, none of which need converting or copying to be read row by row.
+/// Requires contiguous row-major storage of the element type a waypoint_view adapts. A lazy
+/// expression has nothing to point at until something evaluates it and a strided view exposes no
+/// data interface, so neither qualifies; a contiguous view does, which makes this a statement
+/// about layout rather than about ownership.
 ///
 template <typename T>
-concept fixed_rank_waypoints = same_rank_as<T, xmatrix<>> && dense_rows_of<T, xmatrix<>::value_type>;
+concept rows_adaptable = xexpression_like<T> && xt::has_data_interface<std::decay_t<T>>::value &&
+                         (std::decay_t<T>::static_layout == xt::layout_type::row_major) &&
+                         std::same_as<typename std::decay_t<T>::value_type, xmatrix<>::value_type>;
 
 ///
-/// A waypoint set that settles its rank at runtime and whose rows can still be adapted.
+/// Satisfied by anything waypoint_accumulator will read a waypoint set out of.
 ///
-/// Worth admitting under a check rather than refusing outright: the rank such a thing will turn
-/// out to have is not knowable at the call, and is usually the right one.
+/// Rank two, or not yet committed to a rank and so worth a check in the body. Admits an adaptor
+/// over a caller's own buffer and a fixed-shape array as readily as an xmatrix, none of which
+/// need converting or copying to be read row by row.
 ///
 template <typename T>
-concept checkable_waypoints = dynamically_ranked<T> && dense_rows_of<T, xmatrix<>::value_type>;
+concept waypoints_like = xrank_same_as_or_dynamic<T, xmatrix<>> && rows_adaptable<T>;
+
+}  // namespace waypoint_accumulator_details
 
 ///
 /// Accumulator for building up a sequence of waypoints.
@@ -63,8 +73,7 @@ class waypoint_accumulator {
     /// carries the container type and so admits rows from one container only. A row of any
     /// row-major rank-2 array is contiguous, so the adaptor spells every such row the same way.
     ///
-    using value_t = xmatrix<>::value_type;
-    using waypoint_view_t = decltype(xt::adapt(std::declval<const value_t*>(), std::size_t{}, xt::no_ownership()));
+    using waypoint_view = decltype(xt::adapt(std::declval<const xmatrix<>::value_type*>(), std::size_t{}, xt::no_ownership()));
 
     ///
     /// Constructs with initial waypoints.
@@ -79,30 +88,18 @@ class waypoint_accumulator {
     /// Constructs with initial waypoints held in some other rank-2 array.
     ///
     /// @param waypoints 2D array (num_waypoints, num_joints)
+    /// @throws std::invalid_argument if the array turns out not to be 2-dimensional
     /// @note The waypoints array must outlive the waypoint_accumulator object
     ///
     /// The xmatrix overload above is the one to reach for and the one a near miss will be
     /// diagnosed against; this exists so that a caller already holding their waypoints in an
     /// adaptor over their own memory, or in a fixed-shape array, need not copy them first.
     ///
-    template <fixed_rank_waypoints T>
-    explicit waypoint_accumulator(const T& waypoints) {
-        require_non_empty_(waypoints);
-        dof_ = waypoints.shape()[1];
-        append_rows_(waypoints);
-    }
-
-    template <fixed_rank_waypoints T>
-    explicit waypoint_accumulator(const T&&) = delete;
-
+    /// The rank check runs whether or not the rank was already fixed. A source that settles its
+    /// rank at runtime needs it, one that does not folds it away, and the alternative is a
+    /// second overload differing by a single comparison.
     ///
-    /// Constructs with initial waypoints whose rank is only known at runtime.
-    ///
-    /// @param waypoints Array that must turn out to be (num_waypoints, num_joints)
-    /// @throws std::invalid_argument if the array is not 2-dimensional
-    /// @note The waypoints array must outlive the waypoint_accumulator object
-    ///
-    template <checkable_waypoints T>
+    template <waypoint_accumulator_details::waypoints_like T>
     explicit waypoint_accumulator(const T& waypoints) {
         require_rank_two_(waypoints);
         require_non_empty_(waypoints);
@@ -113,7 +110,7 @@ class waypoint_accumulator {
     // The rows point into the argument, so a temporary must be refused here as it is for
     // xmatrix above. A const rvalue reference is not a forwarding reference, so this takes
     // rvalues only and leaves the lvalue overload alone.
-    template <checkable_waypoints T>
+    template <waypoint_accumulator_details::waypoints_like T>
     explicit waypoint_accumulator(const T&&) = delete;
 
     // What is left is what cannot be read as waypoints at all: a rank fixed at something other
@@ -121,8 +118,8 @@ class waypoint_accumulator {
     // expression with no storage behind it. Converting any of those would invent or discard
     // extents rather than fail, so refuse it and make the caller reshape deliberately.
     // See types/xt.hpp.
-    template <tensor_like T>
-        requires(!fixed_rank_waypoints<T> && !checkable_waypoints<T>)
+    template <xexpression_like T>
+        requires(!waypoint_accumulator_details::waypoints_like<T>)
     explicit waypoint_accumulator(const T&) = delete;
 
     ///
@@ -131,7 +128,7 @@ class waypoint_accumulator {
     /// @param first_waypoint View to first waypoint (establishes DOF)
     /// @note The underlying array must outlive the waypoint_accumulator object
     ///
-    explicit waypoint_accumulator(const waypoint_view_t& first_waypoint);
+    explicit waypoint_accumulator(const waypoint_view& first_waypoint);
 
     ///
     /// Copy constructs a waypoint_accumulator.
@@ -172,28 +169,10 @@ class waypoint_accumulator {
     ///
     /// @param waypoints 2D array where each row is a waypoint, shape (num_waypoints, num_joints)
     /// @return Reference to this for method chaining
-    /// @throws std::invalid_argument if the DOF differs
+    /// @throws std::invalid_argument if the array turns out not to be 2-dimensional, or the DOF differs
     /// @note The waypoints array must outlive the waypoint_accumulator object
     ///
-    template <fixed_rank_waypoints T>
-    waypoint_accumulator& add_waypoints(const T& waypoints) {
-        require_matching_dof_(waypoints.shape()[1]);
-        append_rows_(waypoints);
-        return *this;
-    }
-
-    template <fixed_rank_waypoints T>
-    waypoint_accumulator& add_waypoints(const T&&) = delete;
-
-    ///
-    /// Adds additional waypoints whose rank is only known at runtime.
-    ///
-    /// @param waypoints Array that must turn out to be (num_waypoints, num_joints)
-    /// @return Reference to this for method chaining
-    /// @throws std::invalid_argument if the array is not 2-dimensional or the DOF differs
-    /// @note The waypoints array must outlive the waypoint_accumulator object
-    ///
-    template <checkable_waypoints T>
+    template <waypoint_accumulator_details::waypoints_like T>
     waypoint_accumulator& add_waypoints(const T& waypoints) {
         require_rank_two_(waypoints);
         require_matching_dof_(waypoints.shape()[1]);
@@ -201,11 +180,11 @@ class waypoint_accumulator {
         return *this;
     }
 
-    template <checkable_waypoints T>
+    template <waypoint_accumulator_details::waypoints_like T>
     waypoint_accumulator& add_waypoints(const T&&) = delete;
 
-    template <tensor_like T>
-        requires(!fixed_rank_waypoints<T> && !checkable_waypoints<T>)
+    template <xexpression_like T>
+        requires(!waypoint_accumulator_details::waypoints_like<T>)
     waypoint_accumulator& add_waypoints(const T&) = delete;
 
     ///
@@ -216,7 +195,7 @@ class waypoint_accumulator {
     /// @throws std::invalid_argument if waypoint DOF doesn't match
     /// @note The underlying array must outlive the waypoint_accumulator object
     ///
-    waypoint_accumulator& add_waypoint(const waypoint_view_t& waypoint);
+    waypoint_accumulator& add_waypoint(const waypoint_view& waypoint);
 
     ///
     /// Gets the number of degrees of freedom.
@@ -242,12 +221,12 @@ class waypoint_accumulator {
     ///
     /// Iterator type for waypoint views.
     ///
-    using const_iterator = std::vector<waypoint_view_t>::const_iterator;
+    using const_iterator = std::vector<waypoint_view>::const_iterator;
 
     ///
     /// Value type for waypoint views.
     ///
-    using value_type = waypoint_view_t;
+    using value_type = waypoint_view;
 
     ///
     /// Size type.
@@ -288,7 +267,7 @@ class waypoint_accumulator {
     /// @param i Index of waypoint
     /// @return Reference to waypoint view
     ///
-    const waypoint_view_t& operator[](size_t i) const;
+    const waypoint_view& operator[](size_t i) const;
 
     ///
     /// Accesses waypoint by index with bounds checking.
@@ -297,14 +276,14 @@ class waypoint_accumulator {
     /// @return Reference to waypoint view
     /// @throws std::out_of_range if i >= size()
     ///
-    const waypoint_view_t& at(size_t i) const;
+    const waypoint_view& at(size_t i) const;
 
     ///
     /// Accesses the last waypoint.
     ///
     /// @return Reference to last waypoint view
     ///
-    const waypoint_view_t& back() const noexcept;
+    const waypoint_view& back() const noexcept;
 
     ///
     /// Removes the last waypoint.
@@ -312,10 +291,11 @@ class waypoint_accumulator {
     void pop_back() noexcept;
 
    private:
-    // Shared by the runtime-checked overloads above and by the xmatrix ones in the source file,
-    // so that a waypoint set is admitted on the same terms however its rank became known.
+    // Called by the templated overloads above whatever their argument's rank turned out to be,
+    // so that a waypoint set is admitted on the same terms however its rank became known. The
+    // xmatrix overloads in the source file skip it, being rank two by construction.
     static void require_rank_two_(const auto& waypoints) {
-        if (waypoints.dimension() != 2) {
+        if (!xrank_is_same_as<xmatrix<>>(waypoints)) {
             throw std::invalid_argument{"Waypoints must be 2-dimensional"};
         }
     }
@@ -342,7 +322,7 @@ class waypoint_accumulator {
     }
 
     size_t dof_;
-    std::vector<waypoint_view_t> waypoints_;
+    std::vector<waypoint_view> waypoints_;
 };
 
 // Verify waypoint_accumulator satisfies C++20 range concepts

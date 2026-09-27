@@ -375,7 +375,7 @@ BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
 
     // The single-waypoint constructor takes a row adaptor. It must keep working: it is a
     // non-template overload and so wins against the deleted one.
-    BOOST_CHECK(constructible.template operator()<waypoint_accumulator::waypoint_view_t>());
+    BOOST_CHECK(constructible.template operator()<waypoint_accumulator::waypoint_view>());
 
     // Rows are views of the caller's storage, so a temporary must be refused however it is
     // spelled. The xmatrix case has always been guarded; the runtime-checked one must be too.
@@ -483,13 +483,13 @@ BOOST_AUTO_TEST_CASE(accepted_sources_store_rows_contiguously) {
 
     const auto check = [](const char* label, const auto& source) {
         BOOST_TEST_MESSAGE(label);
-        BOOST_REQUIRE_EQUAL(source.dimension(), 2u);
+        BOOST_REQUIRE_EQUAL(source.dimension(), 2U);
 
         const auto rows = source.shape()[0];
         const auto cols = source.shape()[1];
 
         // Contiguous within a row, and rows following one another without gaps.
-        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[1]), 1u);
+        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[1]), 1U);
         BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[0]), cols);
 
         const waypoint_accumulator acc{source};
@@ -514,7 +514,7 @@ BOOST_AUTO_TEST_CASE(accepted_sources_store_rows_contiguously) {
     const xt::xarray<double> as_xarray = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
     check("xarray, rank checked at runtime", as_xarray);
 
-    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     const std::array<std::size_t, 2> shape{2, 3};
     const auto as_adapted = xt::adapt(buffer, shape);
     check("adaptor over a caller's vector", as_adapted);
@@ -534,7 +534,7 @@ BOOST_AUTO_TEST_CASE(rows_never_own_the_storage_they_point_at) {
         BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
     }
 
-    BOOST_REQUIRE_EQUAL(buffer.size(), 6u);
+    BOOST_REQUIRE_EQUAL(buffer.size(), 6U);
     BOOST_CHECK_CLOSE(buffer[0], 1.0, 1e-10);
     BOOST_CHECK_CLOSE(buffer[5], 6.0, 1e-10);
 }

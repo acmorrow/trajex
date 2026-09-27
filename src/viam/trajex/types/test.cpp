@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 #if __has_include(<xtensor/containers/xfixed.hpp>)
@@ -615,15 +616,15 @@ BOOST_AUTO_TEST_CASE(epsilon_wrapper_constexpr) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-BOOST_AUTO_TEST_SUITE(rank_checked_tests)
+BOOST_AUTO_TEST_SUITE(xrank_checked_tests)
 
 BOOST_AUTO_TEST_CASE(construction_checks_every_way_in) {
     using namespace viam::trajex;
 
     const auto holdable = []<typename Held, typename From>() { return std::constructible_from<Held, const From&>; };
 
-    using vec = rank_checked<xvector<>>;
-    using mat = rank_checked<xmatrix<>>;
+    using vec = xrank_checked<xvector<>>;
+    using mat = xrank_checked<xmatrix<>>;
     using fixed_two = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
     using rank_three = xt::xtensor<double, 3>;
 
@@ -653,7 +654,7 @@ BOOST_AUTO_TEST_CASE(construction_checks_every_way_in) {
 BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     using namespace viam::trajex;
 
-    const rank_checked<xvector<>> limits = xvector<>{1.0, 2.0, 3.0};
+    const xrank_checked<xvector<>> limits = xvector<>{1.0, 2.0, 3.0};
 
     // Passing it along needs no ceremony.
     const auto sum = [](const xvector<>& v) { return v(0) + v(1) + v(2); };
@@ -665,14 +666,14 @@ BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     BOOST_CHECK_CLOSE(limits.get()(2), 3.0, 1e-12);
 
     // A default-constructed one is empty rather than absent, and still rank 1.
-    const rank_checked<xvector<>> unset;
+    const xrank_checked<xvector<>> unset;
     BOOST_CHECK_EQUAL(unset->dimension(), 1U);
     BOOST_CHECK_EQUAL(unset->size(), 0U);
 
     // Reaching inside a temporary would hand back a reference to storage that dies at the
     // semicolon, so the accessors are refused there. The conversion is not, because an argument
     // outlives the call it is passed to.
-    using held = rank_checked<xvector<>>;
+    using held = xrank_checked<xvector<>>;
     const auto derefs = []<typename T>() { return requires(T&& t) { *std::forward<T>(t); }; };
     const auto arrows = []<typename T>() { return requires(T&& t) { std::forward<T>(t).operator->(); }; };
     const auto gets = []<typename T>() { return requires(T&& t) { std::forward<T>(t).get(); }; };
@@ -686,6 +687,78 @@ BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     BOOST_CHECK(!gets.template operator()<held>());
 
     BOOST_CHECK((std::convertible_to<held, const xvector<>&>));
+}
+
+// The constructors deduce the caller's value category, so a source handed over as an rvalue is
+// consumed rather than copied. Whether there is anything to consume is xtensor's decision and
+// differs by source type, so these assert the behaviour we actually depend on rather than a
+// general rule: they compare the address of the storage before and after.
+BOOST_AUTO_TEST_CASE(construction_consumes_an_rvalue_and_spares_an_lvalue) {
+    using namespace viam::trajex;
+
+    // The rank-checked path. This is the one that matters: converting a dynamically ranked array
+    // to a statically ranked one steals its buffer, and binding the argument to a const
+    // reference on the way in would have forced a copy of the whole thing.
+    {
+        xt::xarray<double> source = {{1.0, 2.0}, {3.0, 4.0}};
+        const double* const storage = source.data();
+        const xrank_checked<xmatrix<>> held{std::move(source)};
+        BOOST_CHECK_EQUAL(held.get().data(), storage);
+    }
+
+    // An lvalue must be left alone, whatever the rank path.
+    {
+        const xt::xarray<double> source = {{1.0, 2.0}, {3.0, 4.0}};
+        const double* const storage = source.data();
+        const xrank_checked<xmatrix<>> held{source};
+        BOOST_CHECK_NE(held.get().data(), storage);
+        BOOST_CHECK_EQUAL(source.dimension(), 2U);
+        BOOST_CHECK_CLOSE(source(1, 1), 4.0, 1e-12);
+    }
+
+    // An rvalue already of the held type goes through the dedicated T&& constructor.
+    {
+        xvector<> source = {1.0, 2.0, 3.0};
+        const double* const storage = source.data();
+        const xrank_checked<xvector<>> held{std::move(source)};
+        BOOST_CHECK_EQUAL(held.get().data(), storage);
+    }
+
+    // Consuming the argument must not cost the check: a rank that turns out wrong still throws.
+    // The source is built inside the lambda rather than moved from one the macro can see, since
+    // BOOST_CHECK_THROW may evaluate its statement more than once and a moved-from array would
+    // not fail the same way the second time.
+    {
+        const auto from_a_moved_wrong_rank = [] {
+            xt::xarray<double> wrong = {1.0, 2.0, 3.0};
+            return xrank_checked<xmatrix<>>{std::move(wrong)};
+        };
+        BOOST_CHECK_THROW(static_cast<void>(from_a_moved_wrong_rank()), std::invalid_argument);
+    }
+}
+
+// A forwarding constructor in a class that is also copyable is the classic way to displace the
+// copy constructor, since U&& deduces to a reference for a non-const lvalue. It cannot happen
+// here because both forwarding constructors require an xtensor expression and xrank_checked is
+// not one, but nothing in the code says so, and removing that constraint would look harmless.
+BOOST_AUTO_TEST_CASE(forwarding_constructors_do_not_displace_copy_or_move) {
+    using namespace viam::trajex;
+
+    using held = xrank_checked<xvector<>>;
+
+    static_assert(std::is_copy_constructible_v<held>);
+    static_assert(std::is_move_constructible_v<held>);
+
+    held original{xvector<>{1.0, 2.0, 3.0}};
+
+    const held copied{original};
+    BOOST_CHECK_EQUAL(copied.get().size(), 3U);
+    BOOST_CHECK_CLOSE(copied.get()(0), 1.0, 1e-12);
+    BOOST_CHECK_EQUAL(original.get().size(), 3U);
+
+    const double* const storage = original.get().data();
+    const held moved{std::move(original)};
+    BOOST_CHECK_EQUAL(moved.get().data(), storage);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

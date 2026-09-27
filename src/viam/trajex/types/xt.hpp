@@ -2,7 +2,6 @@
 
 #include <concepts>
 #include <cstddef>
-#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -49,31 +48,39 @@ using xmatrix = xt::xtensor<T, 2>;
 /// Satisfied by anything xtensor will evaluate, which is also what will convert to the array
 /// types above uninvited.
 ///
-template <typename T>
-concept tensor_like = std::derived_from<std::decay_t<T>, xt::xexpression<std::decay_t<T>>>;
-
-///
-/// The rank xtensor reports for T, which is dynamic_rank when it does not fix one.
+/// Spelled against xt::is_xexpression rather than deriving from xt::xexpression by hand, because
+/// that trait recognises both shapes the CRTP base can take where checking one of them does not.
+/// Deliberately not xt::xexpression_concept, which the version we pin does not define.
 ///
 template <typename T>
-inline constexpr std::size_t rank_of = xt::get_rank<std::decay_t<T>>::value;
+concept xexpression_like = xt::is_xexpression<T>::value;
 
 ///
 /// The rank of a type that settles its rank at runtime, such as xarray or any view.
 ///
-inline constexpr std::size_t dynamic_rank = std::numeric_limits<std::size_t>::max();
+/// Taken from xtensor rather than restated, so the two cannot drift. xtensor writes this
+/// sentinel as a bare SIZE_MAX wherever it needs it and gives it no name of its own, so asking
+/// a dynamically ranked array for its rank is the closest thing to a definition available.
+///
+inline constexpr std::size_t xrank_dynamic = xt::get_rank<xt::xarray<double>>::value;
+
+///
+/// The rank xtensor reports for T, which is xrank_dynamic when it does not fix one.
+///
+template <typename T>
+inline constexpr std::size_t xrank_of = xt::get_rank<std::decay_t<T>>::value;
 
 ///
 /// Satisfied when xtensor fixes T's rank at compile time, which is what makes it checkable here.
 ///
 template <typename T>
-concept statically_ranked = tensor_like<T> && (rank_of<T> != dynamic_rank);
+concept xranked_statically = xexpression_like<T> && xt::has_fixed_rank_t<T>::value;
 
 ///
 /// Satisfied when T carries its rank as a runtime property, so only T itself can report it.
 ///
 template <typename T>
-concept dynamically_ranked = tensor_like<T> && (rank_of<T> == dynamic_rank);
+concept xranked_dynamically = xexpression_like<T> && !xt::has_fixed_rank_t<T>::value;
 
 ///
 /// Satisfied when T and U both fix their rank and the two agree.
@@ -82,30 +89,32 @@ concept dynamically_ranked = tensor_like<T> && (rank_of<T> == dynamic_rank);
 /// the call site, which has no business restating it.
 ///
 template <typename T, typename U>
-concept same_rank_as = statically_ranked<T> && statically_ranked<U> && (rank_of<T> == rank_of<U>);
+concept xrank_same_as = xranked_statically<T> && xranked_statically<U> && (xrank_of<T> == xrank_of<U>);
 
 ///
-/// Satisfied when T is worth accepting where rank N is wanted: either it already is that rank,
-/// or its rank is only known at runtime and so is worth a check.
+/// Satisfied when T is worth accepting where a rank like U's is wanted: either it already has
+/// that rank, or its rank is only known at runtime and so is worth a check.
 ///
 /// What it excludes is the case nothing can rescue, a rank fixed at something else. Use it on a
 /// parameter that is then checked in the body, rather than on a parameter of concrete type: the
 /// deduction is the point, since a concrete parameter would convert before the body could look.
 ///
-template <typename T, std::size_t N>
-concept rank_or_runtime = (statically_ranked<T> && rank_of<T> == N) || dynamically_ranked<T>;
+/// Spelled against U for the same reason xrank_same_as is, so the call site says which type it
+/// wants a rank like rather than restating the number.
+///
+template <typename T, typename U>
+concept xrank_same_as_or_dynamic = xrank_same_as<T, U> || xranked_dynamically<T>;
 
 ///
-/// Satisfied when T holds elements of type V contiguously in row-major order.
+/// True when value's rank, however it was settled, matches the rank T fixes.
 ///
-/// Rows of such a thing can be handed on as adaptors over their own storage. Views and lazy
-/// expressions satisfy neither half: a view may stride over the array it reads, and an
-/// expression has no storage to point at until something evaluates it.
+/// The runtime counterpart of xrank_same_as, for the check a deduced overload owes in its body.
+/// Naming the type keeps the rank literal out of the call site the same way the concept does.
 ///
-template <typename T, typename V>
-concept dense_rows_of =
-    tensor_like<T> && xt::has_data_interface<std::decay_t<T>>::value && (std::decay_t<T>::static_layout == xt::layout_type::row_major) &&
-    std::same_as<typename std::decay_t<T>::value_type, V>;
+template <xranked_statically T>
+[[nodiscard]] bool xrank_is_same_as(const auto& value) {
+    return value.dimension() == xrank_of<T>;
+}
 
 ///
 /// An array of rank N, held as a T, which nothing could have given the wrong rank.
@@ -128,14 +137,15 @@ concept dense_rows_of =
 /// Access is const throughout. A mutable handle would let a caller resize the array out from
 /// under the guarantee, which would make the type a lie rather than a check.
 ///
-template <typename T, std::size_t N = rank_of<T>>
-class rank_checked {
+template <typename T, std::size_t N = xrank_of<T>>
+class xrank_checked {
    public:
-    static_assert(N != dynamic_rank, "rank_checked cannot infer a rank to check against from a dynamically ranked T; name one explicitly");
-    static_assert(!statically_ranked<T> || rank_of<T> == N, "rank_checked's rank must agree with the rank T fixes");
+    static_assert(N != xrank_dynamic,
+                  "xrank_checked cannot infer a rank to check against from a dynamically ranked T; name one explicitly");
+    static_assert(!xranked_statically<T> || xrank_of<T> == N, "xrank_checked's rank must agree with the rank T fixes");
 
     /// Holds a default-constructed T, which is empty rather than absent.
-    rank_checked() = default;
+    xrank_checked() = default;
 
     ///
     /// Takes ownership of a value that is already the held type.
@@ -145,27 +155,37 @@ class rank_checked {
     /// constructor below binds a const reference. On a path walked once per integration step
     /// that is an allocation per call.
     ///
-    rank_checked(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) : value_(std::move(value)) {}
+    xrank_checked(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) : value_(std::move(value)) {}
 
+    ///
     /// Takes a source whose rank is already known to be right. Nothing to check.
-    template <tensor_like U>
-        requires(statically_ranked<U> && rank_of<U> == N && std::constructible_from<T, const U&>)
-    rank_checked(const U& value) : value_(value) {}
+    ///
+    /// Deduces the caller's value category so an rvalue is consumed rather than copied. Whether
+    /// that saves anything is xtensor's business and varies by source type -- converting an
+    /// xarray to an xtensor steals its storage, converting an xtensor_fixed copies -- but
+    /// forwarding costs nothing where there is nothing to steal.
+    ///
+    template <typename U>
+        requires(xranked_statically<U> && xrank_of<U> == N && std::constructible_from<T, U &&>)
+    xrank_checked(U&& value) : value_(std::forward<U>(value)) {}
 
     ///
     /// Takes a source that settles its rank at runtime.
     ///
     /// @throws std::invalid_argument if the rank turns out not to be N
     ///
-    template <tensor_like U>
-        requires(dynamically_ranked<U> && std::constructible_from<T, const U&>)
-    rank_checked(const U& value) : value_(checked_(value)) {}
+    template <typename U>
+        requires(xranked_dynamically<U> && std::constructible_from<T, U &&>)
+    xrank_checked(U&& value) : value_(checked_(std::forward<U>(value))) {}
 
     // A rank fixed at anything else cannot be salvaged, and converting it would invent or
-    // discard extents rather than fail. Refuse it where the caller can see it.
-    template <tensor_like U>
-        requires(statically_ranked<U> && rank_of<U> != N)
-    rank_checked(const U&) = delete;
+    // discard extents rather than fail. Refuse it where the caller can see it. The bound on U is
+    // carried by xranked_statically, which admits only expressions, so this does not reach past
+    // xtensor to delete construction from unrelated types -- nor to xrank_checked itself, which
+    // is what keeps these forwarding constructors from displacing the copy constructor.
+    template <typename U>
+        requires(xranked_statically<U> && xrank_of<U> != N)
+    xrank_checked(U&&) = delete;
 
     // Reaching inside a temporary hands out a reference to storage that dies at the semicolon,
     // and the compiler will not say so. Refused on rvalues, which costs a named local at the
@@ -206,13 +226,17 @@ class rank_checked {
 
    private:
     // Checked before the conversion rather than after, because after is too late: converting a
-    // dynamically ranked array to a statically ranked one is what fabricates the extent.
+    // dynamically ranked array to a statically ranked one is what fabricates the extent. The
+    // conversion therefore happens here, on a forwarded argument so an rvalue is consumed rather
+    // than copied, and the result comes back by value -- returning a reference to the argument
+    // would hand one out to whatever the caller passed, which may have been a temporary. The
+    // prvalue initialises value_ directly, so the check costs nothing beyond the comparison.
     template <typename U>
-    static const U& checked_(const U& value) {
+    static T checked_(U&& value) {
         if (value.dimension() != N) {
             throw std::invalid_argument{"expected a rank-" + std::to_string(N) + " array, got rank " + std::to_string(value.dimension())};
         }
-        return value;
+        return T(std::forward<U>(value));
     }
 
     T value_{};

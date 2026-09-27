@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <viam/trajex/types/xt.hpp>
@@ -28,19 +30,39 @@ class kinematic_chain {
     ///         joint type (continuous or prismatic), or a revolute row with
     ///         zero-magnitude axis
     ///
-    /// Takes the table as whatever the caller holds it in rather than as an xmatrix. A
-    /// parameter of concrete type would accept anything convertible to one, and that
-    /// conversion fabricates or discards extents to reach rank two -- so a table of the wrong
-    /// rank would arrive already reshaped, and the check below would be inspecting a shape
-    /// this function invented. Deduction leaves the caller's type alone and makes the check
-    /// mean something. Anything whose rank is fixed at something other than two is refused
-    /// outright; anything that settles its rank at runtime reaches the check.
+    [[nodiscard]] static kinematic_chain from(const xmatrix<>& tensor);
+
     ///
-    template <rank_or_runtime<2> T>
+    /// Builds from a model table the caller holds in something other than an xmatrix.
+    ///
+    /// A parameter of concrete type accepts anything convertible to one, and that conversion
+    /// fabricates or discards extents to reach rank two -- so a table of the wrong rank would
+    /// arrive already reshaped, and a check would be inspecting a shape this function invented.
+    /// Deducing the caller's type leaves it alone and makes the check mean something. Anything
+    /// whose rank is fixed at something other than two is refused outright; anything that
+    /// settles its rank at runtime reaches the check and then converts once, here, where the
+    /// conversion is visible.
+    ///
+    /// A caller already holding an xmatrix binds to the overload above and never reaches this.
+    ///
+    /// @throws std::invalid_argument if the table is not 2-dimensional, plus everything the
+    ///         overload above throws
+    ///
+    template <xrank_same_as_or_dynamic<xmatrix<>> T>
     [[nodiscard]] static kinematic_chain from(const T& tensor) {
-        require_rank_two_(tensor.dimension());
-        return from_rank_two_(tensor);
+        if (!xrank_is_same_as<xmatrix<>>(tensor)) {
+            throw std::invalid_argument("viam::trajex::jacobian: expected 2D model-table tensor, got " +
+                                        std::to_string(tensor.dimension()) + "D");
+        }
+        return from(xmatrix<>(tensor));
     }
+
+    // A rank fixed at anything but two would otherwise reach the xmatrix overload by conversion,
+    // which fabricates or discards extents rather than failing. Deleting it here wins over that
+    // conversion on an exact match, so the caller sees a refusal instead of an invented shape.
+    template <xexpression_like T>
+        requires(!xrank_same_as_or_dynamic<T, xmatrix<>>)
+    static kinematic_chain from(const T&) = delete;
 
     ///
     /// Computes the geometric Jacobian at joint positions q.
@@ -54,16 +76,31 @@ class kinematic_chain {
     ///         and p_e the end-effector position.
     /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
-    /// Deduces q rather than naming it, for the reason given on from(): a concrete parameter
-    /// would reshape a wrong-ranked argument on the way in. Deduction also means a caller who
-    /// already holds an xvector passes it with no copy, which matters because the integrator
-    /// calls these once per step.
+    /// The integrator calls this once per step holding an xvector, and binds here with no copy.
     ///
-    template <rank_or_runtime<1> Q>
+    [[nodiscard]] xmatrix<> jacobian(const xvector<>& q) const;
+
+    ///
+    /// Computes the geometric Jacobian at joint positions q held in something other than an
+    /// xvector.
+    ///
+    /// Deduces q rather than naming it, for the reason given on from(): a concrete parameter
+    /// would reshape a wrong-ranked argument on the way in.
+    ///
+    /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
+    ///         above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q>
     [[nodiscard]] xmatrix<> jacobian(const Q& q) const {
-        require_rank_one_(q.dimension());
-        return jacobian_rank_one_(q);
+        require_rank_one_(q);
+        return jacobian(xvector<>(q));
     }
+
+    // Refused for the reason given on from(): a rank fixed at anything but one would otherwise
+    // convert into the xvector overload rather than fail.
+    template <xexpression_like Q>
+        requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
+    xmatrix<> jacobian(const Q&) const = delete;
 
     ///
     /// Computes the linear-velocity block of the geometric Jacobian at joint
@@ -72,13 +109,25 @@ class kinematic_chain {
     /// @param q (N_actuated,) vector with one element per revolute row in the
     ///        table, in chain order. Fixed rows do not consume a q entry.
     /// @return A (3, N_actuated) matrix of linear-velocity columns.
-    /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
+    /// @throws std::invalid_argument on q-size mismatch
     ///
-    template <rank_or_runtime<1> Q>
+    [[nodiscard]] xmatrix<> linear_jacobian(const xvector<>& q) const;
+
+    ///
+    /// As above, for a q the caller holds in something other than an xvector.
+    ///
+    /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
+    ///         above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q>
     [[nodiscard]] xmatrix<> linear_jacobian(const Q& q) const {
-        require_rank_one_(q.dimension());
-        return linear_jacobian_rank_one_(q);
+        require_rank_one_(q);
+        return linear_jacobian(xvector<>(q));
     }
+
+    template <xexpression_like Q>
+        requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
+    xmatrix<> linear_jacobian(const Q&) const = delete;
 
     /// Linear velocity gain ||J_v*f'||: task-space length per unit of path arc length, in
     /// whatever length unit the model table uses, with its rate of change along the path.
@@ -97,15 +146,35 @@ class kinematic_chain {
     /// @param q_prime (N_actuated,) path tangent dq/ds
     /// @param q_double_prime (N_actuated,) path curvature d^2q/ds^2
     /// @return the gain and its s-derivative
-    /// @throws std::invalid_argument on a size mismatch, or if any argument is not 1-dimensional
+    /// @throws std::invalid_argument on a size mismatch
     ///
-    template <rank_or_runtime<1> Q, rank_or_runtime<1> QP, rank_or_runtime<1> QPP>
+    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const xvector<>& q,
+                                                               const xvector<>& q_prime,
+                                                               const xvector<>& q_double_prime) const;
+
+    ///
+    /// As above, for arguments the caller holds in something other than an xvector.
+    ///
+    /// All three deduce independently, so a caller may mix. Any argument already an xvector is
+    /// converted to itself; passing three of them binds to the overload above instead.
+    ///
+    /// @throws std::invalid_argument if any argument is not 1-dimensional, plus everything the
+    ///         overload above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q, xrank_same_as_or_dynamic<xvector<>> QP, xrank_same_as_or_dynamic<xvector<>> QPP>
     [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const Q& q, const QP& q_prime, const QPP& q_double_prime) const {
-        require_rank_one_(q.dimension());
-        require_rank_one_(q_prime.dimension());
-        require_rank_one_(q_double_prime.dimension());
-        return linear_velocity_gain_at_rank_one_(q, q_prime, q_double_prime);
+        require_rank_one_(q);
+        require_rank_one_(q_prime);
+        require_rank_one_(q_double_prime);
+        return linear_velocity_gain_at(xvector<>(q), xvector<>(q_prime), xvector<>(q_double_prime));
     }
+
+    // Refused if any one argument is a rank fixed at something other than one, since that
+    // argument alone would convert into the xvector overload rather than fail.
+    template <xexpression_like Q, xexpression_like QP, xexpression_like QPP>
+        requires(!(xrank_same_as_or_dynamic<Q, xvector<>> && xrank_same_as_or_dynamic<QP, xvector<>> &&
+                   xrank_same_as_or_dynamic<QPP, xvector<>>))
+    linear_velocity_gain linear_velocity_gain_at(const Q&, const QP&, const QPP&) const = delete;
 
    private:
     // URDF joint type, restricted to arm-relevant joints. Underlying values
@@ -146,21 +215,16 @@ class kinematic_chain {
     // through here via `from`.
     explicit kinematic_chain(std::vector<joint_row_> rows);
 
-    // Split out of `from` so the parsing stays in the source file. Converting to an xmatrix
-    // here is safe in a way it would not have been at the parameter, because the rank has
-    // been established by then; for a caller who already had one it is not even a copy.
-    static void require_rank_two_(std::size_t dimension);
-    static void require_rank_one_(std::size_t dimension);
-
-    static kinematic_chain from_rank_two_(const xmatrix<>& tensor);
-
-    // The real work, behind the rank checks above. A caller who already holds an xvector binds
-    // straight through with no copy; one who does not pays a conversion that is safe by then.
-    [[nodiscard]] xmatrix<> jacobian_rank_one_(const xvector<>& q) const;
-    [[nodiscard]] xmatrix<> linear_jacobian_rank_one_(const xvector<>& q) const;
-    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at_rank_one_(const xvector<>& q,
-                                                                         const xvector<>& q_prime,
-                                                                         const xvector<>& q_double_prime) const;
+    // Defined here rather than in the source file because the deduced overloads above are
+    // instantiated in the caller's translation unit: a definition there would have to be
+    // exported, putting a private helper into the ABI. Defined inline it is emitted weakly
+    // wherever it is used and never reaches the export table.
+    static void require_rank_one_(const auto& value) {
+        if (!xrank_is_same_as<xvector<>>(value)) {
+            throw std::invalid_argument("viam::trajex::jacobian: expected a 1D joint vector, got " + std::to_string(value.dimension()) +
+                                        "D");
+        }
+    }
 
     // Evaluates the forward kinematics at joint positions q, capturing the
     // per-joint quantities the Jacobian assemblies need. Throws

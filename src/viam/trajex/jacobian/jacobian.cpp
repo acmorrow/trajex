@@ -205,19 +205,7 @@ kinematic_chain::kinematic_chain(std::vector<joint_row_> rows) : rows_(std::move
     }
 }
 
-void kinematic_chain::require_rank_one_(std::size_t dimension) {
-    if (dimension != 1) {
-        throw std::invalid_argument("viam::trajex::jacobian: expected a 1D joint vector, got " + std::to_string(dimension) + "D");
-    }
-}
-
-void kinematic_chain::require_rank_two_(std::size_t dimension) {
-    if (dimension != 2) {
-        throw std::invalid_argument("viam::trajex::jacobian: expected 2D model-table tensor, got " + std::to_string(dimension) + "D");
-    }
-}
-
-kinematic_chain kinematic_chain::from_rank_two_(const xmatrix<>& tensor) {
+kinematic_chain kinematic_chain::from(const xmatrix<>& tensor) {
     if (tensor.shape()[1] != 10) {
         throw std::invalid_argument("viam::trajex::jacobian: expected model-table shape (n, 10), got (n, " +
                                     std::to_string(tensor.shape()[1]) + ")");
@@ -243,7 +231,7 @@ kinematic_chain kinematic_chain::from_rank_two_(const xmatrix<>& tensor) {
     return kinematic_chain(std::move(rows));
 }
 
-xmatrix<> kinematic_chain::jacobian_rank_one_(const xvector<>& q) const {
+xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
     const chain_state_ state = compute_chain_state_(q);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{6}, actuated_count_});
@@ -261,7 +249,7 @@ xmatrix<> kinematic_chain::jacobian_rank_one_(const xvector<>& q) const {
     return J;
 }
 
-xmatrix<> kinematic_chain::linear_jacobian_rank_one_(const xvector<>& q) const {
+xmatrix<> kinematic_chain::linear_jacobian(const xvector<>& q) const {
     const chain_state_ state = compute_chain_state_(q);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{3}, actuated_count_});
@@ -276,9 +264,9 @@ xmatrix<> kinematic_chain::linear_jacobian_rank_one_(const xvector<>& q) const {
     return J;
 }
 
-kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at_rank_one_(const xvector<>& q,
-                                                                                         const xvector<>& q_prime,
-                                                                                         const xvector<>& q_double_prime) const {
+kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at(const xvector<>& q,
+                                                                               const xvector<>& q_prime,
+                                                                               const xvector<>& q_double_prime) const {
     if (q_prime.size() != actuated_count_ || q_double_prime.size() != actuated_count_) {
         throw std::invalid_argument("viam::trajex::jacobian: q_prime/q_double_prime size mismatch: expected " +
                                     std::to_string(actuated_count_) + " (actuated joints)");

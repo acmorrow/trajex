@@ -64,7 +64,7 @@ class path {
             /// @param end Ending configuration
             /// @throws std::invalid_argument if start == end
             ///
-            linear(rank_checked<xvector<>> start, const rank_checked<xvector<>>& end);
+            linear(xrank_checked<xvector<>> start, const xrank_checked<xvector<>>& end);
 
             ///
             /// Constructs linear segment from precomputed components.
@@ -77,7 +77,7 @@ class path {
             /// @param length Arc length (must be positive)
             /// @throws std::invalid_argument if length is not positive
             ///
-            linear(rank_checked<xvector<>> start, rank_checked<xvector<>> unit_direction, arc_length length);
+            linear(xrank_checked<xvector<>> start, xrank_checked<xvector<>> unit_direction, arc_length length);
 
             // Stored unwrapped. The constructors are the only way to build one, so the rank is
             // settled by the time these exist, and the geometry accessors read them at every
@@ -102,7 +102,7 @@ class path {
             /// @throws std::invalid_argument if x,y are not orthonormal
             ///
             circular(
-                rank_checked<xvector<>> center, rank_checked<xvector<>> x, rank_checked<xvector<>> y, double radius, double angle_rads);
+                xrank_checked<xvector<>> center, xrank_checked<xvector<>> x, xrank_checked<xvector<>> y, double radius, double angle_rads);
 
             xvector<> center;   ///< Center of arc in configuration space
             xvector<> x;        ///< First basis vector (defines rotation plane)

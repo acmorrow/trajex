@@ -96,7 +96,7 @@ class trajectory {
         ///
         /// The argument is ours and needs no guard; the result is the caller's, and a result of
         /// the wrong rank would otherwise be reshaped on its way back rather than reported.
-        using linear_jacobian_fn = std::function<rank_checked<xmatrix<>>(const xvector<>&)>;
+        using linear_jacobian_fn = std::function<xrank_checked<xmatrix<>>(const xvector<>&)>;
 
         /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
         using linear_velocity_gain_fn =
@@ -139,12 +139,12 @@ class trajectory {
         ///
         /// Maximum velocity per DOF (units match configuration space).
         ///
-        rank_checked<xvector<>> max_velocity;
+        xrank_checked<xvector<>> max_velocity;
 
         ///
         /// Maximum acceleration per DOF (units match configuration space).
         ///
-        rank_checked<xvector<>> max_acceleration;
+        xrank_checked<xvector<>> max_acceleration;
 
         ///
         /// Default integration time step for phase plane integration.

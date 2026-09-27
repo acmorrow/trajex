@@ -16,7 +16,7 @@ waypoint_accumulator::waypoint_accumulator(const xmatrix<>& waypoints) {
     append_rows_(waypoints);
 }
 
-waypoint_accumulator::waypoint_accumulator(const waypoint_view_t& first_waypoint) {
+waypoint_accumulator::waypoint_accumulator(const waypoint_view& first_waypoint) {
     dof_ = first_waypoint.shape()[0];
     waypoints_.push_back(first_waypoint);
 }
@@ -44,7 +44,7 @@ waypoint_accumulator& waypoint_accumulator::add_waypoints(const xmatrix<>& waypo
     return *this;
 }
 
-waypoint_accumulator& waypoint_accumulator::add_waypoint(const waypoint_view_t& waypoint) {
+waypoint_accumulator& waypoint_accumulator::add_waypoint(const waypoint_view& waypoint) {
     if (waypoint.shape()[0] != dof_) {
         throw std::invalid_argument{"Waypoint DOF must match existing DOF"};
     }
@@ -80,18 +80,18 @@ waypoint_accumulator::const_iterator waypoint_accumulator::cend() const noexcept
     return waypoints_.cend();
 }
 
-const waypoint_accumulator::waypoint_view_t& waypoint_accumulator::operator[](size_t i) const {
+const waypoint_accumulator::waypoint_view& waypoint_accumulator::operator[](size_t i) const {
     return waypoints_[i];
 }
 
-const waypoint_accumulator::waypoint_view_t& waypoint_accumulator::at(size_t i) const {
+const waypoint_accumulator::waypoint_view& waypoint_accumulator::at(size_t i) const {
     if (i >= waypoints_.size()) [[unlikely]] {
         throw std::out_of_range{"waypoint_accumulator::at: index out of range"};
     }
     return waypoints_[i];
 }
 
-const waypoint_accumulator::waypoint_view_t& waypoint_accumulator::back() const noexcept {
+const waypoint_accumulator::waypoint_view& waypoint_accumulator::back() const noexcept {
     return waypoints_.back();
 }
 
