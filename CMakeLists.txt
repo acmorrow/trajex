@@ -674,9 +674,13 @@ if (VIAM_TRAJEX_BUILD_TESTS)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
   )
 
+  # The headers under types/ include xtensor, so this needs the include path. It does not link
+  # the trajex library, which is where every other test target picks that up.
   target_link_libraries(viam-trajex-types-test
     PRIVATE
     Boost::boost
+    xtensor
+    xtl
   )
 
   apply_wall_werror(viam-trajex-types-test)

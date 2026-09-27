@@ -15,6 +15,12 @@
 #include <string>
 #include <utility>
 
+#if __has_include(<xtensor/core/xnoalias.hpp>)
+#include <xtensor/core/xnoalias.hpp>
+#else
+#include <xtensor/xnoalias.hpp>
+#endif
+
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/private/phase_plane_slope.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
@@ -1531,8 +1537,14 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // TODO(RSDK-12769): This is ugly and inefficient. Refactor to avoid all this manual tracking.
                     next_point = current_point;
                     cache.path_cursor.seek(next_point.s);
-                    next_q_prime = cache.path_cursor.tangent();
-                    next_q_double_prime = cache.path_cursor.curvature();
+
+                    // Copy out of the cursor's cache. The value-returning accessors would
+                    // allocate an array to hand back, discarding storage these two already
+                    // own. They must remain assignments rather than references: the bisection
+                    // below seeks the cursor, which invalidates the cache, and both are read
+                    // after it.
+                    xt::noalias(next_q_prime) = cache.path_cursor.tangent_ref();
+                    xt::noalias(next_q_double_prime) = cache.path_cursor.curvature_ref();
                     auto [next_s_dot_max_acc_2, next_s_dot_max_vel_2] =
                         compute_velocity_limits_with_tcp(next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_);
                     next_s_dot_max_acc = next_s_dot_max_acc_2;
@@ -1557,8 +1569,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             breach_s_dot_max_vel = midpoint_s_dot_max_vel;
                         } else {
                             next_point = mid;
-                            next_q_prime = mid_q_prime;
-                            next_q_double_prime = mid_q_double_prime;
+                            xt::noalias(next_q_prime) = mid_q_prime;
+                            xt::noalias(next_q_double_prime) = mid_q_double_prime;
                             next_s_dot_max_acc = midpoint_s_dot_max_acc;
                             next_s_dot_max_vel = midpoint_s_dot_max_vel;
                         }
@@ -2362,14 +2374,14 @@ void trajectory::cursor::sample(struct trajectory::sample& into) const {
     // Kunz & Stilman equation 12
     const auto q_ddot = (q_prime * static_cast<double>(s_ddot)) + q_double_prime * (s_dot_double * s_dot_double);
 
-    // Assign rather than construct. Where `into` already carries arrays of the right shape --
-    // which it does for every sample after the first of a run -- xtensor writes through them
-    // instead of allocating, and the lazily-built expressions above are evaluated straight
-    // into the caller's storage.
+    // Assign into the arrays `into` already holds rather than building new ones. Without the
+    // noalias, xtensor may decide an expression could read the destination and evaluate into a
+    // temporary first, which allocates on every sample. The expressions read only the path
+    // cursor's geometry, never `into`.
     into.time = time_;
-    into.configuration = q;
-    into.velocity = q_dot;
-    into.acceleration = q_ddot;
+    xt::noalias(into.configuration) = q;
+    xt::noalias(into.velocity) = q_dot;
+    xt::noalias(into.acceleration) = q_ddot;
 }
 
 void trajectory::cursor::update_path_cursor_position_(seconds t) {

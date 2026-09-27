@@ -11,8 +11,10 @@
 #include <utility>
 
 #if __has_include(<xtensor/reducers/xnorm.hpp>)
+#include <xtensor/core/xnoalias.hpp>
 #include <xtensor/reducers/xnorm.hpp>
 #else
+#include <xtensor/xnoalias.hpp>
 #include <xtensor/xnorm.hpp>
 #endif
 
@@ -81,7 +83,7 @@ path::segment::linear::linear(rank_checked<xvector<>> start, const rank_checked<
         throw std::invalid_argument{"Linear segment: start and end must be different"};
     }
 
-    this->unit_direction = diff / norm;
+    xt::noalias(this->unit_direction) = diff / norm;
     this->length = arc_length{norm};
 }
 
@@ -585,7 +587,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             // current_position must be a configuration copy rather than an iterator.
             const auto outgoing = *next - *locus;
             const auto outgoing_unit = outgoing / xt::norm_l2(outgoing)();
-            current_position = *locus + (blend.trim_distance * outgoing_unit);
+            xt::noalias(current_position) = *locus + (blend.trim_distance * outgoing_unit);
 
             // Move segment_start forward for coalescing calculations. Even though current_position
             // is between locus and next, we use locus as the reference point for determining if
@@ -598,7 +600,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             segments.push_back({.seg = segment{std::move(linear_data)}, .start = cumulative_length});
             cumulative_length += linear_data_length;
 
-            current_position = *locus;
+            xt::noalias(current_position) = *locus;
             segment_start = locus;
         }
     }
