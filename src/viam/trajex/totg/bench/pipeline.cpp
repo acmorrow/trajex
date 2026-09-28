@@ -58,13 +58,13 @@ constexpr workload k_workloads[] = {
     {"VIK-182-stall", "VIK-182-stall.trajex-totg-replay.json"},
 };
 
-// Representative of what the universal-robots module samples at; its configured range is
+// Representative of what the universal-robots module samples at, whose configured range is
 // 1 to 500 Hz.
 constexpr double k_sampling_freq_hz = 100.0;
 
-// Unmeasured iterations run before the measured ones. Process startup, first-touch page
-// faults, and allocator warmup otherwise land entirely in whichever benchmark happens to
-// run first, which showed up as a 940x inflation of the first cell.
+// Process startup, first-touch page faults, and allocator warmup otherwise land entirely in
+// whichever benchmark happens to run first, which showed up as a 940x inflation of the first
+// cell.
 constexpr double k_warmup_seconds = 0.1;
 
 // Prefix lengths to sweep, filtered per record to those smaller than it. Each record's own
@@ -83,9 +83,9 @@ struct record {
     xmatrix<> waypoints;
 };
 
-// Parsed on first request and cached. Registration asks each record for its waypoint count,
-// so both are parsed up front; the cache keeps the five benchmarks per record from parsing
-// it five times. JSON parsing is not part of any stage we are measuring.
+// Registration asks each record for its waypoint count, so both get parsed up front and the
+// cache keeps the five benchmarks per record from parsing it five times. JSON parsing is not
+// part of any stage we are measuring.
 const record& loaded_record(const std::string& filename) {
     static std::map<std::string, record> cache;
 
@@ -207,9 +207,8 @@ void bm_trajectory_create(benchmark::State& state, const std::string& filename) 
     const waypoint_accumulator accumulator{waypoints};
     const auto p = path::create(accumulator, path_options_for(source.config));
 
-    // `trajectory::create` consumes the path and the options, so each iteration needs its
-    // own copies. Rebuilding them is setup, not the thing being measured, so it happens
-    // with the clock stopped.
+    // `trajectory::create` consumes the path and the options, so each iteration needs its own
+    // copies. Rebuilding them is setup, not what we are measuring.
     for (auto unused : state) {
         benchmark::DoNotOptimize(unused);
         state.PauseTiming();
@@ -257,11 +256,10 @@ void bm_sample_collect(benchmark::State& state, const std::string& filename) {
 
     // Marshal each sample into the flat per-quantity arrays a caller receives when it wants a
     // trajectory whole rather than a sample at a time. `bm_sample` above reads the same values
-    // into a scalar; the difference between the two is what the row writes cost.
+    // into a scalar, so the difference between the two is what the row writes cost.
     //
-    // The destinations are built once. Allocating three arrays of this size per iteration
-    // would measure the allocation rather than the row writes, and the row writes are what
-    // scales with the length of the trajectory.
+    // Allocating three arrays of this size per iteration would measure the allocation rather
+    // than the row writes.
     xvector<> times(xvector<>::shape_type{n_samples});
     xmatrix<> configurations(xmatrix<>::shape_type{n_samples, n_dof});
     xmatrix<> velocities(xmatrix<>::shape_type{n_samples, n_dof});

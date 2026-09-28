@@ -1,8 +1,4 @@
 // Entry point for the trajex benchmarks.
-//
-// Kept apart from the benchmark sources so that no one of them owns the program: the
-// pipeline benchmarks and the xtensor idiom benchmarks are peers, and either could be run
-// without the other.
 
 #include <benchmark/benchmark.h>
 

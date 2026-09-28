@@ -446,15 +446,14 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     auto waypoints_range = std::views::all(waypoints);
     std::optional<waypoint_accumulator> colinearized;
     if (opts.max_linear_deviation() != 0.0) {
-        // The colinearity test splits into a half that depends only on the segment being
-        // tested against and a half that depends on the locus. The loop below tests every
-        // waypoint it has skipped so far against the same segment, so computing the first half
-        // once per segment rather than once per locus removes most of the work.
+        // The colinearity test splits into a half depending only on the segment and a half
+        // depending on the locus. The loop below tests every waypoint it has skipped against
+        // the same segment, so computing the first half once per segment rather than once per
+        // locus removes most of the work.
         //
-        // Note that the two lambdas are not independent. `segment_deviation_context` holds
-        // state between them, so `begin_segment` must be called for a segment before any
-        // `locus_within_tolerance` against it, and the scratch vector must not be read across a
-        // later `begin_segment`.
+        // The two lambdas are not independent: `segment_deviation_context` holds state between
+        // them, so `begin_segment` must run for a segment before any `locus_within_tolerance`
+        // against it, and the scratch vector must not be read across a later `begin_segment`.
         struct segment_deviation_context {
             xvector<> start_to_next;
             double length_sq;
@@ -466,8 +465,8 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
         const auto radius = opts.max_linear_deviation() / 2.0;
 
         // Establishes the segment that loci are tested against. Returns false when start and
-        // next are the same position: the locus is then an intentional intermediate goal
-        // rather than a point along a line, and nothing may be coalesced through it.
+        // next are the same position, because the locus is then an intentional intermediate
+        // goal rather than a point along a line, and nothing may be coalesced through it.
         const auto begin_segment = [&segment_ctx](const auto& start, const auto& next) -> bool {
             xt::noalias(segment_ctx.start_to_next) = next - start;
 
@@ -841,8 +840,8 @@ path::cursor::rich path::cursor::enrich() const {
 }
 
 path::cursor::rich::rich(cursor c) : cursor{std::move(c)} {
-    // Size all three once, here, so that no accessor ever allocates. A rich cursor built on
-    // a path whose dof is zero would still be well-formed; the accessors would fill nothing.
+    // Size all three once, here, so that no accessor ever allocates. A rich cursor on a path
+    // whose dof is zero is still well-formed, and its accessors fill nothing.
     const std::array<std::size_t, 1> shape{this->path().dof()};
 
     configuration_ = xvector<>::from_shape(shape);

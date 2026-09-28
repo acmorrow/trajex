@@ -35,14 +35,6 @@ class kinematic_chain {
     ///
     /// Builds from a model table the caller holds in something other than an xmatrix.
     ///
-    /// A parameter of concrete type accepts anything convertible to one, and that conversion
-    /// fabricates or discards extents to reach rank two -- so a table of the wrong rank would
-    /// arrive already reshaped, and a check would be inspecting a shape this function invented.
-    /// Deducing the caller's type leaves it alone and makes the check mean something. Anything
-    /// whose rank is fixed at something other than two is refused outright; anything that
-    /// settles its rank at runtime reaches the check and then converts once, here, where the
-    /// conversion is visible.
-    ///
     /// A caller already holding an xmatrix binds to the overload above and never reaches this.
     ///
     /// @throws std::invalid_argument if the table is not 2-dimensional, plus everything the
@@ -57,9 +49,7 @@ class kinematic_chain {
         return from(xmatrix<>(tensor));
     }
 
-    // A rank fixed at anything but two would otherwise reach the xmatrix overload by conversion,
-    // which fabricates or discards extents rather than failing. Deleting it here wins over that
-    // conversion on an exact match, so the caller sees a refusal instead of an invented shape.
+    // Otherwise this converts into the xmatrix overload, which is the UB case.
     template <xexpression_like T>
         requires(!xrank_same_as_or_dynamic<T, xmatrix<>>)
     static kinematic_chain from(const T&) = delete;
@@ -84,9 +74,6 @@ class kinematic_chain {
     /// Computes the geometric Jacobian at joint positions q held in something other than an
     /// xvector.
     ///
-    /// Deduces q rather than naming it, for the reason given on from(): a concrete parameter
-    /// would reshape a wrong-ranked argument on the way in.
-    ///
     /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
     ///         above throws
     ///
@@ -96,8 +83,7 @@ class kinematic_chain {
         return jacobian(xvector<>(q));
     }
 
-    // Refused for the reason given on from(): a rank fixed at anything but one would otherwise
-    // convert into the xvector overload rather than fail.
+    // As on from() above.
     template <xexpression_like Q>
         requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
     xmatrix<> jacobian(const Q&) const = delete;
@@ -155,8 +141,8 @@ class kinematic_chain {
     ///
     /// As above, for arguments the caller holds in something other than an xvector.
     ///
-    /// All three deduce independently, so a caller may mix. Any argument already an xvector is
-    /// converted to itself; passing three of them binds to the overload above instead.
+    /// All three deduce independently, so a caller may mix. Three xvectors bind to the overload
+    /// above instead.
     ///
     /// @throws std::invalid_argument if any argument is not 1-dimensional, plus everything the
     ///         overload above throws
@@ -169,8 +155,7 @@ class kinematic_chain {
         return linear_velocity_gain_at(xvector<>(q), xvector<>(q_prime), xvector<>(q_double_prime));
     }
 
-    // Refused if any one argument is a rank fixed at something other than one, since that
-    // argument alone would convert into the xvector overload rather than fail.
+    // As on from() above, and any one wrong argument is enough.
     template <xexpression_like Q, xexpression_like QP, xexpression_like QPP>
         requires(!(xrank_same_as_or_dynamic<Q, xvector<>> && xrank_same_as_or_dynamic<QP, xvector<>> &&
                    xrank_same_as_or_dynamic<QPP, xvector<>>))
@@ -215,10 +200,8 @@ class kinematic_chain {
     // through here via `from`.
     explicit kinematic_chain(std::vector<joint_row_> rows);
 
-    // Defined here rather than in the source file because the deduced overloads above are
-    // instantiated in the caller's translation unit: a definition there would have to be
-    // exported, putting a private helper into the ABI. Defined inline it is emitted weakly
-    // wherever it is used and never reaches the export table.
+    // Defined here, not in the source file: the deduced overloads above instantiate in the
+    // caller's translation unit, so a definition there would have to be exported.
     static void require_rank_one_(const auto& value) {
         if (!xrank_is_same_as<xvector<>>(value)) {
             throw std::invalid_argument("viam::trajex::jacobian: expected a 1D joint vector, got " + std::to_string(value.dimension()) +

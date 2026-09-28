@@ -74,10 +74,9 @@ arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                         const xvector<>& q_prime,
                                         const trajectory::tcp_limits& tcp,
                                         class epsilon epsilon) {
-    // Held by value: binding a reference straight to *callback() would point into a temporary
-    // that dies at the end of the statement, since lifetime extension does not reach through a
-    // member function's returned reference. Rank is the return type's problem now, so only the
-    // shape is left to check here.
+    // Held by value because binding a reference straight to *callback() would point into a
+    // temporary that dies at the end of the statement. Lifetime extension does not reach
+    // through a member function's returned reference.
     const auto J_checked = tcp.linear_jacobian(q);
     const auto& J = *J_checked;
     if (J.shape(0) != 3) {
@@ -209,10 +208,8 @@ struct velocity_limits_with_components {
     return {limits.s_dot_max_acc, limits.s_dot_max_vel};
 }
 
-// The configuration at a cursor, avoiding the allocation where the cursor can.
-// rich_cursor_like refines cursor_like, so the borrowing form wins by subsumption and neither
-// caller below needs to know which kind it has. Both callers consume the result within the full
-// expression, which is well inside the window rule the borrowed form carries.
+// The configuration at a cursor, borrowing where the cursor can. Both callers consume the
+// result within the full expression, so the borrowed reference cannot go stale under them.
 template <cursor_like C>
 [[nodiscard]] xvector<> configuration_of(const C& cursor) {
     return cursor.configuration();
@@ -223,12 +220,9 @@ template <rich_cursor_like C>
     return cursor.configuration_ref();
 }
 
-// Cursor-taking overloads for call sites whose configuration comes from a positioned cursor.
-// Templated on cursor_like so that a rich cursor reaches them as itself: it does not convert to a
-// plain cursor, and taking one by value here would put the caller back to allocating a fresh array
-// on every geometry query. The configuration is read only when a TCP limit is set, because on a
-// plain cursor that read allocates and the joint-only path never looks at it. Call sites whose
-// configuration comes from a segment rather than a cursor use the q-taking overloads above.
+// Templated on cursor_like so a rich cursor arrives as itself. Taking one by value would put
+// the caller back to allocating on every geometry query. The configuration is read only when a
+// TCP limit is set, since on a plain cursor that read allocates.
 template <cursor_like C>
 [[nodiscard]] velocity_limits_with_components compute_velocity_limits_and_components(const xvector<>& q_prime,
                                                                                      const xvector<>& q_double_prime,
@@ -1538,11 +1532,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     next_point = current_point;
                     cache.path_cursor.seek(next_point.s);
 
-                    // Copy out of the cursor's cache. The value-returning accessors would
-                    // allocate an array to hand back, discarding storage these two already
-                    // own. They must remain assignments rather than references: the bisection
-                    // below seeks the cursor, which invalidates the cache, and both are read
-                    // after it.
+                    // Copied out rather than bound, because the bisection below seeks the
+                    // cursor and both are read after it.
                     xt::noalias(next_q_prime) = cache.path_cursor.tangent_ref();
                     xt::noalias(next_q_double_prime) = cache.path_cursor.curvature_ref();
                     auto [next_s_dot_max_acc_2, next_s_dot_max_vel_2] =
@@ -2348,11 +2339,10 @@ void trajectory::cursor::sample(struct trajectory::sample& into) const {
     // Query the path geometry at the current arc length position. The path_cursor_ has
     // already been positioned by update_path_cursor_position_ in seek().
     //
-    // These bind by reference to storage the cursor owns and refills on its next move, so
-    // they are good only until this cursor seeks again. Nothing below seeks, and the
-    // expressions built from them are evaluated into the returned sample before this function
-    // returns, so the values escape by copy. Introducing a seek between here and the return
-    // would silently change what these refer to.
+    // These bind to storage the cursor refills on its next move, so they are good only until
+    // it seeks again. Nothing below seeks, and the expressions built from them are evaluated
+    // into the sample before returning. A seek introduced between here and the return would
+    // silently change what they refer to.
     const auto& q = path_cursor_.configuration_ref();
     const auto& q_prime = path_cursor_.tangent_ref();
     const auto& q_double_prime = path_cursor_.curvature_ref();
@@ -2376,7 +2366,7 @@ void trajectory::cursor::sample(struct trajectory::sample& into) const {
 
     // Assign into the arrays `into` already holds rather than building new ones. Without the
     // noalias, xtensor may decide an expression could read the destination and evaluate into a
-    // temporary first, which allocates on every sample. The expressions read only the path
+    // temporary first, allocating on every sample. These expressions read only the path
     // cursor's geometry, never `into`.
     into.time = time_;
     xt::noalias(into.configuration) = q;

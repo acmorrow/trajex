@@ -1,12 +1,9 @@
 // Cost of the xtensor idioms trajex uses on small, fixed-width vectors.
 //
-// Every hot path in the integrator manipulates one configuration-space vector at a time,
-// which for the arms we care about is six doubles. At that width the useful work is a
-// handful of arithmetic operations, so whatever a container spends establishing shape,
-// strides, or storage is not amortised over anything -- it is the cost. These benchmarks
-// put numbers on that, so decisions about which container to hold geometry in, and whether
-// to return it or fill it in place, rest on measurement rather than on reasoning about what
-// the compiler ought to manage.
+// Every hot path in the integrator handles one configuration-space vector at a time, six
+// doubles for the arms we care about. At that width the useful work is a handful of arithmetic
+// operations, so whatever a container spends on shape, strides, or storage is the cost rather
+// than overhead on top of it.
 //
 // Operations are batched over a run of rows because a six-element operation takes a couple
 // of nanoseconds, which is the same order as google-benchmark's own loop overhead. Timing
@@ -143,10 +140,10 @@ BENCHMARK(copy_whole_row<raw_row>)->Name("bm_copy/std_array_assign");
 // Handing a vector back to a caller. This is the shape of `path::cursor::tangent()` and its
 // siblings, which return `xt::xarray<double>` by value on every geometry query.
 //
-// The producers are marked noinline deliberately: the real accessors are defined in path.cpp
-// and called from trajectory.cpp with no link-time optimisation, so the caller cannot see
-// through them and elide the return. A benchmark that let them inline would measure
-// something the integrator never gets.
+// The producers are noinline deliberately. The real accessors are defined in path.cpp and
+// called from trajectory.cpp with no link-time optimisation, so the caller cannot see through
+// them and elide the return. Letting them inline here would measure something the integrator
+// never gets.
 //
 
 [[gnu::noinline]] xt::xarray<double> produce_xarray(const xt::xarray<double>& source, std::size_t row) {
@@ -280,15 +277,11 @@ BENCHMARK(limit_expression)->Name("bm_limit/xarray_expression");
 
 //
 // The waypoint coalescing test from `path::create`, which a profile put at roughly three
-// quarters of that stage. For each triple of consecutive rows it asks whether the middle one
-// lies close enough to the line between its neighbours to be dropped: a squared length, a
-// dot product, a projection, and a norm, all over six doubles.
+// quarters of that stage.
 //
-// The point of the grid is to separate two effects that the existing `bm_limit` numbers
-// conflate. Rank varies across `xarray` (runtime rank, shape carried in an svector) and
-// `xtensor<double, 2>` (rank fixed at compile time, size still dynamic). Reduction strategy
-// varies across xtensor's default lazy stepper and its immediate path. The scalar loop is
-// the floor: the same arithmetic with no container machinery at all.
+// The grid separates two effects that `bm_limit` conflates: rank, across `xarray` and
+// `xtensor<double, 2>`, and reduction strategy, across xtensor's lazy stepper and its
+// immediate path. The scalar loop is the floor.
 //
 // The lazy cells reproduce the real code faithfully, including binding `start_to_next` once
 // and using it five times, because that repetition is part of what is being measured.
@@ -335,9 +328,8 @@ void coalesce_lazy(benchmark::State& state) {
     }
 }
 
-// The row container matching a given 2-D container's rank discipline. This is what
-// `xt::eval` would hand back for an expression over rows of that container, spelled out so
-// the benchmark states which type it is testing rather than deriving it from a trait.
+// The row container for a given 2-D container, which is what `xt::eval` hands back for an
+// expression over its rows. Spelled out so the benchmark names the type it is testing.
 template <typename Array2D>
 struct row_of;
 
@@ -355,13 +347,11 @@ template <typename Array2D>
 using row_of_t = typename row_of<Array2D>::type;
 
 // Identical to coalesce_lazy except that the one expression used more than once is evaluated
-// into a container first. In the real code `next - start` is walked five times -- once for the
-// identical-endpoints test, twice inside the squared length, once for the dot product and once
-// for the projection -- and every walk goes through the view steppers again.
+// into a container first. In the real code `next - start` is walked five times, each walk
+// going through the view steppers again, so this trades four walks for one allocation.
 //
-// This trades four of those walks for one allocation per triple. Note when reading the result
-// that the allocation sits at full weight here, where in `path::create` the same allocation is
-// diluted across everything else that stage does per waypoint.
+// The allocation sits at full weight here, where in `path::create` it is diluted across
+// everything else that stage does per waypoint.
 template <typename Array2D>
 void coalesce_materialized(benchmark::State& state) {
     const auto rows = make_2d<Array2D>();
@@ -445,10 +435,9 @@ void coalesce_scalar_loop(benchmark::State& state) {
     const auto rows = make_2d<xt::xtensor<double, 2>>();
     const double* const data = rows.data();
 
-    // Degrees of freedom is a runtime property everywhere in trajex, and the expression cells
-    // above carry it as runtime data inside the container whatever happens. Taking it from the
-    // shape and hiding it from the optimiser keeps this loop honest: against a constexpr bound
-    // it unrolls completely and the comparison measures something no production call site gets.
+    // Degrees of freedom comes from the shape and is hidden from the optimiser. Against a
+    // constexpr bound this loop unrolls completely, and the comparison would be measuring
+    // something no production call site ever gets.
     std::size_t dof = rows.shape(1);
     benchmark::DoNotOptimize(dof);
 
@@ -462,8 +451,8 @@ void coalesce_scalar_loop(benchmark::State& state) {
             const double* const next = data + ((i + 2) * dof);
 
             // One pass covers the identical-endpoints test, the squared length and the dot
-            // product; the expression forms above need three traversals for the same three
-            // answers because each is a separate reduction.
+            // product. The expression forms above need three traversals for the same three
+            // answers, because each is a separate reduction.
             bool identical = true;
             double start_to_next_sq = 0.0;
             double start_to_locus_dot_direction = 0.0;

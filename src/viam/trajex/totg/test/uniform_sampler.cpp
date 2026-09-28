@@ -288,9 +288,9 @@ BOOST_AUTO_TEST_CASE(range_refills_sample_storage_in_place) {
     auto it = range.begin();
     BOOST_REQUIRE(it != range.end());
 
-    // The iterator refills one sample rather than replacing it, so its storage must not move
-    // as the range advances. Going back to assigning a freshly built sample per step would
-    // relocate these and cost three allocations per sample, which is the whole point.
+    // The iterator refills one sample rather than replacing it, so its storage must not move as
+    // the range advances. Going back to assigning a freshly built sample per step would
+    // relocate these and cost three allocations per sample.
     const double* const configuration_storage = (*it).configuration.data();
     const double* const velocity_storage = (*it).velocity.data();
     const double* const acceleration_storage = (*it).acceleration.data();

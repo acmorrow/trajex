@@ -29,10 +29,9 @@ namespace waypoint_accumulator_details {
 ///
 /// Satisfied when each row of T can be adapted where it lies, rather than copied.
 ///
-/// Requires contiguous row-major storage of the element type a waypoint_view adapts. A lazy
-/// expression has nothing to point at until something evaluates it and a strided view exposes no
-/// data interface, so neither qualifies; a contiguous view does, which makes this a statement
-/// about layout rather than about ownership.
+/// Requires contiguous row-major storage of the element type waypoint_view adapts. A lazy
+/// expression has nothing to point at and a strided view exposes no data interface. This is
+/// about layout, not ownership: a contiguous view qualifies.
 ///
 template <typename T>
 concept rows_adaptable = xexpression_like<T> && xt::has_data_interface<std::decay_t<T>>::value &&
@@ -42,9 +41,8 @@ concept rows_adaptable = xexpression_like<T> && xt::has_data_interface<std::deca
 ///
 /// Satisfied by anything waypoint_accumulator will read a waypoint set out of.
 ///
-/// Rank two, or not yet committed to a rank and so worth a check in the body. Admits an adaptor
-/// over a caller's own buffer and a fixed-shape array as readily as an xmatrix, none of which
-/// need converting or copying to be read row by row.
+/// Admits an adaptor over a caller's own buffer or a fixed-shape array as readily as an
+/// xmatrix, none of which need copying to be read row by row.
 ///
 template <typename T>
 concept waypoints_like = xrank_same_as_or_dynamic<T, xmatrix<>> && rows_adaptable<T>;
@@ -91,13 +89,12 @@ class waypoint_accumulator {
     /// @throws std::invalid_argument if the array turns out not to be 2-dimensional
     /// @note The waypoints array must outlive the waypoint_accumulator object
     ///
-    /// The xmatrix overload above is the one to reach for and the one a near miss will be
-    /// diagnosed against; this exists so that a caller already holding their waypoints in an
-    /// adaptor over their own memory, or in a fixed-shape array, need not copy them first.
+    /// The xmatrix overload above is the one to reach for, and the one a near miss is diagnosed
+    /// against. This exists so a caller holding waypoints in an adaptor over their own memory,
+    /// or in a fixed-shape array, need not copy them first.
     ///
-    /// The rank check runs whether or not the rank was already fixed. A source that settles its
-    /// rank at runtime needs it, one that does not folds it away, and the alternative is a
-    /// second overload differing by a single comparison.
+    /// The rank check runs either way. A rank settled at runtime needs it, a fixed one folds it
+    /// away, and splitting them would mean a second overload differing by one comparison.
     ///
     template <waypoint_accumulator_details::waypoints_like T>
     explicit waypoint_accumulator(const T& waypoints) {
@@ -113,11 +110,8 @@ class waypoint_accumulator {
     template <waypoint_accumulator_details::waypoints_like T>
     explicit waypoint_accumulator(const T&&) = delete;
 
-    // What is left is what cannot be read as waypoints at all: a rank fixed at something other
-    // than two, a layout whose rows are not contiguous, the wrong element type, or an
-    // expression with no storage behind it. Converting any of those would invent or discard
-    // extents rather than fail, so refuse it and make the caller reshape deliberately.
-    // See types/xt.hpp.
+    // What is left cannot be read as waypoints at all: wrong rank, non-contiguous rows, the
+    // wrong element type, or an expression with no storage behind it.
     template <xexpression_like T>
         requires(!waypoint_accumulator_details::waypoints_like<T>)
     explicit waypoint_accumulator(const T&) = delete;
@@ -291,9 +285,8 @@ class waypoint_accumulator {
     void pop_back() noexcept;
 
    private:
-    // Called by the templated overloads above whatever their argument's rank turned out to be,
-    // so that a waypoint set is admitted on the same terms however its rank became known. The
-    // xmatrix overloads in the source file skip it, being rank two by construction.
+    // Called by the templated overloads above, so a waypoint set is admitted on the same terms
+    // however its rank became known.
     static void require_rank_two_(const auto& waypoints) {
         if (!xrank_is_same_as<xmatrix<>>(waypoints)) {
             throw std::invalid_argument{"Waypoints must be 2-dimensional"};

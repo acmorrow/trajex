@@ -117,8 +117,7 @@ void viam_trajex_tensor_map_destroy(viam_trajex_tensor_map_t* tensor_map);
 ///
 /// @param dtype Element type of the tensor.
 ///
-/// @param rank Number of dimensions. Must be 1 or 2; higher ranks are rejected, as nothing
-///        this API carries needs them.
+/// @param rank Number of dimensions. Must be 1 or 2.
 ///
 /// @param dims Array of `rank` size_t values describing the shape. All values must be >= 1. Must not be NULL.
 ///
@@ -141,8 +140,7 @@ int viam_trajex_tensor_map_insert(
 ///
 /// @param key Insertion key. Must be a NUL-terminated string, not NULL.
 ///
-/// @param rank Number of dimensions. Must be 1 or 2; higher ranks are rejected, as nothing
-///        this API carries needs them.
+/// @param rank Number of dimensions. Must be 1 or 2.
 ///
 /// @param dims Array of `rank` size_t values describing the shape. All values must be >= 1. Must not be NULL.
 ///
@@ -164,8 +162,7 @@ int viam_trajex_tensor_map_insert_f64(
 ///
 /// @param key Insertion key. Must be a NUL-terminated string, not NULL.
 ///
-/// @param rank Number of dimensions. Must be 1 or 2; higher ranks are rejected, as nothing
-///        this API carries needs them.
+/// @param rank Number of dimensions. Must be 1 or 2.
 ///
 /// @param dims Array of `rank` size_t values describing the shape. All values must be >= 1. Must not be NULL.
 ///

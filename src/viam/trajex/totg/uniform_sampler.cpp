@@ -57,7 +57,6 @@ bool uniform_sampler::advance(trajectory::cursor& cursor) {
     // the exact endpoint.
     const auto when = (next_sample_ == num_samples_ - 1) ? 1.0 : static_cast<double>(next_sample_) / static_cast<double>(num_samples_ - 1);
 
-    // Seek cursor to computed time
     cursor.seek(trajectory::seconds{std::lerp(start_.count(), cursor.trajectory().duration().count(), when)});
 
     ++next_sample_;

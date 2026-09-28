@@ -338,10 +338,8 @@ BOOST_AUTO_TEST_CASE(deduplicate_preserves_last_waypoint) {
     BOOST_CHECK_EQUAL(result[1](0), 55.0);
 }
 
-// Rank is checked where waypoints enter, because an array of the wrong rank converts rather
-// than failing and the result is a waypoint set the caller did not pass. The accepting cases
-// are here too: a guard that also turned away the arguments people legitimately have would be
-// caught by nothing else, since the rest of the suite only ever constructs from an xmatrix<>.
+// The accepting cases are here too. The rest of the suite only builds from an xmatrix<>, so
+// nothing else would catch a guard that turned away legitimate arguments.
 BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
     using namespace viam::trajex;
     using namespace viam::trajex::totg;
@@ -352,8 +350,7 @@ BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
     BOOST_CHECK(constructible.template operator()<xmatrix<>>());
     BOOST_CHECK(appendable.template operator()<xmatrix<>>());
 
-    // Dynamic rank is admitted, because the rank it will turn out to have is not knowable here.
-    // What it turns out to be is checked at runtime, in the case below.
+    // Admitted here, checked at runtime in the case below.
     BOOST_CHECK(constructible.template operator()<xt::xarray<double>>());
     BOOST_CHECK(appendable.template operator()<xt::xarray<double>>());
 
@@ -363,8 +360,8 @@ BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
     BOOST_CHECK(!constructible.template operator()<an_expression>());
     BOOST_CHECK(!appendable.template operator()<an_expression>());
 
-    // Static but wrong rank, which is the quiet case: converting a rank 1 array to a rank 2 one
-    // reads the missing extent from the adjacent stride and yields a plausible N x 1 shape.
+    // The quiet case. A rank 1 array converted to rank 2 reads the missing extent from the
+    // adjacent stride and comes out as a plausible N x 1.
     BOOST_CHECK(!constructible.template operator()<xvector<>>());
     BOOST_CHECK(!appendable.template operator()<xvector<>>());
 
@@ -378,14 +375,14 @@ BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
     BOOST_CHECK(constructible.template operator()<waypoint_accumulator::waypoint_view>());
 
     // Rows are views of the caller's storage, so a temporary must be refused however it is
-    // spelled. The xmatrix case has always been guarded; the runtime-checked one must be too.
+    // spelled. The xmatrix case has always been guarded, and the runtime-checked one must be
+    // too.
     const auto constructible_from_rvalue = []<typename T>() { return std::constructible_from<waypoint_accumulator, T&&>; };
     BOOST_CHECK(!constructible_from_rvalue.template operator()<xmatrix<>>());
     BOOST_CHECK(!constructible_from_rvalue.template operator()<xt::xarray<double>>());
 }
 
-// The rank a dynamically ranked array turns out to have is checked rather than assumed, and
-// the rows it yields must be the same waypoints an equivalent xmatrix would have given.
+// The rows must come out as the same waypoints an equivalent xmatrix would have given.
 BOOST_AUTO_TEST_CASE(dynamically_ranked_waypoints_are_validated) {
     using namespace viam::trajex;
     using namespace viam::trajex::totg;
@@ -474,10 +471,9 @@ BOOST_AUTO_TEST_CASE(appending_from_a_different_rank_two_type) {
     BOOST_CHECK_THROW(acc.add_waypoints(wrong_dof), std::invalid_argument);
 }
 
-// A row adaptor is built from a pointer to the row's first element and a length, which assumes
-// the source keeps each row contiguous and in order. That assumption is what admits a type at
-// all, so check it directly on every kind of source admitted, rather than inferring it from the
-// layout the type claims.
+// A row adaptor is a pointer to the row's first element and a length, which assumes the source
+// keeps each row contiguous and in order. Checked directly on every kind of source, rather than
+// taken on trust from the layout the type claims.
 BOOST_AUTO_TEST_CASE(accepted_sources_store_rows_contiguously) {
     using namespace viam::trajex::totg;
 

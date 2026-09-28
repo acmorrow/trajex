@@ -689,16 +689,13 @@ BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     BOOST_CHECK((std::convertible_to<held, const xvector<>&>));
 }
 
-// The constructors deduce the caller's value category, so a source handed over as an rvalue is
-// consumed rather than copied. Whether there is anything to consume is xtensor's decision and
-// differs by source type, so these assert the behaviour we actually depend on rather than a
-// general rule: they compare the address of the storage before and after.
+// Whether an rvalue source has anything to consume is xtensor's decision and differs by type,
+// so these compare the address of the storage before and after rather than assert a rule.
 BOOST_AUTO_TEST_CASE(construction_consumes_an_rvalue_and_spares_an_lvalue) {
     using namespace viam::trajex;
 
-    // The rank-checked path. This is the one that matters: converting a dynamically ranked array
-    // to a statically ranked one steals its buffer, and binding the argument to a const
-    // reference on the way in would have forced a copy of the whole thing.
+    // The one that matters. Converting a dynamically ranked array steals its buffer, and
+    // binding the argument to a const reference on the way in would copy the whole thing.
     {
         xt::xarray<double> source = {{1.0, 2.0}, {3.0, 4.0}};
         const double* const storage = source.data();
@@ -725,8 +722,8 @@ BOOST_AUTO_TEST_CASE(construction_consumes_an_rvalue_and_spares_an_lvalue) {
     }
 
     // Consuming the argument must not cost the check: a rank that turns out wrong still throws.
-    // The source is built inside the lambda rather than moved from one the macro can see, since
-    // BOOST_CHECK_THROW may evaluate its statement more than once and a moved-from array would
+    // The source is built inside the lambda rather than moved from one the macro can see,
+    // because BOOST_CHECK_THROW may evaluate its statement twice and a moved-from array would
     // not fail the same way the second time.
     {
         const auto from_a_moved_wrong_rank = [] {
@@ -737,10 +734,9 @@ BOOST_AUTO_TEST_CASE(construction_consumes_an_rvalue_and_spares_an_lvalue) {
     }
 }
 
-// A forwarding constructor in a class that is also copyable is the classic way to displace the
-// copy constructor, since U&& deduces to a reference for a non-const lvalue. It cannot happen
-// here because both forwarding constructors require an xtensor expression and xrank_checked is
-// not one, but nothing in the code says so, and removing that constraint would look harmless.
+// A forwarding constructor in a copyable class is the classic way to displace the copy
+// constructor. It can't happen here, because both require an xtensor expression and
+// xrank_checked isn't one, but removing that constraint would look harmless.
 BOOST_AUTO_TEST_CASE(forwarding_constructors_do_not_displace_copy_or_move) {
     using namespace viam::trajex;
 

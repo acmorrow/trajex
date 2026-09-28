@@ -998,10 +998,9 @@ BOOST_AUTO_TEST_CASE(rich_storage_address_stable_across_seek) {
     const path p = make_blended_path();
     path::cursor::rich r = p.create_cursor().enrich();
 
-    // Invalidation must discard the cached *values* without releasing the storage holding
-    // them. Were the fill ever rewritten as an assignment from a returned array, the
-    // move-assignment would swap buffers and this would fail -- along with the guarantee
-    // that a reference handed to a caller keeps referring to live storage.
+    // Invalidation must discard the cached values without releasing the storage holding them,
+    // or a reference already handed to a caller stops referring to live storage. Rewriting the
+    // fill as an assignment from a returned array would swap buffers and fail this.
     const double* const configuration_storage = r.configuration_ref().data();
     const double* const tangent_storage = r.tangent_ref().data();
     const double* const curvature_storage = r.curvature_ref().data();
@@ -1052,9 +1051,8 @@ BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
     const auto& borrowed = r.configuration_ref();
     const std::vector<double> at_start(borrowed.begin(), borrowed.end());
 
-    // The value accessor is a copy, so what it yields is a snapshot: safe to hold across any
-    // number of moves. This is what generic code over cursor_like gets, and what a caller who
-    // does not ask for the cache by name gets.
+    // The value accessor is a copy, so what it yields is a snapshot, safe to hold across any
+    // number of moves. That is what a caller gets unless they ask for the cache by name.
     const auto snapshot = r.configuration();
 
     // Seeking clears the validity bits but leaves the storage holding the old values, so a
@@ -1063,8 +1061,7 @@ BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
     check_exactly_equal(xvector<>{borrowed}, at_start);
 
     // Asking again refills the same storage in place, at which point the borrowed reference
-    // begins reporting the new position. That is the hazard the _ref name exists to make
-    // deliberate; it is pinned here so that changing it cannot pass silently.
+    // starts reporting the new position. Pinned here so a change to that cannot pass silently.
     const auto& refilled = r.configuration_ref();
     BOOST_CHECK_EQUAL(&refilled, &borrowed);
 
@@ -1072,8 +1069,8 @@ BOOST_AUTO_TEST_CASE(rich_reference_is_window_not_snapshot) {
     plain.seek(moved);
     check_exactly_equal(plain.configuration(), {borrowed.data(), borrowed.size()});
 
-    // The snapshot is unmoved by all of that, which is the property that makes the plain name
-    // the safe default.
+    // The snapshot is unmoved by all of that, which is what makes the plain name the safe
+    // default.
     check_exactly_equal(snapshot, at_start);
 }
 

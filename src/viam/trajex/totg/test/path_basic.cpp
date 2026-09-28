@@ -207,9 +207,9 @@ BOOST_AUTO_TEST_CASE(multiple_segments_lookup) {
     BOOST_CHECK_EQUAL(static_cast<double>(v3.end()), 6.0);
 }
 
-// create defers entirely to what a waypoint accumulator accepts. Pin that it does, in both
-// directions, so the delegation cannot quietly stop matching: an unconstrained template here
-// would claim every one of these and only fail once instantiated.
+// create defers entirely to what a waypoint accumulator accepts, pinned in both directions so
+// the delegation cannot quietly stop matching. An unconstrained template would claim every one
+// of these and fail only on instantiation.
 BOOST_AUTO_TEST_CASE(create_accepts_exactly_what_the_accumulator_does) {
     using namespace viam::trajex;
     using namespace viam::trajex::totg;
@@ -235,8 +235,7 @@ BOOST_AUTO_TEST_CASE(create_accepts_exactly_what_the_accumulator_does) {
     BOOST_CHECK(agrees.template operator()<rank_three>());
 }
 
-// A rank whose value is only known at runtime reaches the accumulator's check rather than
-// being converted on the way in.
+// Reaches the accumulator's check rather than converting on the way in.
 BOOST_AUTO_TEST_CASE(create_validates_dynamic_rank) {
     using namespace viam::trajex::totg;
 

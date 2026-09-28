@@ -5,8 +5,6 @@
 namespace viam::trajex::totg {
 
 waypoint_accumulator::waypoint_accumulator(const xmatrix<>& waypoints) {
-    // No rank check here, unlike the overload taking a dynamically ranked array: an xmatrix is
-    // rank two by construction and the question cannot arise.
     require_non_empty_(waypoints);
 
     dof_ = waypoints.shape()[1];
@@ -24,10 +22,9 @@ waypoint_accumulator::waypoint_accumulator(const waypoint_view& first_waypoint) 
 waypoint_accumulator::waypoint_accumulator(const waypoint_accumulator&) = default;
 waypoint_accumulator::waypoint_accumulator(waypoint_accumulator&&) noexcept = default;
 
-// Copy assignment goes the long way round because the default cannot work: std::vector assigns
-// through the elements it already holds, and assigning to a row adaptor means copying data into
-// whatever that row points at, which is const. Copy construction has no such problem, since it
-// builds fresh adaptors over the same storage, so lean on it.
+// The default copy assignment cannot work: std::vector assigns through the elements it already
+// holds, and assigning to a row adaptor writes into whatever that row points at, which is
+// const. Copy construction builds fresh adaptors instead, so defer to it.
 waypoint_accumulator& waypoint_accumulator::operator=(const waypoint_accumulator& other) {
     if (this != &other) {
         auto copy = other;

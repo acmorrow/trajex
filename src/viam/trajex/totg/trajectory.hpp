@@ -28,9 +28,9 @@ namespace trajectory_details {
 /// Parameterized to work with any cursor and sample types.
 ///
 /// `advance` is the primitive: it positions the cursor at the next sample time and reports
-/// whether there was one. `next` is the convenience built on top, producing the sample as a
-/// value. Ranges use `advance` so they can refill storage they already own, where `next`
-/// necessarily builds a new sample per call.
+/// whether there was one. `next` is built on top of it and produces the sample as a value.
+/// Ranges use `advance` so they can refill storage they already own, where `next` must build a
+/// new sample per call.
 ///
 template <typename S, typename Cursor, typename Sample>
 concept sampler = requires(S s, Cursor& c) {
@@ -94,8 +94,6 @@ class trajectory {
     struct tcp_limits {
         /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
         ///
-        /// The argument is ours and needs no guard; the result is the caller's, and a result of
-        /// the wrong rank would otherwise be reshaped on its way back rather than reported.
         using linear_jacobian_fn = std::function<xrank_checked<xmatrix<>>(const xvector<>&)>;
 
         /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
@@ -111,8 +109,8 @@ class trajectory {
         /// @return A limits object whose callbacks share a single chain
         /// @throws std::invalid_argument on a malformed model table
         ///
-        /// What counts as a model table is kinematic_chain::from's rule and is not restated
-        /// here, so this accepts exactly what that accepts and no more.
+        /// What counts as a model table is kinematic_chain::from's rule rather than one
+        /// restated here, so this accepts exactly what that accepts.
         ///
         template <typename T>
             requires requires(const T& t) { jacobian::kinematic_chain::from(t); }
@@ -121,7 +119,7 @@ class trajectory {
         }
 
        private:
-        // Holds the lambda plumbing in the source file; the chain is already validated.
+        // Holds the lambda plumbing in the source file. The chain is already validated.
         static tcp_limits from_chain_(jacobian::kinematic_chain chain, double max_linear_velocity);
 
        public:
@@ -674,10 +672,9 @@ class trajectory::cursor {
     ///
     /// Samples trajectory at current cursor position into caller-provided storage.
     ///
-    /// The value-returning overload allocates three arrays per call. This one writes into
-    /// arrays the caller already holds, which is what lets a sampling run of any length cost
-    /// a fixed number of allocations. Arrays already sized to the path's degrees of freedom
-    /// are written in place; differently sized ones are resized first.
+    /// The value-returning overload allocates three arrays per call. Come through here instead
+    /// and a sampling run of any length costs a fixed number of allocations. Arrays already
+    /// sized to the degrees of freedom are written in place, others are resized first.
     ///
     /// @param into Destination sample, overwritten entirely
     /// @throws std::out_of_range if cursor is at sentinel position or before start
@@ -752,9 +749,8 @@ class trajectory::cursor {
     // Positioned at interpolated arc length corresponding to current time_
     // Invariant: After seek(), path_cursor_ is at the s corresponding to time_
     //
-    // Rich rather than plain: a sampling run queries all three geometry components at every
-    // sample, and a plain cursor allocates a fresh array for each. This one allocates once
-    // when the cursor is built and refills that storage in place as it advances.
+    // Rich rather than plain: a sampling run reads all three geometry components per sample,
+    // and a plain cursor allocates a fresh array for each.
     path::cursor::rich path_cursor_;
 };
 
@@ -852,9 +848,9 @@ class trajectory::sampled<S>::iterator {
     friend class sampled;
     iterator(cursor cursor, S* sampler);
 
-    // Advances the sampler and refills `current_` in place, or disengages it when the
-    // sampler is exhausted. Filling through the engaged optional is what preserves the
-    // sample's storage across steps; assigning a new optional would not.
+    // Advances the sampler and refills `current_` in place, or disengages it when the sampler
+    // is exhausted. Filling through the engaged optional is what preserves the sample's storage
+    // across steps. Assigning a new optional would not.
     void fill_or_disengage_();
 
     cursor cursor_;
@@ -886,10 +882,9 @@ std::default_sentinel_t trajectory::sampled<S>::end() const noexcept {
 
 // Implementation of trajectory::sampled::iterator methods
 
-// `current_` is engaged once here and refilled in place from then on. Assigning a fresh
-// optional per step, as this once did, would allocate a new sample each time and free the
-// previous one -- for a long trajectory that is three allocations per sample for storage the
-// iterator never stopped owning. It is disengaged only at exhaustion.
+// Engaged once here and refilled in place from then on, disengaged only at exhaustion. This
+// once assigned a fresh optional per step, which cost three allocations per sample for storage
+// the iterator never stopped owning.
 template <typename S>
 trajectory::sampled<S>::iterator::iterator(cursor cursor, S* sampler) : cursor_{std::move(cursor)}, sampler_{sampler} {
     current_.emplace();

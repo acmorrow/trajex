@@ -37,20 +37,11 @@
 // The opaque tensor-map type. Forward-declared in the C header; the full
 // definition lives here so callers see only an opaque pointer.
 //
-// Storage is a variant of owning xtensor arrays over element type and rank,
-// so an alternative carries the dtype and the rank as well as the data and
-// shape: no parallel raw-byte representation, no separate dtype field, and
-// no runtime rank check anywhere behind this boundary. Trajex hand-off is a
-// direct const-ref pull via std::get, which is why the alternatives are the
-// same types trajex itself uses; caller-facing view queries are std::visit
-// dispatches that expose data and shape pointers without copying.
+// Storage is a variant over element type and rank. The alternatives are trajex's
+// own types, so hand-off is a std::get rather than a copy.
 //
-// Rank is capped at 2 because that is what the API carries -- waypoints and
-// sample blocks are matrices, limits and time vectors are vectors -- and
-// because converting a dynamically ranked array to a statically ranked one
-// of the wrong rank is silent undefined behaviour in xtensor rather than an
-// error. Enumerating the ranks here makes that conversion unreachable: the
-// rank is decided once, at insert, against the caller's own dims.
+// Rank is capped at 2 because that is all the API carries, and enumerating the
+// ranks also puts the UB conversion out of reach.
 struct viam_trajex_tensor_map {
     using tensor_value = std::variant<viam::trajex::xvector<double>,
                                       viam::trajex::xmatrix<double>,
@@ -166,8 +157,7 @@ std::string describe_requested() {
     return oss.str();
 }
 
-// Resolve a required input by key, returning a reference to the stored array.
-// `A` names both the element type and the rank, so a call site that asks for a
+// `A` names both the element type and the rank, so a call site asking for a
 // matrix cannot be handed a vector. Throws std::invalid_argument if the key is
 // missing or holds a different alternative.
 template <typename A>
@@ -475,8 +465,8 @@ int viam_trajex_tensor_map_insert(viam_trajex_tensor_map_t* tensor_map,
                                   const std::size_t* dims,
                                   const void* data) {
     try {
-        // Rank is validated here and nowhere else: past this point it is part of
-        // the stored type, so every consumer gets it from the type system.
+        // Validated here and nowhere else. Past this point rank is part of the
+        // stored type.
         if (!tensor_map || !key || rank < 1 || rank > 2 || !dims || !data) {
             return -1;
         }

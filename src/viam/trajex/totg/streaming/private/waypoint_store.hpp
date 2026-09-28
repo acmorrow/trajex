@@ -2,22 +2,16 @@
 
 // Persistent waypoint storage for a streaming session.
 //
-// A session outlives the batches handed to it, so it cannot retain the caller's
-// `waypoint_accumulator`: that accumulator holds row-views into memory the caller owns and
-// may reuse or destroy as soon as `extend` returns. The store keeps its own copy and
-// presents it back as an accumulator, which is the form `path::create` consumes.
+// A session cannot retain the caller's `waypoint_accumulator`, which holds row-views into
+// memory the caller may reuse or destroy as soon as `extend` returns. The store keeps its own
+// copy and presents it back as an accumulator.
 //
-// Waypoints are kept in fixed-size chunks held in a list, which is what makes appending
-// cheap. A session appends to the same set on every extend, so storage that had to be
-// reallocated and recopied to grow would cost O(N) per extend and O(N^2) across a session.
-// Here a chunk is allocated once and filled in place, a new one is linked on when it fills,
-// and neither the list nodes nor the arrays inside them ever move -- which they must not,
-// because the accumulator below holds views referencing those arrays by address.
+// Waypoints live in fixed-size chunks in a list. A session appends on every extend, so storage
+// that reallocated to grow would be O(N) per extend and O(N^2) across a session. Chunks must
+// never move: the accumulator below holds views referencing those arrays by address.
 //
-// This is a private header: header-only, no library backing, and not installed. It exists
-// so the session and the pipeline benchmarks share one definition of what accumulating
-// waypoints across a session costs, which lets a change to the storage strategy be
-// measured rather than guessed at.
+// Header-only and not installed. The session and the pipeline benchmarks share it, so the
+// benchmark measures the real storage rather than a copy that can drift.
 
 #include <cstddef>
 #include <iterator>
@@ -41,9 +35,8 @@ class waypoint_store {
    public:
     waypoint_store() = default;
 
-    // Neither copyable nor movable, because the accumulator returned by `waypoints()` holds
-    // views referencing the chunk arrays by address. Moving the store would move those
-    // arrays and leave the views dangling while still appearing valid.
+    // Moving the store would move the chunk arrays and leave the views in `waypoints()`
+    // dangling while they still looked valid.
     waypoint_store(const waypoint_store&) = delete;
     waypoint_store& operator=(const waypoint_store&) = delete;
     waypoint_store(waypoint_store&&) = delete;
@@ -91,9 +84,7 @@ class waypoint_store {
             }
 
             // Copied element by element rather than as `xt::view(...) = batch.at(i)`, which
-            // reads better but measured 27 to 40 percent slower across every benchmark cell.
-            // At six degrees of freedom, building two views and evaluating an xtensor
-            // assignment through them costs more than the six stores it performs.
+            // reads better but measured 27 to 40 percent slower in every benchmark cell.
             const auto& row = batch.at(i);
             for (std::size_t joint = 0; joint != dof_; ++joint) {
                 (*chunk)(offset, joint) = row(joint);
@@ -111,9 +102,8 @@ class waypoint_store {
     // be pivoted onto, so an append is provisional. Recording `size()` beforehand and
     // truncating back to it abandons the candidate without disturbing what came before.
     //
-    // Chunks left with nothing in them are kept rather than released, because appending and
-    // truncating is the session's ordinary rhythm and freeing a chunk the moment it empties
-    // would reallocate it on the next batch.
+    // Emptied chunks are kept, not released. Appending and truncating is the session's ordinary
+    // rhythm, so freeing a chunk the moment it empties just reallocates it on the next batch.
     void truncate(std::size_t count) {
         if (count > size_) {
             throw std::out_of_range("waypoint_store::truncate: `count` exceeds stored size");
@@ -178,8 +168,7 @@ class waypoint_store {
     // move wastes at most one chunk's worth of unused rows.
     static constexpr std::size_t k_chunk_rows = 1024;
 
-    // A node-based container is a requirement rather than a preference, for the reason given at
-    // the top of this file: the accumulator holds views referencing chunk arrays by address.
+    // A node-based container is a requirement, not a preference. See the top of this file.
     //
     // TODO: std::vector<std::unique_ptr<xmatrix<>>> would keep that guarantee, since the arrays
     // stay put and only the pointer array reallocates, and would make chunk lookup O(1).
@@ -204,9 +193,8 @@ class waypoint_store {
         return *std::next(chunks_.begin(), static_cast<chunk_list::difference_type>(index));
     }
 
-    // Grown one waypoint at a time as rows are written, rather than rebuilt when read,
-    // because rebuilding costs a view per stored waypoint and the session reads it on every
-    // extend. The views stay valid because chunk arrays are never reallocated or moved.
+    // Grown a row at a time as they are written rather than rebuilt on read, since the session
+    // reads it on every extend and rebuilding costs a view per stored waypoint.
     void extend_accumulator_(const xmatrix<>& chunk, std::size_t offset) {
         const auto row = xt::adapt(&chunk(offset, 0), dof_, xt::no_ownership());
         if (accumulator_) {

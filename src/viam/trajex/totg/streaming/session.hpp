@@ -239,8 +239,8 @@ class session {
    private:
     // Builds a trajectory from the given waypoints, threading through path::options and
     // trajectory::options. Throws on validation failure inside path::create or
-    // trajectory::create, leaving every member it does not touch alone; callers that have
-    // already appended to `waypoints_` are responsible for winding that back.
+    // trajectory::create, leaving every member it does not touch alone. A caller that has
+    // already appended to `waypoints_` is responsible for winding that back.
     trajectory build_trajectory_from_(const waypoint_accumulator& waypoints) const;
 
     // Emits a single sample, advancing the cursor. Triggers a rebase if the active is
@@ -266,9 +266,8 @@ class session {
     // callers pass to `extend` view memory the session does not control. Empty until the
     // first successful extend.
     //
-    // The store cannot be moved, which makes a session non-movable as well. That was
-    // already true in substance: `cursor_` below holds a pointer into `active_`, so moving
-    // a session would leave it pointing at the old location.
+    // The store cannot be moved, which makes a session non-movable too. That was already true
+    // in substance: `cursor_` below points into `active_`.
     waypoint_store waypoints_;
 
     // The currently active trajectory, or nullopt before the first successful extend.

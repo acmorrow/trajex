@@ -24,9 +24,9 @@ namespace {
 // the caller's accumulator to do so, because that accumulator views memory the caller owns.
 // These copy the rows it needs into arrays the session owns.
 
-// Compared bitwise rather than within a tolerance, because the seam waypoint is one the
-// caller was handed back and is expected to return unmodified; anything else is a protocol
-// error on their side rather than drift worth accommodating.
+// Compared bitwise rather than within a tolerance, because the seam waypoint is one the caller
+// was handed back and is expected to return unmodified. Anything else is a protocol error on
+// their side rather than drift worth accommodating.
 bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xvector<>& b) {
     return std::ranges::equal(a, b);
 }
@@ -99,10 +99,9 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
     // First extend: build the initial trajectory directly from the batch.
     if (!active_) {
-        // The store has to be populated before the trajectory can be built from it, so a
-        // failed build leaves waypoints behind that no trajectory corresponds to. Empty it
-        // again before rethrowing, so a caller that retries with a corrected batch starts
-        // from the same state it had before.
+        // The store has to be populated before the trajectory can be built from it, so a failed
+        // build leaves waypoints behind that no trajectory corresponds to. Empty it before
+        // rethrowing, so a caller retrying with a corrected batch starts where it was.
         waypoints_.append(batch, 0);
         auto new_active = [&] {
             try {
@@ -206,8 +205,8 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         return {kinds::k_pivot, branch_slack, delta_active_duration};
     }
 
-    // Staging instead of pivoting, so the candidate is discarded and its waypoints along
-    // with it; they will arrive again by way of `staged_batches_` at the next rebase.
+    // Staging instead of pivoting, so the candidate is discarded and its waypoints along with
+    // it. They arrive again by way of `staged_batches_` at the next rebase.
     waypoints_.truncate(committed_waypoints);
     staged_batches_.push_back(accumulator_tail_to_matrix(batch, 1));
     last_waypoint_ = batch.at(batch.size() - 1);

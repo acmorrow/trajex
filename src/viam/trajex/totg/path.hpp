@@ -79,9 +79,9 @@ class path {
             ///
             linear(xrank_checked<xvector<>> start, xrank_checked<xvector<>> unit_direction, arc_length length);
 
-            // Stored unwrapped. The constructors are the only way to build one, so the rank is
-            // settled by the time these exist, and the geometry accessors read them at every
-            // integration step and should not pay for a wrapper to say so again.
+            // Stored unwrapped, since the constructors are the only way in and the rank is
+            // settled by the time these exist. The geometry accessors read them at every
+            // integration step.
             xvector<> start;           ///< Starting configuration
             xvector<> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
             arc_length length;         ///< Precomputed length (norm of end-start)
@@ -207,8 +207,7 @@ class path {
             /// Writes configuration at global arc length into caller-provided storage.
             ///
             /// The value-returning overload allocates a fresh array per call, which the
-            /// integrator cannot afford at the rate it queries geometry. This overload
-            /// performs the same computation writing into storage the caller already owns.
+            /// integrator cannot afford at the rate it queries geometry.
             ///
             /// @param s Global arc length on path
             /// @param out Destination, sized to the path's degrees of freedom
@@ -238,9 +237,8 @@ class path {
             void curvature(arc_length s, std::span<double> out) const;
 
            private:
-            // Degrees of freedom of the viewed segment, recovered from its stored vectors.
-            // Only the value-returning accessors need this; the filling ones take the size
-            // from the caller's span and validate it against the segment in place.
+            // Recovered from the segment's stored vectors. Only the value-returning accessors
+            // need it; the filling ones take the size from the caller's span.
             std::size_t dof_() const;
 
             // Reference to the segment
@@ -405,14 +403,12 @@ class path {
     /// @return Constructed path with segments
     /// @throws std::invalid_argument if the rank is only known at runtime and is not 2
     ///
-    /// What counts as a waypoint set is the accumulator's rule and is not restated here, so
-    /// this widens and narrows with it. The constraint forwards the question rather than
-    /// answering it, which also keeps the overload detectable: an unconstrained template would
-    /// claim to accept everything and then fail to compile on use.
+    /// What counts as a waypoint set is the accumulator's rule, so this widens and narrows with
+    /// it. Constrained, because an unconstrained template would claim everything and then fail
+    /// to compile on use.
     ///
-    /// A temporary is safe to pass despite the accumulator refusing to be built from one. The
-    /// parameter is an lvalue by the time the accumulator sees it, the caller's temporary
-    /// outlives the full expression, and a path copies the geometry it keeps.
+    /// A temporary is safe to pass even though the accumulator refuses one: the parameter is an
+    /// lvalue by the time the accumulator sees it, and a path copies the geometry it keeps.
     ///
     template <typename T>
         requires std::constructible_from<waypoint_accumulator, const T&>
@@ -645,9 +641,8 @@ class path::const_iterator {
 /// to support snapshots (e.g., for forward/backward integration passes).
 ///
 /// **Geometry queries allocate**: configuration(), tangent() and curvature() each return a
-/// freshly allocated array. Code that queries geometry repeatedly should either fill storage
-/// it owns through the span overloads, or hold a cursor::rich obtained from enrich(), which
-/// owns that storage and reuses it.
+/// freshly allocated array. Code querying geometry repeatedly should fill its own storage
+/// through the span overloads, or hold the cursor::rich that enrich() returns.
 ///
 /// Example usage:
 /// @code
@@ -777,9 +772,9 @@ class path::cursor {
     ///
     /// Promotes a copy of this cursor to one that caches geometry.
     ///
-    /// The returned cursor starts at this cursor's position with an empty cache; this
-    /// cursor is unaffected. Use it where the same position is queried more than once, or
-    /// where geometry is queried often enough that per-call allocation matters.
+    /// The returned cursor starts at this cursor's position with an empty cache, and this
+    /// cursor is unaffected. Worth it where the same position is queried more than once, or
+    /// often enough that per-call allocation matters.
     ///
     /// @return Rich cursor at this cursor's position
     ///
@@ -852,29 +847,21 @@ class path::cursor {
 ///
 /// Cursor that owns and reuses storage for the geometry at its current position.
 ///
-/// A plain cursor allocates a fresh array on every geometry query. This one allocates its
-/// storage once, fills each component on first use after a move, and hands back a reference
-/// to it. Where the integrator queries geometry a million times per trajectory, that is the
-/// difference between a million allocations and three.
+/// A plain cursor allocates a fresh array on every geometry query. This one allocates once and
+/// refills in place, which over a trajectory is three allocations rather than a million.
 ///
-/// **Two sets of accessors, and the name says which you are getting.** `tangent()` and its
-/// siblings are the plain cursor's, inherited unchanged: they recompute, return an owned
-/// array, and are safe to hold across anything. `tangent_ref()` and its siblings hand back
-/// the cache. Asking for the cheap one is therefore something you do on purpose, and it is
-/// visible at the call rather than inferred from how the result is bound.
+/// **Two sets of accessors**: `tangent()` and its siblings are the plain cursor's, inherited
+/// unchanged, and recompute into an owned array. `tangent_ref()` and its siblings hand back the
+/// cache, so taking the cheap one is visible at the call.
 ///
-/// **The _ref accessors return windows, not snapshots.** Storage is allocated once and lives
-/// as long as the cursor, so the reference stays valid. Its *contents* track the cursor:
-/// after a seek the stale values remain readable until someone asks for that component
-/// again, at which point the reference begins reporting the new position. Nothing announces
-/// the change, and it can be triggered by a query made anywhere else holding the same
-/// cursor. Code that needs a value outliving the next seek must copy it, or use the plain
-/// accessor of the same name, which is a copy by construction.
+/// **The _ref accessors go stale**. The reference stays valid, but what you read through it
+/// follows the cursor. After a seek you keep seeing the old values until something asks for
+/// that component again, and that something may be code elsewhere holding the same cursor. If
+/// you need a value to survive the next seek, copy it.
 ///
-/// **Relationship to path::cursor**: inherited privately, so a rich cursor cannot be handed
-/// out as a plain one. That is deliberate. Relocating through a base reference would move the
-/// position without clearing the cache, leaving geometry that reads as valid but belongs to
-/// the position before last. Use plain() for an explicit, independent copy of the position.
+/// **Relationship to path::cursor**: inherited privately, so a rich cursor cannot be handed out
+/// as a plain one. Relocating through a base reference would move the position without clearing
+/// the cache, leaving geometry that reads as valid but belongs to the position before last.
 ///
 /// **Thread safety**: Not thread-safe, and less so than a plain cursor: the accessors fill
 /// storage and are const, so concurrent reads of the same rich cursor race.
@@ -896,10 +883,6 @@ class path::cursor::rich : private path::cursor {
     using cursor::position;
     using cursor::operator*;
 
-    // The plain, value-returning accessors, inherited unchanged. A rich cursor reached through
-    // these behaves exactly as a plain one does: each call recomputes and hands back an owned
-    // array, with no reference to the cache and nothing a later seek can invalidate. Code that
-    // wants the cache asks for it by name, through the _ref accessors below.
     using cursor::configuration;
     using cursor::curvature;
     using cursor::tangent;
@@ -932,7 +915,7 @@ class path::cursor::rich : private path::cursor {
     ///
     /// Gets configuration at current position, computing it if not already cached.
     ///
-    /// @return Reference to storage owned by this cursor; see the class note on windows
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
     const xvector<>& configuration_ref() const;
@@ -940,7 +923,7 @@ class path::cursor::rich : private path::cursor {
     ///
     /// Gets tangent at current position, computing it if not already cached.
     ///
-    /// @return Reference to storage owned by this cursor; see the class note on windows
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
     const xvector<>& tangent_ref() const;
@@ -948,7 +931,7 @@ class path::cursor::rich : private path::cursor {
     ///
     /// Gets curvature at current position, computing it if not already cached.
     ///
-    /// @return Reference to storage owned by this cursor; see the class note on windows
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
     const xvector<>& curvature_ref() const;
@@ -974,20 +957,18 @@ class path::cursor::rich : private path::cursor {
     }
 
    private:
-    // Position of each component within cached_bits_. Keeping them in one bitset means
-    // invalidation clears every component by construction, rather than by remembering to
-    // clear each one.
+    // Position of each component within cached_bits_. One bitset rather than a flag apiece, so
+    // that invalidation clears every component by construction.
     static constexpr std::size_t k_configuration_bit_ = 0;
     static constexpr std::size_t k_tangent_bit_ = 1;
     static constexpr std::size_t k_curvature_bit_ = 2;
     static constexpr std::size_t k_cached_bit_count_ = 3;
 
-    // Discards every cached component. Called on any move, since all three belong to the
-    // position the cursor just left.
+    // Called on any move: all three components belong to the position the cursor just left.
     void invalidate_() noexcept;
 
-    // Fills `storage` if `bit` is not already set, then sets it. A throwing fill leaves the
-    // bit clear, so a query that failed is not later mistaken for one that succeeded.
+    // A throwing fill leaves the bit clear, so a query that failed is not later mistaken for
+    // one that succeeded.
     template <typename Fill>
     const xvector<>& cached_(xvector<>& storage, std::size_t bit, Fill&& fill) const {
         if (!cached_bits_.test(bit)) {
@@ -998,10 +979,9 @@ class path::cursor::rich : private path::cursor {
         return storage;
     }
 
-    // Storage is filled by const accessors, so it and the bits are mutable. The storage is
-    // never released while the cursor lives, which is what lets the accessors return
-    // references at all -- an optional<> here would free and reallocate on every
-    // invalidation, reintroducing exactly the cost this type exists to remove.
+    // Filled by const accessors, hence mutable. Never released while the cursor lives, which is
+    // what lets the accessors hand back references. An optional<> would free and reallocate on
+    // every invalidation.
     mutable xvector<> configuration_;
     mutable xvector<> tangent_;
     mutable xvector<> curvature_;
@@ -1011,10 +991,9 @@ class path::cursor::rich : private path::cursor {
 ///
 /// Requirements shared by path::cursor and path::cursor::rich.
 ///
-/// Every accessor here returns geometry by value, so the two really are interchangeable:
-/// generic code written against this concept holds owned arrays whatever it is instantiated
-/// on, and there is no lifetime rule for it to get wrong. A rich cursor reached this way
-/// costs what a plain one costs.
+/// Every accessor here returns geometry by value, so generic code written against this concept
+/// has no lifetime rule to get wrong. A rich cursor reached this way costs what a plain one
+/// costs.
 ///
 template <typename C>
 concept cursor_like = requires(C& c, const C& cc, arc_length s) {
@@ -1034,10 +1013,9 @@ concept cursor_like = requires(C& c, const C& cc, arc_length s) {
 ///
 /// A cursor that additionally offers its geometry as a reference into storage it owns.
 ///
-/// Refines cursor_like, so an overload constrained on this one wins for a rich cursor and
-/// generic code needs no `if constexpr` to prefer it. What it buys is skipping the allocation
-/// per query; what it costs is the window rule described on path::cursor::rich. Code that
-/// takes the refinement is opting into that rule by name.
+/// Refines cursor_like, so an overload constrained on this one wins for a rich cursor with no
+/// `if constexpr` needed. It saves the allocation per query, at the price of a reference that
+/// goes stale on the next seek.
 ///
 template <typename C>
 concept rich_cursor_like = cursor_like<C> && requires(const C& cc) {

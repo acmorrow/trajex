@@ -435,10 +435,8 @@ BOOST_AUTO_TEST_CASE(linear_jacobian_matches_jacobian_linear_block) {
     BOOST_CHECK_SMALL(max_abs_diff, 1e-15);
 }
 
-// A model table is taken as whatever the caller holds it in, so that a rank the caller got
-// wrong is refused or reported rather than fabricated on the way in. Rank two is all this
-// needs: the table is read element by element and copied, never adapted, so a view or an
-// expression is as acceptable as a container.
+// The table is copied element by element, never adapted, so a view or an expression is as good
+// as a container.
 BOOST_AUTO_TEST_CASE(from_accepts_any_rank_two_and_refuses_the_rest) {
     using namespace viam::trajex;
 
@@ -467,10 +465,8 @@ BOOST_AUTO_TEST_CASE(from_validates_a_rank_known_only_at_runtime) {
     BOOST_CHECK_THROW(static_cast<void>(kinematic_chain::from(rank_three)), std::invalid_argument);
 }
 
-// Evaluating the chain takes the joint vector the same way from() takes the table: deduced, so
-// a wrong rank is refused or reported rather than reshaped into one. These are the only public
-// entry points the integrator itself walks per step, so they take the caller's own type and
-// copy nothing when it is already an xvector.
+// Same deal for the joint vector. These run once per integration step, so an xvector has to go
+// through with no copy.
 BOOST_AUTO_TEST_CASE(evaluation_refuses_a_rank_that_is_not_one) {
     using namespace viam::trajex;
 

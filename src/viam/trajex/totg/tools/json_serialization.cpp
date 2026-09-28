@@ -16,7 +16,6 @@ namespace viam::trajex::totg {
 
 namespace {
 
-// Serialize a configuration-space vector to a JSON array
 Json::Value vector_to_json_array(const xvector<>& arr) {
     Json::Value result(Json::arrayValue);
     result.resize(static_cast<Json::ArrayIndex>(arr.size()));
