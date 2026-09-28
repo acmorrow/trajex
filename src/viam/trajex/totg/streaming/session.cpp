@@ -36,9 +36,15 @@ xmatrix<> accumulator_tail_to_matrix(const waypoint_accumulator& batch, std::siz
     // Allocated without initialising, since every element is written below.
     auto result = xmatrix<>::from_shape(std::vector<std::size_t>{batch.size() - from, batch.dof()});
 
+    // Copied element by element for the reason waypoint_store::append gives: a view assignment
+    // per row costs more than the stores it performs at this width.
+    const auto dof = batch.dof();
     std::size_t row = 0;
     for (const auto& waypoint : batch | std::views::drop(from)) {
-        xt::view(result, row++, xt::all()) = waypoint;
+        for (std::size_t joint = 0; joint != dof; ++joint) {
+            result(row, joint) = waypoint(joint);
+        }
+        ++row;
     }
     return result;
 }

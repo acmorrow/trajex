@@ -671,8 +671,7 @@ BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     BOOST_CHECK_EQUAL(unset->size(), 0U);
 
     // Reaching inside a temporary would hand back a reference to storage that dies at the
-    // semicolon, so the accessors are refused there. The conversion is not, because an argument
-    // outlives the call it is passed to.
+    // semicolon, so every way of reading refuses an rvalue, the conversion included.
     using held = xrank_checked<xvector<>>;
     const auto derefs = []<typename T>() { return requires(T&& t) { *std::forward<T>(t); }; };
     const auto arrows = []<typename T>() { return requires(T&& t) { std::forward<T>(t).operator->(); }; };
@@ -686,7 +685,8 @@ BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
     BOOST_CHECK(!arrows.template operator()<held>());
     BOOST_CHECK(!gets.template operator()<held>());
 
-    BOOST_CHECK((std::convertible_to<held, const xvector<>&>));
+    BOOST_CHECK((std::convertible_to<held&, const xvector<>&>));
+    BOOST_CHECK(!(std::convertible_to<held, const xvector<>&>));
 }
 
 // Whether an rvalue source has anything to consume is xtensor's decision and differs by type,

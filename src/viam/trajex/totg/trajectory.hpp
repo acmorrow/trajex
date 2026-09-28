@@ -93,7 +93,6 @@ class trajectory {
     ///
     struct tcp_limits {
         /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
-        ///
         using linear_jacobian_fn = std::function<xrank_checked<xmatrix<>>(const xvector<>&)>;
 
         /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.

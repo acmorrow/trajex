@@ -79,9 +79,8 @@ class path {
             ///
             linear(xrank_checked<xvector<>> start, xrank_checked<xvector<>> unit_direction, arc_length length);
 
-            // Stored unwrapped, since the constructors are the only way in and the rank is
-            // settled by the time these exist. The geometry accessors read them at every
-            // integration step.
+            // Stored unwrapped: the rank is settled by the time these exist, and the geometry
+            // accessors read them at every integration step.
             xvector<> start;           ///< Starting configuration
             xvector<> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
             arc_length length;         ///< Precomputed length (norm of end-start)

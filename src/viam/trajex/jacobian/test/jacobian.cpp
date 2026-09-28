@@ -604,7 +604,8 @@ BOOST_AUTO_TEST_CASE(matches_linear_jacobian) {
     BOOST_CHECK_SMALL(matrix_diff_norm(*J3, kinematic_chain::from(table).linear_jacobian(q)), 1e-15);
 
     // The captured chain is reused: a second call returns identical values.
-    BOOST_CHECK_SMALL(matrix_diff_norm(J3, limits.linear_jacobian(q)), 1e-15);
+    const auto J3_again = limits.linear_jacobian(q);
+    BOOST_CHECK_SMALL(matrix_diff_norm(*J3, *J3_again), 1e-15);
 
     BOOST_CHECK_EQUAL(limits.max_linear_velocity, 0.5);
 }

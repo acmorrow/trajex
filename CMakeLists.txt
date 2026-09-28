@@ -591,6 +591,7 @@ if (VIAM_TRAJEX_BUILD_TESTS)
       PRIVATE
       src/viam/trajex/totg/streaming/test/main.cpp
       src/viam/trajex/totg/streaming/test/session.cpp
+      src/viam/trajex/totg/streaming/test/waypoint_store.cpp
     )
 
     target_link_libraries(viam-trajex-totg-streaming-test

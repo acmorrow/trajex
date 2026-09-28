@@ -147,9 +147,9 @@ class xrank_checked {
         requires(xranked_statically<U> && xrank_of<U> != N)
     xrank_checked(U&&) = delete;
 
-    // Reaching into a temporary gives you a reference to storage that dies at the semicolon,
-    // with no warning, hence the deleted rvalue overloads. The conversion below stays, since an
-    // argument lives to the end of the full expression.
+    // Every way of reading refuses rvalues, the conversion below included. Binding to a
+    // temporary's storage gives you a reference that dies at the semicolon, and nothing warns
+    // you: lifetime extension does not reach through a conversion function's return.
     const T& get() const& noexcept {
         return value_;
     }
@@ -176,9 +176,10 @@ class xrank_checked {
         return std::move(value_);
     }
 
-    operator const T&() const noexcept {
+    operator const T&() const& noexcept {
         return value_;
     }
+    operator const T&() const&& = delete;
 
    private:
     // Check before converting, not after: the conversion is what fabricates the extent. Returns
