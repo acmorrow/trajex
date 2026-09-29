@@ -18,6 +18,7 @@
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/totg/waypoint_utils.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #if defined(VIAM_TRAJEX_LEGACY_ENABLED)
 #include <Eigen/Dense>
@@ -37,8 +38,8 @@ namespace viam::trajex::totg {
 class planner_base {
    public:
     struct config {
-        xt::xarray<double> velocity_limits;
-        xt::xarray<double> acceleration_limits;
+        xrank_checked<xvector<>> velocity_limits;
+        xrank_checked<xvector<>> acceleration_limits;
         double path_blend_tolerance = 0.0;
         std::optional<double> colinearization_ratio{};
         // Curvature bounds for blend construction. nullopt leaves path::options at its
@@ -54,7 +55,7 @@ class planner_base {
         // tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table) jacobian can
         // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
         // validated at planner construction.
-        std::optional<xt::xarray<double>> model_table{};
+        std::optional<xrank_checked<xmatrix<>>> model_table{};
     };
 
     ///
@@ -185,7 +186,7 @@ class planner : public planner_base {
     /// Extends the lifetime of data created inside callbacks.
     ///
     /// Essential because waypoint_accumulator operates on views -- it does not
-    /// own its data. When a callback creates an xt::xarray<double>, that array
+    /// own its data. When a callback creates a waypoint matrix, that array
     /// must outlive the waypoint_accumulator that views it. Stash stores it
     /// here. The returned shared_ptr can be used immediately; the data it
     /// points to remains valid until the planner is destroyed.
@@ -434,10 +435,10 @@ class planner : public planner_base {
 
                 Path legacy_path(eigen_waypoints, get_config().path_blend_tolerance);
 
-                auto vel_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().velocity_limits.data(),
-                                                                   static_cast<Eigen::Index>(get_config().velocity_limits.size()));
-                auto acc_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().acceleration_limits.data(),
-                                                                   static_cast<Eigen::Index>(get_config().acceleration_limits.size()));
+                auto vel_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().velocity_limits->data(),
+                                                                   static_cast<Eigen::Index>(get_config().velocity_limits->size()));
+                auto acc_eigen = Eigen::Map<const Eigen::VectorXd>(get_config().acceleration_limits->data(),
+                                                                   static_cast<Eigen::Index>(get_config().acceleration_limits->size()));
 
                 Trajectory traj(legacy_path, vel_eigen, acc_eigen);
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);

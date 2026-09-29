@@ -3,13 +3,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::jacobian {
 
@@ -32,21 +30,63 @@ class kinematic_chain {
     ///         joint type (continuous or prismatic), or a revolute row with
     ///         zero-magnitude axis
     ///
-    [[nodiscard]] static kinematic_chain from(const xt::xarray<double>& tensor);
+    [[nodiscard]] static kinematic_chain from(const xmatrix<>& tensor);
+
+    ///
+    /// Builds from a model table the caller holds in something other than an xmatrix.
+    ///
+    /// A caller already holding an xmatrix binds to the overload above and never reaches this.
+    ///
+    /// @throws std::invalid_argument if the table is not 2-dimensional, plus everything the
+    ///         overload above throws
+    ///
+    template <xrank_same_as_or_dynamic<xmatrix<>> T>
+    [[nodiscard]] static kinematic_chain from(const T& tensor) {
+        if (!xrank_is_same_as<xmatrix<>>(tensor)) {
+            throw std::invalid_argument("viam::trajex::jacobian: expected 2D model-table tensor, got " +
+                                        std::to_string(tensor.dimension()) + "D");
+        }
+        return from(xmatrix<>(tensor));
+    }
+
+    // Otherwise this converts into the xmatrix overload, which is the UB case.
+    template <xexpression_like T>
+        requires(!xrank_same_as_or_dynamic<T, xmatrix<>>)
+    static kinematic_chain from(const T&) = delete;
 
     ///
     /// Computes the geometric Jacobian at joint positions q.
     ///
     /// @param q (N_actuated,) vector with one element per revolute row in the
     ///        table, in chain order. Fixed rows do not consume a q entry.
-    /// @return A (6, N_actuated) xarray where rows 0..2 are the
+    /// @return A (6, N_actuated) matrix where rows 0..2 are the
     ///         linear-velocity columns J_v_i = w_i x (p_e - p_i) and rows 3..5
     ///         are the angular-velocity columns J_w_i = w_i, with w_i the
     ///         world-frame axis of revolute joint i, p_i its world position,
     ///         and p_e the end-effector position.
-    /// @throws std::invalid_argument on q-size mismatch
+    /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
-    [[nodiscard]] xt::xarray<double> jacobian(const xt::xarray<double>& q) const;
+    /// The integrator calls this once per step holding an xvector, and binds here with no copy.
+    ///
+    [[nodiscard]] xmatrix<> jacobian(const xvector<>& q) const;
+
+    ///
+    /// Computes the geometric Jacobian at joint positions q held in something other than an
+    /// xvector.
+    ///
+    /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
+    ///         above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q>
+    [[nodiscard]] xmatrix<> jacobian(const Q& q) const {
+        require_rank_one_(q);
+        return jacobian(xvector<>(q));
+    }
+
+    // As on from() above.
+    template <xexpression_like Q>
+        requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
+    xmatrix<> jacobian(const Q&) const = delete;
 
     ///
     /// Computes the linear-velocity block of the geometric Jacobian at joint
@@ -54,10 +94,26 @@ class kinematic_chain {
     ///
     /// @param q (N_actuated,) vector with one element per revolute row in the
     ///        table, in chain order. Fixed rows do not consume a q entry.
-    /// @return A (3, N_actuated) xarray of linear-velocity columns.
+    /// @return A (3, N_actuated) matrix of linear-velocity columns.
     /// @throws std::invalid_argument on q-size mismatch
     ///
-    [[nodiscard]] xt::xarray<double> linear_jacobian(const xt::xarray<double>& q) const;
+    [[nodiscard]] xmatrix<> linear_jacobian(const xvector<>& q) const;
+
+    ///
+    /// As above, for a q the caller holds in something other than an xvector.
+    ///
+    /// @throws std::invalid_argument if q is not 1-dimensional, plus everything the overload
+    ///         above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q>
+    [[nodiscard]] xmatrix<> linear_jacobian(const Q& q) const {
+        require_rank_one_(q);
+        return linear_jacobian(xvector<>(q));
+    }
+
+    template <xexpression_like Q>
+        requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
+    xmatrix<> linear_jacobian(const Q&) const = delete;
 
     /// Linear velocity gain ||J_v*f'||: task-space length per unit of path arc length, in
     /// whatever length unit the model table uses, with its rate of change along the path.
@@ -76,11 +132,34 @@ class kinematic_chain {
     /// @param q_prime (N_actuated,) path tangent dq/ds
     /// @param q_double_prime (N_actuated,) path curvature d^2q/ds^2
     /// @return the gain and its s-derivative
-    /// @throws std::invalid_argument on a q, q_prime, or q_double_prime size mismatch
+    /// @throws std::invalid_argument on a size mismatch
     ///
-    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const xt::xarray<double>& q,
-                                                               const xt::xarray<double>& q_prime,
-                                                               const xt::xarray<double>& q_double_prime) const;
+    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const xvector<>& q,
+                                                               const xvector<>& q_prime,
+                                                               const xvector<>& q_double_prime) const;
+
+    ///
+    /// As above, for arguments the caller holds in something other than an xvector.
+    ///
+    /// All three deduce independently, so a caller may mix. Three xvectors bind to the overload
+    /// above instead.
+    ///
+    /// @throws std::invalid_argument if any argument is not 1-dimensional, plus everything the
+    ///         overload above throws
+    ///
+    template <xrank_same_as_or_dynamic<xvector<>> Q, xrank_same_as_or_dynamic<xvector<>> QP, xrank_same_as_or_dynamic<xvector<>> QPP>
+    [[nodiscard]] linear_velocity_gain linear_velocity_gain_at(const Q& q, const QP& q_prime, const QPP& q_double_prime) const {
+        require_rank_one_(q);
+        require_rank_one_(q_prime);
+        require_rank_one_(q_double_prime);
+        return linear_velocity_gain_at(xvector<>(q), xvector<>(q_prime), xvector<>(q_double_prime));
+    }
+
+    // As on from() above, and any one wrong argument is enough.
+    template <xexpression_like Q, xexpression_like QP, xexpression_like QPP>
+        requires(!(xrank_same_as_or_dynamic<Q, xvector<>> && xrank_same_as_or_dynamic<QP, xvector<>> &&
+                   xrank_same_as_or_dynamic<QPP, xvector<>>))
+    linear_velocity_gain linear_velocity_gain_at(const Q&, const QP&, const QPP&) const = delete;
 
    private:
     // URDF joint type, restricted to arm-relevant joints. Underlying values
@@ -121,10 +200,19 @@ class kinematic_chain {
     // through here via `from`.
     explicit kinematic_chain(std::vector<joint_row_> rows);
 
+    // Defined here, not in the source file: the deduced overloads above instantiate in the
+    // caller's translation unit, so a definition there would have to be exported.
+    static void require_rank_one_(const auto& value) {
+        if (!xrank_is_same_as<xvector<>>(value)) {
+            throw std::invalid_argument("viam::trajex::jacobian: expected a 1D joint vector, got " + std::to_string(value.dimension()) +
+                                        "D");
+        }
+    }
+
     // Evaluates the forward kinematics at joint positions q, capturing the
     // per-joint quantities the Jacobian assemblies need. Throws
     // std::invalid_argument on q-size mismatch.
-    chain_state_ compute_chain_state_(const xt::xarray<double>& q) const;
+    chain_state_ compute_chain_state_(const xvector<>& q) const;
 
     std::vector<joint_row_> rows_;
     std::vector<row_constants_> constants_;

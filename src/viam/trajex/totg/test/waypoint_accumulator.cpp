@@ -1,67 +1,70 @@
 // Waypoint accumulator tests
 // Extracted from test.cpp lines 18-148
 
+#include <array>
+#include <concepts>
+#include <vector>
+
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/totg/waypoint_utils.hpp>
+#include <viam/trajex/types/xt.hpp>
+
+#if __has_include(<xtensor/core/xmath.hpp>)
+#include <xtensor/containers/xfixed.hpp>
+#include <xtensor/core/xmath.hpp>
+#else
+#include <xtensor/xfixed.hpp>
+#include <xtensor/xmath.hpp>
+#endif
 
 #include <boost/test/unit_test.hpp>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/core/xmath.hpp>
-#else
-#include <xtensor/xmath.hpp>
-#endif
+using viam::trajex::xmatrix;
+using viam::trajex::xvector;
 
 BOOST_AUTO_TEST_SUITE(waypoint_accumulator_tests)
 
 BOOST_AUTO_TEST_CASE(construct_with_single_waypoint) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}};
     BOOST_CHECK_NO_THROW(waypoint_accumulator{waypoints});
 }
 
 BOOST_AUTO_TEST_CASE(construct_with_multiple_waypoints) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
     BOOST_CHECK_NO_THROW(waypoint_accumulator{waypoints});
 }
 
 BOOST_AUTO_TEST_CASE(add_waypoints) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints1 = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints1 = {{1.0, 2.0, 3.0}};
     waypoint_accumulator acc{waypoints1};
     BOOST_CHECK_EQUAL(acc.size(), 1);
     BOOST_CHECK_EQUAL(acc.dof(), 3);
 
-    const xt::xarray<double> waypoints2 = {{4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
+    const xmatrix<> waypoints2 = {{4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
     BOOST_CHECK_NO_THROW(acc.add_waypoints(waypoints2));
     BOOST_CHECK_EQUAL(acc.size(), 3);
-}
-
-BOOST_AUTO_TEST_CASE(validates_dimension) {
-    using namespace viam::trajex::totg;
-
-    const xt::xarray<double> waypoints_1d = {1.0, 2.0, 3.0};
-    BOOST_CHECK_THROW(waypoint_accumulator{waypoints_1d}, std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(validates_dof_consistency) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}};
     waypoint_accumulator acc{waypoints};
 
-    const xt::xarray<double> waypoints_wrong_dof = {{4.0, 5.0}};
+    const xmatrix<> waypoints_wrong_dof = {{4.0, 5.0}};
     BOOST_CHECK_THROW(acc.add_waypoints(waypoints_wrong_dof), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(iterator_interface) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
     waypoint_accumulator acc{waypoints};
 
     // Member function calls
@@ -97,7 +100,7 @@ BOOST_AUTO_TEST_CASE(iterator_interface) {
 BOOST_AUTO_TEST_CASE(bounds_checked_access) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
     const waypoint_accumulator acc{waypoints};
 
     // Valid access should work
@@ -112,7 +115,7 @@ BOOST_AUTO_TEST_CASE(bounds_checked_access) {
 BOOST_AUTO_TEST_CASE(unchecked_access) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
     const waypoint_accumulator acc{waypoints};
 
     // Unchecked access should work
@@ -123,7 +126,7 @@ BOOST_AUTO_TEST_CASE(unchecked_access) {
 BOOST_AUTO_TEST_CASE(empty_check) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}};
     const waypoint_accumulator acc{waypoints};
 
     BOOST_CHECK(!acc.empty());
@@ -133,11 +136,11 @@ BOOST_AUTO_TEST_CASE(empty_check) {
 BOOST_AUTO_TEST_CASE(dof_consistency_after_add) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints1 = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints1 = {{1.0, 2.0, 3.0}};
     waypoint_accumulator acc{waypoints1};
     BOOST_CHECK_EQUAL(acc.dof(), 3);
 
-    const xt::xarray<double> waypoints2 = {{4.0, 5.0, 6.0}};
+    const xmatrix<> waypoints2 = {{4.0, 5.0, 6.0}};
     acc.add_waypoints(waypoints2);
     BOOST_CHECK_EQUAL(acc.dof(), 3);  // DOF should remain consistent
 }
@@ -145,7 +148,7 @@ BOOST_AUTO_TEST_CASE(dof_consistency_after_add) {
 BOOST_AUTO_TEST_CASE(construct_from_single_view) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
     const waypoint_accumulator source{waypoints};
 
     // Construct new accumulator from a view
@@ -162,7 +165,7 @@ BOOST_AUTO_TEST_CASE(construct_from_single_view) {
 BOOST_AUTO_TEST_CASE(add_waypoint_single_view) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
+    const xmatrix<> waypoints = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}, {7.0, 8.0, 9.0}};
     const waypoint_accumulator source{waypoints};
 
     // Build accumulator by adding views one at a time
@@ -180,8 +183,8 @@ BOOST_AUTO_TEST_CASE(add_waypoint_single_view) {
 BOOST_AUTO_TEST_CASE(add_waypoint_validates_dof) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints_3dof = {{1.0, 2.0, 3.0}};
-    const xt::xarray<double> waypoints_2dof = {{4.0, 5.0}};
+    const xmatrix<> waypoints_3dof = {{1.0, 2.0, 3.0}};
+    const xmatrix<> waypoints_2dof = {{4.0, 5.0}};
 
     waypoint_accumulator acc_3dof{waypoints_3dof};
     const waypoint_accumulator acc_2dof{waypoints_2dof};
@@ -193,7 +196,7 @@ BOOST_AUTO_TEST_CASE(add_waypoint_validates_dof) {
 BOOST_AUTO_TEST_CASE(deduplicate_no_duplicates) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {2.0, 2.0, 2.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {2.0, 2.0, 2.0}};
     const waypoint_accumulator source{waypoints};
 
     const auto result = deduplicate_waypoints(source, 0.1);
@@ -206,7 +209,7 @@ BOOST_AUTO_TEST_CASE(deduplicate_no_duplicates) {
 BOOST_AUTO_TEST_CASE(deduplicate_with_duplicates) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {
+    const xmatrix<> waypoints = {
         {0.0, 0.0, 0.0},
         {0.05, 0.05, 0.05},  // Duplicate of first (within 0.1 tolerance)
         {1.0, 1.0, 1.0},     // Different
@@ -229,7 +232,7 @@ BOOST_AUTO_TEST_CASE(deduplicate_with_duplicates) {
 BOOST_AUTO_TEST_CASE(deduplicate_always_keeps_first) {
     using namespace viam::trajex::totg;
 
-    const xt::xarray<double> waypoints = {{1.0, 1.0, 1.0}, {1.01, 1.01, 1.01}, {1.02, 1.02, 1.02}};
+    const xmatrix<> waypoints = {{1.0, 1.0, 1.0}, {1.01, 1.01, 1.01}, {1.02, 1.02, 1.02}};
     const waypoint_accumulator source{waypoints};
 
     const auto result = deduplicate_waypoints(source, 0.1);
@@ -243,7 +246,7 @@ BOOST_AUTO_TEST_CASE(segment_no_reversals) {
     using namespace viam::trajex::totg;
 
     // Simple straight line - no reversals
-    const xt::xarray<double> waypoints = {{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {2.0, 2.0, 2.0}, {3.0, 3.0, 3.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {2.0, 2.0, 2.0}, {3.0, 3.0, 3.0}};
     waypoint_accumulator source{waypoints};
 
     auto segments = segment_at_reversals(std::move(source));
@@ -257,7 +260,7 @@ BOOST_AUTO_TEST_CASE(segment_with_single_reversal) {
     using namespace viam::trajex::totg;
 
     // Forward, then reverse
-    const xt::xarray<double> waypoints = {
+    const xmatrix<> waypoints = {
         {0.0, 0.0, 0.0},
         {1.0, 1.0, 1.0},  // Forward
         {2.0, 2.0, 2.0},  // Cusp - reversal here
@@ -286,7 +289,7 @@ BOOST_AUTO_TEST_CASE(segment_with_multiple_reversals) {
     using namespace viam::trajex::totg;
 
     // Multiple direction changes
-    const xt::xarray<double> waypoints = {
+    const xmatrix<> waypoints = {
         {0.0, 0.0, 0.0},
         {1.0, 0.0, 0.0},  // Forward
         {0.5, 0.0, 0.0},  // Reverse (cusp at waypoint 1)
@@ -311,7 +314,7 @@ BOOST_AUTO_TEST_CASE(segment_with_multiple_reversals) {
 // Correct result: [0, 20]. Buggy result: [0, -5, 20].
 BOOST_AUTO_TEST_CASE(deduplicate_compares_against_last_kept) {
     using namespace viam::trajex::totg;
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {8.0, 8.0}, {-5.0, -5.0}, {20.0, 20.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {8.0, 8.0}, {-5.0, -5.0}, {20.0, 20.0}};
     const waypoint_accumulator source{waypoints};
     const auto result = deduplicate_waypoints(source, 10.0);
     BOOST_REQUIRE_EQUAL(result.size(), 2);
@@ -327,12 +330,230 @@ BOOST_AUTO_TEST_CASE(deduplicate_compares_against_last_kept) {
 // Pre-fix result: [0, 55]. Improved result result: [0, 50].
 BOOST_AUTO_TEST_CASE(deduplicate_preserves_last_waypoint) {
     using namespace viam::trajex::totg;
-    const xt::xarray<double> waypoints = {{0.0, 0.0}, {50.0, 50.0}, {55.0, 55.0}};
+    const xmatrix<> waypoints = {{0.0, 0.0}, {50.0, 50.0}, {55.0, 55.0}};
     const waypoint_accumulator source{waypoints};
     const auto result = deduplicate_waypoints(source, 10.0);
     BOOST_REQUIRE_EQUAL(result.size(), 2);
     BOOST_CHECK_EQUAL(result[0](0), 0.0);
     BOOST_CHECK_EQUAL(result[1](0), 55.0);
+}
+
+// The accepting cases are here too. The rest of the suite only builds from an xmatrix<>, so
+// nothing else would catch a guard that turned away legitimate arguments.
+BOOST_AUTO_TEST_CASE(waypoints_of_the_wrong_rank_are_rejected) {
+    using namespace viam::trajex;
+    using namespace viam::trajex::totg;
+
+    const auto constructible = []<typename T>() { return std::constructible_from<waypoint_accumulator, const T&>; };
+    const auto appendable = []<typename T>() { return requires(waypoint_accumulator& a, const T& t) { a.add_waypoints(t); }; };
+
+    BOOST_CHECK(constructible.template operator()<xmatrix<>>());
+    BOOST_CHECK(appendable.template operator()<xmatrix<>>());
+
+    // Admitted here, checked at runtime in the case below.
+    BOOST_CHECK(constructible.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(appendable.template operator()<xt::xarray<double>>());
+
+    // Dynamic rank with nothing to adapt: a lazy expression owns no storage, and a view may
+    // stride over the array it reads, so neither offers rows that can be pointed at.
+    using an_expression = decltype(std::declval<const xt::xarray<double>&>() + 1.0);
+    BOOST_CHECK(!constructible.template operator()<an_expression>());
+    BOOST_CHECK(!appendable.template operator()<an_expression>());
+
+    // The quiet case. A rank 1 array converted to rank 2 reads the missing extent from the
+    // adjacent stride and comes out as a plausible N x 1.
+    BOOST_CHECK(!constructible.template operator()<xvector<>>());
+    BOOST_CHECK(!appendable.template operator()<xvector<>>());
+
+    // Aliased because a comma in a template argument list is a macro argument separator.
+    using rank_three = xt::xtensor<double, 3>;
+    BOOST_CHECK(!constructible.template operator()<rank_three>());
+    BOOST_CHECK(!appendable.template operator()<rank_three>());
+
+    // The single-waypoint constructor takes a row adaptor. It must keep working: it is a
+    // non-template overload and so wins against the deleted one.
+    BOOST_CHECK(constructible.template operator()<waypoint_accumulator::waypoint_view>());
+
+    // Rows are views of the caller's storage, so a temporary must be refused however it is
+    // spelled. The xmatrix case has always been guarded, and the runtime-checked one must be
+    // too.
+    const auto constructible_from_rvalue = []<typename T>() { return std::constructible_from<waypoint_accumulator, T&&>; };
+    BOOST_CHECK(!constructible_from_rvalue.template operator()<xmatrix<>>());
+    BOOST_CHECK(!constructible_from_rvalue.template operator()<xt::xarray<double>>());
+}
+
+// The rows must come out as the same waypoints an equivalent xmatrix would have given.
+BOOST_AUTO_TEST_CASE(dynamically_ranked_waypoints_are_validated) {
+    using namespace viam::trajex;
+    using namespace viam::trajex::totg;
+
+    const xt::xarray<double> good = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    const waypoint_accumulator acc{good};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](0), 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+
+    const xt::xarray<double> rank_one = {1.0, 2.0, 3.0};
+    BOOST_CHECK_THROW(waypoint_accumulator{rank_one}, std::invalid_argument);
+
+    const xt::xarray<double> rank_three = xt::zeros<double>({2, 2, 2});
+    BOOST_CHECK_THROW(waypoint_accumulator{rank_three}, std::invalid_argument);
+
+    // Appending checks the same thing, and the DOF besides.
+    waypoint_accumulator target{good};
+    const xt::xarray<double> more = {{7.0, 8.0, 9.0}};
+    BOOST_CHECK_NO_THROW(target.add_waypoints(more));
+    BOOST_CHECK_EQUAL(target.size(), 3);
+
+    BOOST_CHECK_THROW(target.add_waypoints(rank_one), std::invalid_argument);
+
+    const xt::xarray<double> wrong_dof = {{1.0, 2.0}};
+    BOOST_CHECK_THROW(target.add_waypoints(wrong_dof), std::invalid_argument);
+}
+
+// A dynamically ranked source must produce rows that track it, not copies of it, since the
+// accumulator's contract is that the caller's array outlives it and remains the storage.
+BOOST_AUTO_TEST_CASE(dynamically_ranked_waypoints_are_not_copied) {
+    using namespace viam::trajex::totg;
+
+    xt::xarray<double> source = {{1.0, 2.0, 3.0}};
+    const waypoint_accumulator acc{source};
+
+    source(0, 1) = 99.0;
+    BOOST_CHECK_CLOSE(acc[0](1), 99.0, 1e-10);
+}
+
+// An adaptor over a caller's own buffer is the case this generalization is really for: the
+// waypoints never become an xtensor of ours at any point, and nothing is copied.
+BOOST_AUTO_TEST_CASE(waypoints_adapted_over_caller_memory) {
+    using namespace viam::trajex::totg;
+
+    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+    auto adapted = xt::adapt(buffer, shape);
+
+    const waypoint_accumulator acc{adapted};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](0), 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+
+    // Straight through to the caller's vector, with no array of ours in between.
+    buffer[4] = 42.0;
+    BOOST_CHECK_CLOSE(acc[1](1), 42.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(waypoints_in_a_fixed_shape_array) {
+    using namespace viam::trajex::totg;
+
+    const xt::xtensor_fixed<double, xt::xshape<2, 3>> fixed = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+
+    const waypoint_accumulator acc{fixed};
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_EQUAL(acc.dof(), 3);
+    BOOST_CHECK_CLOSE(acc[0](1), 2.0, 1e-10);
+    BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+}
+
+BOOST_AUTO_TEST_CASE(appending_from_a_different_rank_two_type) {
+    using namespace viam::trajex::totg;
+
+    const xmatrix<> initial = {{1.0, 2.0, 3.0}};
+    waypoint_accumulator acc{initial};
+
+    const xt::xtensor_fixed<double, xt::xshape<1, 3>> more = {{4.0, 5.0, 6.0}};
+    BOOST_CHECK_NO_THROW(acc.add_waypoints(more));
+    BOOST_CHECK_EQUAL(acc.size(), 2);
+    BOOST_CHECK_CLOSE(acc[1](0), 4.0, 1e-10);
+
+    const xt::xtensor_fixed<double, xt::xshape<1, 2>> wrong_dof = {{7.0, 8.0}};
+    BOOST_CHECK_THROW(acc.add_waypoints(wrong_dof), std::invalid_argument);
+}
+
+// A row adaptor is a pointer to the row's first element and a length, which assumes the source
+// keeps each row contiguous and in order. Checked directly on every kind of source, rather than
+// taken on trust from the layout the type claims.
+BOOST_AUTO_TEST_CASE(accepted_sources_store_rows_contiguously) {
+    using namespace viam::trajex::totg;
+
+    const auto check = [](const char* label, const auto& source) {
+        BOOST_TEST_MESSAGE(label);
+        BOOST_REQUIRE_EQUAL(source.dimension(), 2U);
+
+        const auto rows = source.shape()[0];
+        const auto cols = source.shape()[1];
+
+        // Contiguous within a row, and rows following one another without gaps.
+        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[1]), 1U);
+        BOOST_CHECK_EQUAL(static_cast<std::size_t>(source.strides()[0]), cols);
+
+        const waypoint_accumulator acc{source};
+        BOOST_REQUIRE_EQUAL(acc.size(), rows);
+
+        for (std::size_t i = 0; i < rows; ++i) {
+            BOOST_REQUIRE_EQUAL(acc[i].size(), cols);
+            for (std::size_t j = 0; j < cols; ++j) {
+                // Same value, and the same object: a row must be the source's own storage.
+                BOOST_CHECK_EQUAL(acc[i](j), source(i, j));
+                BOOST_CHECK_EQUAL(&acc[i](j), &source(i, j));
+            }
+        }
+    };
+
+    const xmatrix<> as_xmatrix = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xmatrix", as_xmatrix);
+
+    const xt::xtensor_fixed<double, xt::xshape<2, 3>> as_fixed = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xtensor_fixed", as_fixed);
+
+    const xt::xarray<double> as_xarray = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+    check("xarray, rank checked at runtime", as_xarray);
+
+    const std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+    const auto as_adapted = xt::adapt(buffer, shape);
+    check("adaptor over a caller's vector", as_adapted);
+}
+
+// no_ownership has to mean what it says, or the accumulator would be freeing storage it was
+// only ever lent.
+BOOST_AUTO_TEST_CASE(rows_never_own_the_storage_they_point_at) {
+    using namespace viam::trajex::totg;
+
+    std::vector<double> buffer = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const std::array<std::size_t, 2> shape{2, 3};
+
+    {
+        const auto adapted = xt::adapt(buffer, shape);
+        const waypoint_accumulator acc{adapted};
+        BOOST_CHECK_CLOSE(acc[1](2), 6.0, 1e-10);
+    }
+
+    BOOST_REQUIRE_EQUAL(buffer.size(), 6U);
+    BOOST_CHECK_CLOSE(buffer[0], 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(buffer[5], 6.0, 1e-10);
+}
+
+// Rank two is necessary but not sufficient: a row has to be contiguous and hold the element
+// type a row adaptor holds, or there is nothing to point at.
+BOOST_AUTO_TEST_CASE(rank_two_alone_does_not_qualify) {
+    using namespace viam::trajex::totg;
+
+    const auto constructible = []<typename T>() { return std::constructible_from<waypoint_accumulator, const T&>; };
+
+    // Rows of a column-major array are strided, so they cannot be adapted in place.
+    using column_major = xt::xtensor<double, 2, xt::layout_type::column_major>;
+    BOOST_CHECK(!constructible.template operator()<column_major>());
+
+    using float_matrix = xt::xtensor<float, 2>;
+    BOOST_CHECK(!constructible.template operator()<float_matrix>());
+
+    // And the ones that do qualify, for contrast.
+    using fixed_shape = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
+    using adapted_buffer = decltype(xt::adapt(std::declval<std::vector<double>&>(), std::declval<const std::array<std::size_t, 2>&>()));
+    BOOST_CHECK(constructible.template operator()<fixed_shape>());
+    BOOST_CHECK(constructible.template operator()<adapted_buffer>());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

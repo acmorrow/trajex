@@ -1,12 +1,23 @@
 #define BOOST_TEST_MODULE trajex_types_test
 
 #include <chrono>
+#include <concepts>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
+#if __has_include(<xtensor/containers/xfixed.hpp>)
+#include <xtensor/containers/xfixed.hpp>
+#else
+#include <xtensor/xfixed.hpp>
+#endif
 
 #include <viam/trajex/types/arc_acceleration.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/arc_operations.hpp>
 #include <viam/trajex/types/arc_velocity.hpp>
 #include <viam/trajex/types/epsilon.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnull-dereference"
@@ -601,6 +612,149 @@ BOOST_AUTO_TEST_CASE(epsilon_wrapper_constexpr) {
     constexpr auto w2 = eps.wrap(b);
 
     static_assert((w1 <=> w2) == std::weak_ordering::less, "constexpr comparison should work");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(xrank_checked_tests)
+
+BOOST_AUTO_TEST_CASE(construction_checks_every_way_in) {
+    using namespace viam::trajex;
+
+    const auto holdable = []<typename Held, typename From>() { return std::constructible_from<Held, const From&>; };
+
+    using vec = xrank_checked<xvector<>>;
+    using mat = xrank_checked<xmatrix<>>;
+    using fixed_two = xt::xtensor_fixed<double, xt::xshape<2, 3>>;
+    using rank_three = xt::xtensor<double, 3>;
+
+    // Right rank, nothing to check.
+    BOOST_CHECK((holdable.template operator()<vec, xvector<>>()));
+    BOOST_CHECK((holdable.template operator()<mat, xmatrix<>>()));
+    BOOST_CHECK((holdable.template operator()<mat, fixed_two>()));
+
+    // Rank known only at runtime: admitted here, checked at construction below.
+    BOOST_CHECK((holdable.template operator()<vec, xt::xarray<double>>()));
+    BOOST_CHECK((holdable.template operator()<mat, xt::xarray<double>>()));
+
+    // Fixed at the wrong rank: refused outright.
+    BOOST_CHECK(!(holdable.template operator()<vec, xmatrix<>>()));
+    BOOST_CHECK(!(holdable.template operator()<mat, xvector<>>()));
+    BOOST_CHECK(!(holdable.template operator()<mat, rank_three>()));
+
+    const xt::xarray<double> two_d = {{1.0, 2.0}, {3.0, 4.0}};
+    const xt::xarray<double> one_d = {1.0, 2.0};
+
+    BOOST_CHECK_NO_THROW(static_cast<void>(mat{two_d}));
+    BOOST_CHECK_NO_THROW(static_cast<void>(vec{one_d}));
+    BOOST_CHECK_THROW(static_cast<void>(mat{one_d}), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(vec{two_d}), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(reading_is_transparent_but_not_from_a_temporary) {
+    using namespace viam::trajex;
+
+    const xrank_checked<xvector<>> limits = xvector<>{1.0, 2.0, 3.0};
+
+    // Passing it along needs no ceremony.
+    const auto sum = [](const xvector<>& v) { return v(0) + v(1) + v(2); };
+    BOOST_CHECK_CLOSE(sum(limits), 6.0, 1e-12);
+
+    // Reaching inside does, and reads the same value.
+    BOOST_CHECK_EQUAL(limits->size(), 3U);
+    BOOST_CHECK_CLOSE((*limits)(1), 2.0, 1e-12);
+    BOOST_CHECK_CLOSE(limits.get()(2), 3.0, 1e-12);
+
+    // A default-constructed one is empty rather than absent, and still rank 1.
+    const xrank_checked<xvector<>> unset;
+    BOOST_CHECK_EQUAL(unset->dimension(), 1U);
+    BOOST_CHECK_EQUAL(unset->size(), 0U);
+
+    // Reaching inside a temporary would hand back a reference to storage that dies at the
+    // semicolon, so every way of reading refuses an rvalue, the conversion included.
+    using held = xrank_checked<xvector<>>;
+    const auto derefs = []<typename T>() { return requires(T&& t) { *std::forward<T>(t); }; };
+    const auto arrows = []<typename T>() { return requires(T&& t) { std::forward<T>(t).operator->(); }; };
+    const auto gets = []<typename T>() { return requires(T&& t) { std::forward<T>(t).get(); }; };
+
+    BOOST_CHECK(derefs.template operator()<held&>());
+    BOOST_CHECK(arrows.template operator()<held&>());
+    BOOST_CHECK(gets.template operator()<held&>());
+
+    BOOST_CHECK(!derefs.template operator()<held>());
+    BOOST_CHECK(!arrows.template operator()<held>());
+    BOOST_CHECK(!gets.template operator()<held>());
+
+    BOOST_CHECK((std::convertible_to<held&, const xvector<>&>));
+    BOOST_CHECK(!(std::convertible_to<held, const xvector<>&>));
+}
+
+// Whether an rvalue source has anything to consume is xtensor's decision and differs by type,
+// so these compare the address of the storage before and after rather than assert a rule.
+BOOST_AUTO_TEST_CASE(construction_consumes_an_rvalue_and_spares_an_lvalue) {
+    using namespace viam::trajex;
+
+    // The one that matters. Converting a dynamically ranked array steals its buffer, and
+    // binding the argument to a const reference on the way in would copy the whole thing.
+    {
+        xt::xarray<double> source = {{1.0, 2.0}, {3.0, 4.0}};
+        const double* const storage = source.data();
+        const xrank_checked<xmatrix<>> held{std::move(source)};
+        BOOST_CHECK_EQUAL(held.get().data(), storage);
+    }
+
+    // An lvalue must be left alone, whatever the rank path.
+    {
+        const xt::xarray<double> source = {{1.0, 2.0}, {3.0, 4.0}};
+        const double* const storage = source.data();
+        const xrank_checked<xmatrix<>> held{source};
+        BOOST_CHECK_NE(held.get().data(), storage);
+        BOOST_CHECK_EQUAL(source.dimension(), 2U);
+        BOOST_CHECK_CLOSE(source(1, 1), 4.0, 1e-12);
+    }
+
+    // An rvalue already of the held type goes through the dedicated T&& constructor.
+    {
+        xvector<> source = {1.0, 2.0, 3.0};
+        const double* const storage = source.data();
+        const xrank_checked<xvector<>> held{std::move(source)};
+        BOOST_CHECK_EQUAL(held.get().data(), storage);
+    }
+
+    // Consuming the argument must not cost the check: a rank that turns out wrong still throws.
+    // The source is built inside the lambda rather than moved from one the macro can see,
+    // because BOOST_CHECK_THROW may evaluate its statement twice and a moved-from array would
+    // not fail the same way the second time.
+    {
+        const auto from_a_moved_wrong_rank = [] {
+            xt::xarray<double> wrong = {1.0, 2.0, 3.0};
+            return xrank_checked<xmatrix<>>{std::move(wrong)};
+        };
+        BOOST_CHECK_THROW(static_cast<void>(from_a_moved_wrong_rank()), std::invalid_argument);
+    }
+}
+
+// A forwarding constructor in a copyable class is the classic way to displace the copy
+// constructor. It can't happen here, because both require an xtensor expression and
+// xrank_checked isn't one, but removing that constraint would look harmless.
+BOOST_AUTO_TEST_CASE(forwarding_constructors_do_not_displace_copy_or_move) {
+    using namespace viam::trajex;
+
+    using held = xrank_checked<xvector<>>;
+
+    static_assert(std::is_copy_constructible_v<held>);
+    static_assert(std::is_move_constructible_v<held>);
+
+    held original{xvector<>{1.0, 2.0, 3.0}};
+
+    const held copied{original};
+    BOOST_CHECK_EQUAL(copied.get().size(), 3U);
+    BOOST_CHECK_CLOSE(copied.get()(0), 1.0, 1e-12);
+    BOOST_CHECK_EQUAL(original.get().size(), 3U);
+
+    const double* const storage = original.get().data();
+    const held moved{std::move(original)};
+    BOOST_CHECK_EQUAL(moved.get().data(), storage);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

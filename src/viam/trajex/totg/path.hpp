@@ -1,22 +1,19 @@
 #pragma once
 
+#include <bitset>
+#include <concepts>
+#include <cstddef>
 #include <ranges>
+#include <span>
+#include <utility>
 #include <variant>
 #include <vector>
 
-#if __has_include(<xtensor/containers/xarray.hpp>)
-#include <xtensor/containers/xarray.hpp>
-#else
-#include <xtensor/xarray.hpp>
-#endif
-
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/arc_length.hpp>
+#include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg {
-
-// Forward declaration
-class trajectory;
 
 ///
 /// Geometric path through configuration space with linear segments and circular blends.
@@ -30,7 +27,7 @@ class trajectory;
 /// Example usage:
 /// @code
 ///   // Create path from waypoints
-///   xt::xarray<double> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+///   xmatrix<> waypoints = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
 ///   path p = path::create(waypoints);
 ///
 ///   // Query path at specific arc length
@@ -67,7 +64,7 @@ class path {
             /// @param end Ending configuration
             /// @throws std::invalid_argument if start == end
             ///
-            linear(xt::xarray<double> start, const xt::xarray<double>& end);
+            linear(xrank_checked<xvector<>> start, const xrank_checked<xvector<>>& end);
 
             ///
             /// Constructs linear segment from precomputed components.
@@ -80,11 +77,13 @@ class path {
             /// @param length Arc length (must be positive)
             /// @throws std::invalid_argument if length is not positive
             ///
-            linear(xt::xarray<double> start, xt::xarray<double> unit_direction, arc_length length);
+            linear(xrank_checked<xvector<>> start, xrank_checked<xvector<>> unit_direction, arc_length length);
 
-            xt::xarray<double> start;           ///< Starting configuration
-            xt::xarray<double> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
-            arc_length length;                  ///< Precomputed length (norm of end-start)
+            // Stored unwrapped: the rank is settled by the time these exist, and the geometry
+            // accessors read them at every integration step.
+            xvector<> start;           ///< Starting configuration
+            xvector<> unit_direction;  ///< Precomputed unit direction vector (normalized end-start)
+            arc_length length;         ///< Precomputed length (norm of end-start)
         };
 
         ///
@@ -101,13 +100,14 @@ class path {
             /// @param angle_rads Total angle swept by arc (radians)
             /// @throws std::invalid_argument if x,y are not orthonormal
             ///
-            circular(xt::xarray<double> center, xt::xarray<double> x, xt::xarray<double> y, double radius, double angle_rads);
+            circular(
+                xrank_checked<xvector<>> center, xrank_checked<xvector<>> x, xrank_checked<xvector<>> y, double radius, double angle_rads);
 
-            xt::xarray<double> center;  ///< Center of arc in configuration space
-            xt::xarray<double> x;       ///< First basis vector (defines rotation plane)
-            xt::xarray<double> y;       ///< Second basis vector (perpendicular to x)
-            double radius;              ///< Radius of the circular arc (units: configuration space distance)
-            double angle_rads;          ///< Total angle swept by arc (units: radians)
+            xvector<> center;   ///< Center of arc in configuration space
+            xvector<> x;        ///< First basis vector (defines rotation plane)
+            xvector<> y;        ///< Second basis vector (perpendicular to x)
+            double radius;      ///< Radius of the circular arc (units: configuration space distance)
+            double angle_rads;  ///< Total angle swept by arc (units: radians)
         };
 
         ///
@@ -184,7 +184,7 @@ class path {
             /// @param s Global arc length on path
             /// @return Configuration vector at arc length s
             ///
-            xt::xarray<double> configuration(arc_length s) const;
+            xvector<> configuration(arc_length s) const;
 
             ///
             /// Gets tangent vector at global arc length.
@@ -192,7 +192,7 @@ class path {
             /// @param s Global arc length on path
             /// @return Unit tangent vector at arc length s
             ///
-            xt::xarray<double> tangent(arc_length s) const;
+            xvector<> tangent(arc_length s) const;
 
             ///
             /// Gets curvature vector at global arc length.
@@ -200,9 +200,46 @@ class path {
             /// @param s Global arc length on path
             /// @return Curvature vector at arc length s
             ///
-            xt::xarray<double> curvature(arc_length s) const;
+            xvector<> curvature(arc_length s) const;
+
+            ///
+            /// Writes configuration at global arc length into caller-provided storage.
+            ///
+            /// The value-returning overload allocates a fresh array per call, which the
+            /// integrator cannot afford at the rate it queries geometry.
+            ///
+            /// @param s Global arc length on path
+            /// @param out Destination, sized to the path's degrees of freedom
+            /// @throws std::out_of_range if s lies outside this view's bounds
+            /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+            ///
+            void configuration(arc_length s, std::span<double> out) const;
+
+            ///
+            /// Writes tangent vector at global arc length into caller-provided storage.
+            ///
+            /// @param s Global arc length on path
+            /// @param out Destination, sized to the path's degrees of freedom
+            /// @throws std::out_of_range if s lies outside this view's bounds
+            /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+            ///
+            void tangent(arc_length s, std::span<double> out) const;
+
+            ///
+            /// Writes curvature vector at global arc length into caller-provided storage.
+            ///
+            /// @param s Global arc length on path
+            /// @param out Destination, sized to the path's degrees of freedom
+            /// @throws std::out_of_range if s lies outside this view's bounds
+            /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+            ///
+            void curvature(arc_length s, std::span<double> out) const;
 
            private:
+            // Recovered from the segment's stored vectors. Only the value-returning accessors
+            // need it; the filling ones take the size from the caller's span.
+            std::size_t dof_() const;
+
             // Reference to the segment
             std::reference_wrapper<const class segment> seg_;
 
@@ -358,15 +395,25 @@ class path {
     [[nodiscard]] static path create(const waypoint_accumulator& waypoints, const options& opts = options{});
 
     ///
-    /// Creates path directly from waypoint array.
+    /// Creates path directly from anything a waypoint accumulator will accept.
     ///
-    /// Convenience overload that constructs waypoint_accumulator internally.
-    ///
-    /// @param waypoints 2D array (num_waypoints, dof) of waypoints
+    /// @param waypoints Waypoint set, 2D and densely stored, of any rank-2 array type
     /// @param opts Path creation options (coalescing and blending parameters)
     /// @return Constructed path with segments
+    /// @throws std::invalid_argument if the rank is only known at runtime and is not 2
     ///
-    [[nodiscard]] static path create(const xt::xarray<double>& waypoints, const options& opts = options{});
+    /// What counts as a waypoint set is the accumulator's rule, so this widens and narrows with
+    /// it. Constrained, because an unconstrained template would claim everything and then fail
+    /// to compile on use.
+    ///
+    /// A temporary is safe to pass even though the accumulator refuses one: the parameter is an
+    /// lvalue by the time the accumulator sees it, and a path copies the geometry it keeps.
+    ///
+    template <typename T>
+        requires std::constructible_from<waypoint_accumulator, const T&>
+    [[nodiscard]] static path create(const T& waypoints, const options& opts = options{}) {
+        return create(waypoint_accumulator{waypoints}, opts);
+    }
 
     ///
     /// Gets total arc length of path.
@@ -443,7 +490,7 @@ class path {
     /// @param s Arc length along path
     /// @return Configuration vector at s
     ///
-    xt::xarray<double> configuration(arc_length s) const;
+    xvector<> configuration(arc_length s) const;
 
     ///
     /// Gets tangent at arc length.
@@ -451,7 +498,7 @@ class path {
     /// @param s Arc length along path
     /// @return Unit tangent vector at s
     ///
-    xt::xarray<double> tangent(arc_length s) const;
+    xvector<> tangent(arc_length s) const;
 
     ///
     /// Gets curvature at arc length.
@@ -459,7 +506,7 @@ class path {
     /// @param s Arc length along path
     /// @return Curvature vector at s
     ///
-    xt::xarray<double> curvature(arc_length s) const;
+    xvector<> curvature(arc_length s) const;
 
     ///
     /// Cursor for efficient sequential traversal.
@@ -592,24 +639,26 @@ class path::const_iterator {
 /// **Semantics**: Cursor is a view-like object with internal state. Cursors are copyable
 /// to support snapshots (e.g., for forward/backward integration passes).
 ///
+/// **Geometry queries allocate**: configuration(), tangent() and curvature() each return a
+/// freshly allocated array. Code querying geometry repeatedly should fill its own storage
+/// through the span overloads, or hold the cursor::rich that enrich() returns.
+///
 /// Example usage:
 /// @code
 ///   path p = path::create(waypoints);
-///   path::cursor cursor = p.create_cursor();
 ///
 ///   // Forward integration
-///   while (!cursor.at_end()) {
-///       auto config = cursor.configuration();
-///       auto tangent = cursor.tangent();
+///   for (auto c = p.create_cursor(); c != c.end(); c.seek_by(arc_length{0.01})) {
+///       auto config = c.configuration();
+///       auto tangent = c.tangent();
 ///       // ... process ...
-///       cursor.advance_by(arc_length{0.01});
 ///   }
 ///
 ///   // Backward integration
-///   cursor = p.create_cursor(p.length());  // Start at end
-///   while (!cursor.at_start()) {
-///       auto config = cursor.configuration();
-///       cursor.advance_by(arc_length{-0.01});  // negative delta
+///   auto c = p.create_cursor(p.length());  // Start at end
+///   while (c.position() > arc_length{0.0}) {
+///       auto config = c.configuration();
+///       c.seek_by(arc_length{-0.01});  // negative delta
 ///   }
 /// @endcode
 ///
@@ -669,7 +718,7 @@ class path::cursor {
     /// @return Configuration vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> configuration() const;
+    xvector<> configuration() const;
 
     ///
     /// Gets tangent at current position.
@@ -677,7 +726,7 @@ class path::cursor {
     /// @return Unit tangent vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> tangent() const;
+    xvector<> tangent() const;
 
     ///
     /// Gets curvature at current position.
@@ -685,7 +734,50 @@ class path::cursor {
     /// @return Curvature vector
     /// @throws std::out_of_range if cursor is at sentinel position or before start
     ///
-    xt::xarray<double> curvature() const;
+    xvector<> curvature() const;
+
+    ///
+    /// Writes configuration at current position into caller-provided storage.
+    ///
+    /// @param out Destination, sized to the path's degrees of freedom
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+    ///
+    void configuration(std::span<double> out) const;
+
+    ///
+    /// Writes tangent at current position into caller-provided storage.
+    ///
+    /// @param out Destination, sized to the path's degrees of freedom
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+    ///
+    void tangent(std::span<double> out) const;
+
+    ///
+    /// Writes curvature at current position into caller-provided storage.
+    ///
+    /// @param out Destination, sized to the path's degrees of freedom
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    /// @throws std::invalid_argument if out is not sized to the degrees of freedom
+    ///
+    void curvature(std::span<double> out) const;
+
+    ///
+    /// Cursor that owns and reuses storage for the geometry at its current position.
+    ///
+    class rich;
+
+    ///
+    /// Promotes a copy of this cursor to one that caches geometry.
+    ///
+    /// The returned cursor starts at this cursor's position with an empty cache, and this
+    /// cursor is unaffected. Worth it where the same position is queried more than once, or
+    /// often enough that per-call allocation matters.
+    ///
+    /// @return Rich cursor at this cursor's position
+    ///
+    [[nodiscard]] rich enrich() const;
 
     ///
     /// Gets sentinel for end-of-path comparison.
@@ -752,16 +844,202 @@ class path::cursor {
 };
 
 ///
-/// ADL-findable end sentinel for path::cursor.
+/// Cursor that owns and reuses storage for the geometry at its current position.
+///
+/// A plain cursor allocates a fresh array on every geometry query. This one allocates once and
+/// refills in place, which over a trajectory is three allocations rather than a million.
+///
+/// **Two sets of accessors**: `tangent()` and its siblings are the plain cursor's, inherited
+/// unchanged, and recompute into an owned array. `tangent_ref()` and its siblings hand back the
+/// cache, so taking the cheap one is visible at the call.
+///
+/// **The _ref accessors go stale**. The reference stays valid, but what you read through it
+/// follows the cursor. After a seek you keep seeing the old values until something asks for
+/// that component again, and that something may be code elsewhere holding the same cursor. If
+/// you need a value to survive the next seek, copy it.
+///
+/// **Relationship to path::cursor**: inherited privately, so a rich cursor cannot be handed out
+/// as a plain one. Relocating through a base reference would move the position without clearing
+/// the cache, leaving geometry that reads as valid but belongs to the position before last.
+///
+/// **Thread safety**: Not thread-safe, and less so than a plain cursor: the accessors fill
+/// storage and are const, so concurrent reads of the same rich cursor race.
+///
+/// Copying copies the cache along with the position.
+///
+class path::cursor::rich : private path::cursor {
+   public:
+    ///
+    /// Constructs a rich cursor at the position of an existing cursor, with an empty cache.
+    ///
+    /// @param c Cursor whose position to adopt
+    ///
+    explicit rich(cursor c);
+
+    using cursor::base;
+    using cursor::end;
+    using cursor::path;
+    using cursor::position;
+    using cursor::operator*;
+
+    using cursor::configuration;
+    using cursor::curvature;
+    using cursor::tangent;
+
+    ///
+    /// Gets an independent plain cursor at this cursor's position.
+    ///
+    /// The result carries no cache and moves independently of this one.
+    ///
+    /// @return Copy of the underlying cursor
+    ///
+    [[nodiscard]] cursor plain() const;
+
+    ///
+    /// Seeks to specific arc length position, discarding cached geometry.
+    ///
+    /// @param s Target arc length position
+    /// @return Reference to this cursor for method chaining
+    ///
+    rich& seek(arc_length s) noexcept;
+
+    ///
+    /// Seeks along path by arc length delta, discarding cached geometry.
+    ///
+    /// @param delta Arc length offset
+    /// @return Reference to this cursor for method chaining
+    ///
+    rich& seek_by(arc_length delta) noexcept;
+
+    ///
+    /// Gets configuration at current position, computing it if not already cached.
+    ///
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    ///
+    const xvector<>& configuration_ref() const;
+
+    ///
+    /// Gets tangent at current position, computing it if not already cached.
+    ///
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    ///
+    const xvector<>& tangent_ref() const;
+
+    ///
+    /// Gets curvature at current position, computing it if not already cached.
+    ///
+    /// @return Reference to storage owned by this cursor, which goes stale on the next seek
+    /// @throws std::out_of_range if cursor is at sentinel position or before start
+    ///
+    const xvector<>& curvature_ref() const;
+
+    ///
+    /// Compares cursor with end sentinel.
+    ///
+    /// @param c Cursor to compare
+    /// @return True if cursor is at sentinel position (past end or invalid)
+    ///
+    friend bool operator==(const rich& c, std::default_sentinel_t) noexcept {
+        return static_cast<const cursor&>(c) == std::default_sentinel;
+    }
+
+    ///
+    /// Compares end sentinel with cursor (reversed order).
+    ///
+    /// @param c Cursor to compare
+    /// @return True if cursor is at sentinel position (past end or invalid)
+    ///
+    friend bool operator==(std::default_sentinel_t, const rich& c) noexcept {
+        return static_cast<const cursor&>(c) == std::default_sentinel;
+    }
+
+   private:
+    // Position of each component within cached_bits_. One bitset rather than a flag apiece, so
+    // that invalidation clears every component by construction.
+    static constexpr std::size_t k_configuration_bit_ = 0;
+    static constexpr std::size_t k_tangent_bit_ = 1;
+    static constexpr std::size_t k_curvature_bit_ = 2;
+    static constexpr std::size_t k_cached_bit_count_ = 3;
+
+    // Called on any move: all three components belong to the position the cursor just left.
+    void invalidate_() noexcept;
+
+    // A throwing fill leaves the bit clear, so a query that failed is not later mistaken for
+    // one that succeeded.
+    template <typename Fill>
+    const xvector<>& cached_(xvector<>& storage, std::size_t bit, Fill&& fill) const {
+        if (!cached_bits_.test(bit)) {
+            std::forward<Fill>(fill)(std::span<double>{storage.data(), storage.size()});
+            cached_bits_.set(bit);
+        }
+
+        return storage;
+    }
+
+    // Filled by const accessors, hence mutable. Never released while the cursor lives, which is
+    // what lets the accessors hand back references. An optional<> would free and reallocate on
+    // every invalidation.
+    mutable xvector<> configuration_;
+    mutable xvector<> tangent_;
+    mutable xvector<> curvature_;
+    mutable std::bitset<k_cached_bit_count_> cached_bits_;
+};
+
+///
+/// Requirements shared by path::cursor and path::cursor::rich.
+///
+/// Every accessor here returns geometry by value, so generic code written against this concept
+/// has no lifetime rule to get wrong. A rich cursor reached this way costs what a plain one
+/// costs.
+///
+template <typename C>
+concept cursor_like = requires(C& c, const C& cc, arc_length s) {
+    { cc.path() } -> std::same_as<const path&>;
+    { cc.position() } -> std::same_as<arc_length>;
+    { *cc } -> std::same_as<path::segment::view>;
+    { cc.base() } -> std::same_as<path::const_iterator>;
+    { cc.end() } -> std::same_as<std::default_sentinel_t>;
+    { c.seek(s) } -> std::same_as<C&>;
+    { c.seek_by(s) } -> std::same_as<C&>;
+    { cc.configuration() } -> std::same_as<xvector<>>;
+    { cc.tangent() } -> std::same_as<xvector<>>;
+    { cc.curvature() } -> std::same_as<xvector<>>;
+    { cc == std::default_sentinel } -> std::same_as<bool>;
+};
+
+///
+/// A cursor that additionally offers its geometry as a reference into storage it owns.
+///
+/// Refines cursor_like, so an overload constrained on this one wins for a rich cursor with no
+/// `if constexpr` needed. It saves the allocation per query, at the price of a reference that
+/// goes stale on the next seek.
+///
+template <typename C>
+concept rich_cursor_like = cursor_like<C> && requires(const C& cc) {
+    { cc.configuration_ref() } -> std::same_as<const xvector<>&>;
+    { cc.tangent_ref() } -> std::same_as<const xvector<>&>;
+    { cc.curvature_ref() } -> std::same_as<const xvector<>&>;
+};
+
+static_assert(cursor_like<path::cursor>);
+static_assert(cursor_like<path::cursor::rich>);
+static_assert(rich_cursor_like<path::cursor::rich>);
+static_assert(!rich_cursor_like<path::cursor>);
+
+///
+/// ADL-findable end sentinel for cursors.
 ///
 /// Returns a sentinel value that can be compared with cursors to detect
 /// end-of-path. This free function enables ADL and provides an alternative
-/// to the member function cursor.end().
+/// to the member function cursor.end(). It is constrained rather than taking
+/// path::cursor directly because a rich cursor does not convert to one.
 ///
-/// @param c Cursor (unused, for ADL only)
 /// @return Sentinel value for comparison
 ///
-constexpr std::default_sentinel_t end(const path::cursor&) noexcept {
+template <cursor_like C>
+constexpr std::default_sentinel_t end(const C&) noexcept {
     return std::default_sentinel;
 }
 
