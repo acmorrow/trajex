@@ -2736,9 +2736,13 @@ BOOST_AUTO_TEST_CASE(gp12_forward_truncated_step_sddot_within_bounds, *boost::un
                                              << " outside its feasible acceleration band by " << worst_excess);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_3df3ece3_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-3df3ece3127a07f6554713f4449cc8b2_plan001_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_3df3ece3_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 505.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 16.0;
+    generate_trajectory_from_replay_file("orbsanding-3df3ece3127a07f6554713f4449cc8b2_plan001_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(orbsanding_462bf0f9_trajectory_generation, *boost::unit_test::disabled()) {
