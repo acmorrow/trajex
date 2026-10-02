@@ -2369,6 +2369,7 @@ void trajectory::cursor::sample(struct trajectory::sample& into) const {
     // temporary first, allocating on every sample. These expressions read only the path
     // cursor's geometry, never `into`.
     into.time = time_;
+    into.s = path_cursor_.position();
     xt::noalias(into.configuration) = q;
     xt::noalias(into.velocity) = q_dot;
     xt::noalias(into.acceleration) = q_ddot;
