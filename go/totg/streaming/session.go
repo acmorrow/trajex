@@ -256,6 +256,11 @@ func optionalSeconds(sec C.double) *time.Duration {
 // contents are replaced. If the session is exhausted, outputs carries
 // zero-length sample tensors.
 //
+// If staged motion is waiting when the active trajectory reaches its end, the
+// sample at that instant comes from the staged motion. It has zero velocity, as
+// the end of the active trajectory would, but carries the acceleration the
+// staged motion starts with rather than zero.
+//
 // Honors ctx like Extend.
 func (s *Session) SampleNext(ctx context.Context, n int, outputs *trajex.TensorMap) error {
 	if err := ctx.Err(); err != nil {

@@ -137,6 +137,30 @@ streaming::session fresh_session() {
     return streaming::session{default_path_options(), default_trajectory_options(), default_sample_rate()};
 }
 
+// The slow sample rate shared by the tests around the pivot overshoot guard, along with the
+// durations it is derived from. The active trajectory is the three-waypoint one, and the
+// candidate appends a tiny tail, {1.0, 1.05}, to it. The period is chosen so that resuming
+// one period past D_act/2 overshoots the candidate's duration by a fixed margin. Setting
+// period = D_cand - D_act/2 + margin makes that resume offset D_cand + margin whatever the
+// actual durations are. The period then lies in [D_act/2, D_act), so quantized_for_trajectory
+// samples the active trajectory on a three-sample grid at 0, D_act/2 and D_act.
+struct slow_rate {
+    trajectory::seconds active_duration;
+    trajectory::seconds candidate_duration;
+    double period_sec;
+
+    streaming::session make_session() const {
+        return streaming::session{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period_sec}};
+    }
+};
+
+slow_rate make_slow_rate() {
+    constexpr double k_margin_sec = 0.05;
+    const auto active_duration = reference_trajectory(three_waypoints()).duration();
+    const auto candidate_duration = reference_trajectory(xmatrix<>{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}}).duration();
+    return {active_duration, candidate_duration, candidate_duration.count() - (active_duration.count() / 2.0) + k_margin_sec};
+}
+
 }  // namespace
 
 BOOST_AUTO_TEST_SUITE(streaming_session_tests)
@@ -431,28 +455,18 @@ BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
     // the same inequality with a slow sample rate instead, which leaves a small appended tail
     // with less than one long sample period of trajectory after the branch.
     //
-    // To set it up, we sample up to D_act/2, which is the middle of a three-sample grid and
-    // comfortably ahead of the branch, so the extend would otherwise pivot. We then choose the
-    // period so that the resume offset, D_act/2 + period, overshoots the candidate's duration
-    // by a fixed margin. Setting period = D_cand - D_act/2 + margin makes that offset
-    // D_cand + margin whatever the actual durations are.
-    const auto d_act = reference_trajectory(three_waypoints()).duration();
-    const xmatrix<> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
-    const auto d_cand = reference_trajectory(merged).duration();
-
-    constexpr double k_margin_sec = 0.05;
-    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
-    // The period lies in [D_act/2, D_act), so quantized_for_trajectory builds a three-sample
-    // grid at 0, D_act/2 and D_act, and sample_next(2) leaves the last emitted sample exactly
-    // at D_act/2.
-    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+    // To set it up, we use the slow rate from make_slow_rate and sample up to D_act/2, which is
+    // the middle of the three-sample grid and comfortably ahead of the branch, so the extend
+    // would otherwise pivot.
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
     sess.sample_next(2);
 
     // Check that the setup really does make the pivot's resume offset overshoot the candidate.
-    BOOST_REQUIRE_GE(sess.current_time().count() + period, d_cand.count());
+    BOOST_REQUIRE_GE(sess.current_time().count() + rate.period_sec, rate.candidate_duration.count());
 
     // The branch for the tiny appended tail is ahead of the last emitted sample, so it would
     // pivot, but the resume offset overshoots, so the session must stage instead of throwing.
@@ -473,21 +487,13 @@ BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
 BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
     // This continues the case above. Once the session has declined the pivot and staged the
     // tiny tail, draining it must still deliver that tail, which is valid, reachable motion
-    // that must never be dropped. The rebuilt trajectory, from the active trajectory's last
-    // waypoint through the staged tail, is legitimate but shorter than one slow sample period,
-    // so resuming one sample period in would land past its end, where
-    // quantized_for_trajectory refuses to start. The rebase handles that as the pivot side
-    // does, by emitting only the rebuilt trajectory's terminal sample, and this test checks
-    // that the batch is consumed rather than the drain throwing.
+    // that must never be dropped. The tail is staged before the active trajectory's terminal
+    // goes out, so the rebuilt trajectory takes over at the seam and is sampled from its own
+    // start, even though all of it fits inside one slow sample period.
     //
     // The construction mirrors the case above.
-    const auto d_act = reference_trajectory(three_waypoints()).duration();
-    const xmatrix<> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
-    const auto d_cand = reference_trajectory(merged).duration();
-
-    constexpr double k_margin_sec = 0.05;
-    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
-    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
@@ -497,19 +503,17 @@ BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
     sess.extend(extension.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, not pivoted
 
-    // Check that the trajectory the rebase will build, from the active trajectory's last
-    // waypoint through the staged tail, really is shorter than one sample period, so that
-    // resuming one period in would overshoot it.
-    const auto d_rebuild = reference_trajectory(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}}).duration();
-    BOOST_REQUIRE_GE(period, d_rebuild.count());
-
-    // Draining past the active's terminal triggers the rebase. It must consume the staged tail,
+    // Draining through the active's end triggers the rebase. It must consume the staged tail,
     // neither throwing nor dropping it.
     std::vector<struct trajectory::sample> drained;
     BOOST_CHECK_NO_THROW(drained = sess.sample_next(8));
 
-    // The rebase completed and made a trajectory for the staged batch active.
+    // The rebase completed and made a trajectory for the staged batch active. The first sample
+    // drained stands at the seam in place of the old terminal, and the second is the rebuilt
+    // trajectory's own terminal.
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_REQUIRE_EQUAL(drained.size(), 2U);
+    BOOST_CHECK_EQUAL(drained.front().time.count(), rate.active_duration.count());
 
     // The batch's motion was delivered, since the last emitted sample reaches its final
     // waypoint.
@@ -535,6 +539,46 @@ BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
     std::vector<struct trajectory::sample> tail;
     BOOST_CHECK_NO_THROW(tail = sess.sample_next(1));
     BOOST_CHECK(tail.empty());
+}
+
+BOOST_AUTO_TEST_CASE(short_rebuild_after_an_emitted_terminal_emits_only_its_terminal) {
+    // When the active trajectory's terminal has already gone out, the rebuilt trajectory is
+    // sampled from one sample period in, so that the seam carries no duplicate sample. If the
+    // rebuild is shorter than that period, the start would land past its end, where
+    // quantized_for_trajectory refuses to start. The staged motion still has to be delivered,
+    // so the rebase emits only the rebuilt trajectory's terminal, where the arm has completed
+    // the move.
+    //
+    // The sample rate is the same slow one as in the cases above, which gives the active
+    // trajectory a three-sample grid and leaves the tiny tail's rebuild shorter than one period.
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+
+    // Nothing is staged yet, so all three samples go out, the terminal among them.
+    const auto first_chain = sess.sample_next(3);
+    BOOST_REQUIRE_EQUAL(first_chain.size(), 3U);
+    BOOST_REQUIRE_EQUAL(first_chain.back().time.count(), rate.active_duration.count());
+
+    const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}});
+    sess.extend(extension.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged
+
+    const auto d_rebuild = reference_trajectory(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}}).duration();
+    BOOST_REQUIRE_GE(rate.period_sec, d_rebuild.count());
+
+    std::vector<struct trajectory::sample> drained;
+    BOOST_CHECK_NO_THROW(drained = sess.sample_next(8));
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+
+    // Only the rebuilt trajectory's terminal comes out, at its end in global time.
+    BOOST_REQUIRE_EQUAL(drained.size(), 1U);
+    const auto& terminal = drained.front();
+    BOOST_CHECK_EQUAL(terminal.time.count(), (rate.active_duration + d_rebuild).count());
+    const xvector<> final_waypoint{1.0, 1.05};
+    BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // pivot
@@ -669,8 +713,9 @@ BOOST_AUTO_TEST_CASE(staged_batch_that_fails_to_build_surfaces_as_error_at_rebas
     sess.extend(good.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged
 
-    // The session is already staging, so this batch is recorded, not built. Its tail {2,1} duplicates the prior staged
-    // waypoint, so the eventual rebuild {1,1},{2,1},{2,1} carries a zero-length segment.
+    // The session is already staging, so this batch is recorded, not built. Its tail {2,1}
+    // duplicates the prior staged waypoint, so the eventual rebuild {1,1},{2,1},{2,1} carries a
+    // zero-length segment.
     const pinned_waypoints bad(xmatrix<>{{2.0, 1.0}, {2.0, 1.0}});
     BOOST_REQUIRE_NO_THROW(sess.extend(bad.accumulator()));  // staging defers the build
 
@@ -878,7 +923,7 @@ BOOST_AUTO_TEST_CASE(rebase_after_start_staging_restarts_the_chain_and_pivoting_
     const pinned_waypoints staged(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(staged.accumulator());
 
-    // Sampling stops on the active's terminal, and the sample after it triggers the rebase.
+    // Sampling through the end of the active trajectory rebases onto the staged motion.
     sess.sample_at_least(initial_duration);
     sess.sample_next(1);
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
@@ -918,6 +963,110 @@ BOOST_AUTO_TEST_CASE(start_staging_holds_after_the_active_drains) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // start_staging
+
+BOOST_AUTO_TEST_SUITE(seam)
+
+BOOST_AUTO_TEST_CASE(staged_motion_supplies_the_sample_at_the_seam) {
+    // When motion is staged before the active trajectory's terminal goes out, the sample at the
+    // seam comes from the staged motion's trajectory. It sits at the same instant and pose as
+    // the terminal would have, with zero velocity, but carries the acceleration the new
+    // trajectory starts with rather than the zero acceleration the old one ends with.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+
+    sess.start_staging();
+    const pinned_waypoints staged(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(staged.accumulator());
+
+    // The first sample to reach the old trajectory's duration is the one at the seam.
+    const auto samples = sess.sample_at_least(initial_duration);
+    BOOST_REQUIRE(!samples.empty());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    const auto& seam = samples.back();
+    BOOST_REQUIRE_EQUAL(seam.time.count(), initial_duration.count());
+
+    const auto expected = reference_trajectory(staged.data()).sample(trajectory::seconds{0.0});
+    BOOST_CHECK(configs_match(seam.configuration, expected.configuration));
+    BOOST_CHECK(configs_match(seam.velocity, expected.velocity));
+    BOOST_CHECK(configs_match(seam.acceleration, expected.acceleration));
+
+    double peak_acceleration = 0.0;
+    for (std::size_t i = 0; i < seam.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(seam.velocity(i), 0.0);
+        peak_acceleration = std::max(peak_acceleration, std::abs(seam.acceleration(i)));
+    }
+    BOOST_CHECK_GT(peak_acceleration, 0.0);
+
+    // Every sample before the seam came from the old trajectory, and the next one moves on into
+    // the new trajectory rather than repeating the seam's time.
+    for (std::size_t i = 0; i + 1 < samples.size(); ++i) {
+        BOOST_CHECK_LT(samples[i].time.count(), seam.time.count());
+    }
+    const auto after = sess.sample_next(1);
+    BOOST_REQUIRE_EQUAL(after.size(), 1U);
+    BOOST_CHECK_GT(after.front().time.count(), seam.time.count());
+
+    // The seam sample is the new trajectory's own first sample, so it respects the velocity and
+    // acceleration limits by construction. Checking it and its neighbors on either side against
+    // those limits states that intent, and would catch a seam that stitched in a value belonging
+    // to neither trajectory. The tolerance allows for the last few bits of rounding in a sample
+    // taken at the limit.
+    BOOST_REQUIRE_GE(samples.size(), 2U);
+    const auto limits = default_trajectory_options();
+    const auto& max_velocity = limits.max_velocity.get();
+    const auto& max_acceleration = limits.max_acceleration.get();
+    constexpr double k_limit_tolerance = 1e-9;
+    for (const auto* s : {&samples[samples.size() - 2], &seam, &after.front()}) {
+        for (std::size_t i = 0; i < s->velocity.shape(0); ++i) {
+            BOOST_CHECK_LE(std::abs(s->velocity(i)), max_velocity(i) + k_limit_tolerance);
+            BOOST_CHECK_LE(std::abs(s->acceleration(i)), max_acceleration(i) + k_limit_tolerance);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(failed_rebuild_at_the_seam_leaves_the_terminal_unemitted) {
+    // The rebase happens before the terminal would be pulled, so a staged batch that cannot be
+    // built fails there without the terminal ever going out. The session stays as it was, and
+    // the next pull reports the same failure. Duplicate consecutive waypoints yield a
+    // zero-length linear segment, which path::create rejects once linear coalescing is
+    // disabled.
+    path::options popt = default_path_options();
+    popt.set_max_linear_deviation(0.0);
+    streaming::session sess{popt, default_trajectory_options(), default_sample_rate()};
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+
+    // Staging records the batch without building it.
+    sess.start_staging();
+    const pinned_waypoints bad(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 1.0}});
+    BOOST_REQUIRE_NO_THROW(sess.extend(bad.accumulator()));
+
+    // Pull one sample at a time until the rebuild at the seam fails. If it never failed, the
+    // session would run dry and the requirement on each pull would stop the loop.
+    bool threw = false;
+    while (!threw) {
+        try {
+            BOOST_REQUIRE(!sess.sample_next(1).empty());
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+    }
+
+    const auto time_at_failure = sess.current_time();
+    BOOST_CHECK_LT(time_at_failure.count(), initial_duration.count());
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+
+    BOOST_CHECK_THROW(sess.sample_next(1), std::invalid_argument);
+    BOOST_CHECK_EQUAL(sess.current_time().count(), time_at_failure.count());
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // seam
 
 BOOST_AUTO_TEST_SUITE(end_of_stream)
 

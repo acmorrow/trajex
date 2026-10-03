@@ -26,6 +26,11 @@ namespace viam::trajex::totg::streaming {
 /// and sampling continues into it once the active trajectory is exhausted. A caller
 /// may also stop pivoting on its own initiative with `start_staging()`.
 ///
+/// If staged motion is waiting when the active trajectory reaches its end, the sample
+/// at that instant comes from the staged motion. It has zero velocity, as the end of
+/// the active trajectory would, but carries the acceleration the staged motion starts
+/// with rather than zero.
+///
 /// Sampling is forward-only and stateful: each call to `sample_next()` or
 /// `sample_at_least()` advances an internal cursor, and how far that cursor has
 /// advanced determines whether a later extend can pivot or must stage. The session
@@ -253,16 +258,19 @@ class session {
     // already appended to `waypoints_` is responsible for winding that back.
     trajectory build_trajectory_from_(const waypoint_accumulator& waypoints) const;
 
-    // Emits a single sample, advancing the cursor. Triggers a rebase if the active is
-    // exhausted at the next-sample index and staging is non-empty. Returns nullopt when
+    // Emits a single sample, advancing the cursor. Rebases when batches are staged and the
+    // active trajectory is about to emit its terminal, or already has. Returns nullopt when
     // the session is fully drained.
     std::optional<struct trajectory::sample> sample_one_();
 
-    // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, advances
-    // the epoch by the prior active's duration, ends staging, and increments the
-    // generation count. Preconditions: active_ holds a value, staged_batches_ holds a
-    // non-empty vector.
-    void rebase_();
+    // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, starts sampling it
+    // `start` into its own time, advances the epoch by the prior active's duration, ends
+    // staging, and increments the generation count. Preconditions: active_ holds a value,
+    // staged_batches_ holds a non-empty vector.
+    void rebase_(trajectory::seconds start);
+
+    // Whether any batches are staged, as opposed to the session merely staging.
+    bool has_staged_batches_() const noexcept;
 
     // Construction-time configuration. Reused for every trajectory the session builds.
     path::options path_options_;

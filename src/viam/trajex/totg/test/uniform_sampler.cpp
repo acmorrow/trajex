@@ -2,6 +2,8 @@
 // Extracted from test.cpp lines 2062-2141
 
 #include <cstddef>
+#include <iterator>
+#include <optional>
 
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/totg/uniform_sampler.hpp>
@@ -186,7 +188,68 @@ viam::trajex::totg::trajectory build_unit_duration_trajectory() {
     return trajectory::create(std::move(p), opts, std::move(points));
 }
 
+// A sampler that cannot say how many samples it has left, standing in for one whose sample
+// count is not known ahead of time. A range over it must not claim to know its distance to the
+// end.
+struct unsized_sampler {
+    bool advance(viam::trajex::totg::trajectory::cursor& cursor) {
+        return inner.advance(cursor);
+    }
+
+    std::optional<struct viam::trajex::totg::trajectory::sample> next(viam::trajex::totg::trajectory::cursor& cursor) {
+        return inner.next(cursor);
+    }
+
+    viam::trajex::totg::uniform_sampler inner;
+};
+
+static_assert(viam::trajex::totg::trajectory_details::
+                  sampler<unsized_sampler, viam::trajex::totg::trajectory::cursor, struct viam::trajex::totg::trajectory::sample>);
+static_assert(!viam::trajex::totg::trajectory_details::
+                  sized_sampler<unsized_sampler, viam::trajex::totg::trajectory::cursor, struct viam::trajex::totg::trajectory::sample>);
+static_assert(!std::sized_sentinel_for<std::default_sentinel_t, viam::trajex::totg::trajectory::sampled<unsized_sampler>::iterator>);
+
 }  // namespace
+
+BOOST_AUTO_TEST_CASE(remaining_counts_down_to_exhaustion) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex::types;
+
+    const trajectory traj = build_unit_duration_trajectory();
+    auto sampler = uniform_sampler::quantized_for_trajectory(traj, hertz{10.0});
+    auto cursor = traj.create_cursor();
+
+    auto expected = uniform_sampler::calculate_quantized_samples(traj.duration().count(), 10.0);
+    BOOST_CHECK_EQUAL(sampler.remaining(), expected);
+
+    while (sampler.next(cursor)) {
+        --expected;
+        BOOST_CHECK_EQUAL(sampler.remaining(), expected);
+    }
+
+    BOOST_CHECK_EQUAL(sampler.remaining(), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(range_distance_to_end_counts_the_current_sample) {
+    using namespace viam::trajex::totg;
+    using namespace viam::trajex::types;
+
+    const trajectory traj = build_unit_duration_trajectory();
+    auto range = traj.samples(uniform_sampler::quantized_for_trajectory(traj, hertz{10.0}));
+    auto expected = static_cast<std::ptrdiff_t>(uniform_sampler::calculate_quantized_samples(traj.duration().count(), 10.0));
+
+    // The distance includes the sample the iterator refers to, as it does for any iterator, so
+    // it is one at the last sample and zero only once the iterator reaches the end.
+    auto it = range.begin();
+    for (; it != range.end(); ++it) {
+        BOOST_CHECK_EQUAL(std::default_sentinel - it, expected);
+        BOOST_CHECK_EQUAL(it - std::default_sentinel, -expected);
+        --expected;
+    }
+
+    BOOST_CHECK_EQUAL(expected, 0);
+    BOOST_CHECK_EQUAL(std::default_sentinel - it, 0);
+}
 
 BOOST_AUTO_TEST_CASE(quantized_for_trajectory_with_start_emits_first_sample_at_start) {
     using namespace viam::trajex::totg;

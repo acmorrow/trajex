@@ -308,15 +308,27 @@ std::optional<struct trajectory::sample> session::sample_one_() {
         return std::nullopt;
     }
 
+    // If the next sample would be the active trajectory's terminal and staged motion is waiting
+    // to follow it, rebase first and emit the new trajectory's first sample in its place. The two
+    // describe the same instant, at the same pose and at zero velocity, but the terminal reports
+    // zero acceleration where the new trajectory's first sample reports the acceleration it
+    // starts with, so the acceleration goes straight from one trajectory's final deceleration to
+    // the next one's initial acceleration. Rebasing before the terminal is pulled, rather than
+    // after, means a rebuild that throws leaves the terminal unemitted and the session as it was.
+    if (sampler_->remaining() == 1 && has_staged_batches_()) {
+        rebase_(trajectory::seconds{0.0});
+    }
+
     auto local_sample = sampler_->next(*cursor_);
     if (!local_sample) {
-        // A session that is staging but has nothing staged yet has nothing to rebase onto, so
-        // it reports itself drained. It stays staging, and the next batch to arrive follows on
-        // from the end of the active trajectory.
-        if (!staged_batches_ || staged_batches_->empty()) {
+        // The terminal has already been emitted, because nothing was staged when it came up. A
+        // session that is staging but still has nothing staged has nothing to rebase onto, so it
+        // reports itself drained. It stays staging, and the next batch to arrive follows on from
+        // the end of the active trajectory.
+        if (!has_staged_batches_()) {
             return std::nullopt;
         }
-        rebase_();
+        rebase_(sample_period_);
         local_sample = sampler_->next(*cursor_);
         if (!local_sample) {
             // The freshly built sampler should always have at least one sample to emit. If a
@@ -333,7 +345,11 @@ std::optional<struct trajectory::sample> session::sample_one_() {
     return sample;
 }
 
-void session::rebase_() {
+bool session::has_staged_batches_() const noexcept {
+    return staged_batches_ && !staged_batches_->empty();
+}
+
+void session::rebase_(trajectory::seconds start) {
     // Preconditions: active_ holds, staged_batches_ holds a non-empty vector.
     //
     // The new chain's first waypoint is the active's last waypoint (the literal end of the
@@ -352,21 +368,21 @@ void session::rebase_() {
     const waypoint_accumulator replacement{new_waypoints};
     auto new_active = build_trajectory_from_(replacement);
 
-    // The previous chain's terminal was emitted as its last sample at global time
-    // (epoch_ + old_duration). Start the new sampler one nominal sample period past that, so
-    // the seam carries no duplicate sample and the gap between the two trajectories is exactly
-    // sample_period_.
+    // The new sampler starts `start` into the new trajectory. At zero, the new trajectory's
+    // first sample takes the place of the previous terminal, which has not been emitted. Otherwise
+    // the previous terminal has already gone out at global time epoch_ + old_duration, and the
+    // caller starts one sample period past it, so that the seam carries no duplicate sample.
     //
-    // If the rebuilt trajectory is shorter than one sample period, that resume offset lands at
-    // or past its end, and quantized_for_trajectory rejects a start at or beyond the duration.
-    // This is the same case extend() guards against on the pivot side. The staged motion is
-    // still valid and reachable, so we must deliver it rather than drop it, but the whole move
-    // fits inside one sample period, so the only sample worth emitting is the terminal, where
-    // the arm has completed the move and come to rest at the destination. Build a one-sample
-    // grid that lands on the trajectory's end. Emitting only the terminal also avoids repeating
-    // the seam sample, which a sampler that started at zero would do.
-    uniform_sampler new_sampler = (sample_period_ < new_active.duration())
-                                      ? uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, sample_period_)
+    // A rebuilt trajectory shorter than that one sample period would put the start at or past
+    // its end, where quantized_for_trajectory refuses to start. This is the same case extend()
+    // guards against on the pivot side. The staged motion is still valid and reachable, so we
+    // must deliver it rather than drop it, but the whole move fits inside one sample period, so
+    // the only sample worth emitting is the terminal, where the arm has completed the move and
+    // come to rest at the destination. Build a one-sample grid that lands on the trajectory's
+    // end. Emitting only the terminal also avoids repeating the seam sample, which a sampler that
+    // started at zero would do.
+    uniform_sampler new_sampler = (start < new_active.duration())
+                                      ? uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, start)
                                       : uniform_sampler{std::size_t{1}};
 
     // The anchor is already the store's last waypoint and also row zero of `new_waypoints`,

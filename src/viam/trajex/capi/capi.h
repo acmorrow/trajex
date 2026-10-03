@@ -532,6 +532,11 @@ void viam_trajex_totg_streaming_session_start_staging(viam_trajex_totg_streaming
 /// contents of `outputs` are replaced. If the session is exhausted (no more samples
 /// available), `outputs` will carry zero-length sample tensors.
 ///
+/// If staged motion is waiting when the active trajectory reaches its end, the sample at
+/// that instant comes from the staged motion. It has zero velocity, as the end of the
+/// active trajectory would, but carries the acceleration the staged motion starts with
+/// rather than zero.
+///
 /// ## Outputs
 ///
 /// | Key | Dtype | Shape | Meaning |

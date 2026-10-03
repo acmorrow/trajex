@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <iterator>
 #include <optional>
 
 #include <viam/trajex/totg/trajectory.hpp>
@@ -108,13 +110,23 @@ class uniform_sampler {
     ///
     std::optional<struct trajectory::sample> next(trajectory::cursor& cursor);
 
+    ///
+    /// Gets the number of samples the sampler has yet to produce.
+    ///
+    /// @return Samples left before the sampler is exhausted
+    ///
+    std::size_t remaining() const noexcept;
+
    private:
     std::size_t num_samples_;
     std::size_t next_sample_ = 0;
     trajectory::seconds start_;
 };
 
-// Verify that uniform_sampler satisfies the sampler concept
+// Verify that uniform_sampler satisfies the sampler concepts. It knows its sample count from
+// construction, so it is sized, and a range over it can report how many samples remain.
 static_assert(trajectory_details::sampler<uniform_sampler, trajectory::cursor, struct trajectory::sample>);
+static_assert(trajectory_details::sized_sampler<uniform_sampler, trajectory::cursor, struct trajectory::sample>);
+static_assert(std::sized_sentinel_for<std::default_sentinel_t, trajectory::sampled<uniform_sampler>::iterator>);
 
 }  // namespace viam::trajex::totg
