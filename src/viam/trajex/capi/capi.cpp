@@ -696,6 +696,10 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
     }
 }
 
+void viam_trajex_totg_streaming_session_start_staging(viam_trajex_totg_streaming_session_t* session) {
+    session->sess.start_staging();
+}
+
 int viam_trajex_totg_streaming_session_sample_next(viam_trajex_totg_streaming_session_t* session,
                                                    std::size_t n,
                                                    viam_trajex_tensor_map_t* outputs,

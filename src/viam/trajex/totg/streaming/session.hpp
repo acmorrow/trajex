@@ -22,9 +22,9 @@ namespace viam::trajex::totg::streaming {
 /// sampling proceeds. Each `extend()` call may either pivot the active trajectory
 /// to a new one that incorporates the additional waypoints, or stage the batch
 /// for later if the branch between the old and new trajectories lies at or behind
-/// the latest emitted sample. Staged batches are absorbed into a new trajectory
-/// built from the current trajectory's terminal pose once that trajectory has been
-/// sampled through.
+/// the latest emitted sample. Staged motion begins where the active trajectory ends,
+/// and sampling continues into it once the active trajectory is exhausted. A caller
+/// may also stop pivoting on its own initiative with `start_staging()`.
 ///
 /// Sampling is forward-only and stateful: each call to `sample_next()` or
 /// `sample_at_least()` advances an internal cursor, and how far that cursor has
@@ -38,11 +38,11 @@ class session {
     /// What one `extend()` call did with the batch it was given, and the timing it computed
     /// along the way.
     ///
-    /// Both times are optional because they only exist on some paths through `extend()`. A
-    /// branch slack needs a candidate trajectory to compare against the active one, which a
-    /// seam-only call, or one arriving when batches are already staged, never builds. A
-    /// duration delta needs a trajectory to have been installed, which staging by definition
-    /// does not do. A pivot is the only kind that reports both.
+    /// Both times are optional because only some outcomes produce them. A branch slack
+    /// requires comparing the batch against the active trajectory, which does not happen
+    /// for a seam-only batch or while the session is staging. A duration delta requires a
+    /// new trajectory to become active, which a stage never does. A pivot is the only kind
+    /// that reports both.
     ///
     /// `branch_slack` is measured from the most recently emitted sample to the branch: the
     /// point at which the candidate first stops agreeing with the active trajectory, both
@@ -70,9 +70,9 @@ class session {
         /// A batch either builds the session's first trajectory, replaces the active
         /// trajectory with one that incorporates it, or waits in staging until the active
         /// trajectory has been sampled through. The difference matters to a caller pacing
-        /// its own sends: a pivot is invisible to the arm, but every trajectory ends at
-        /// rest, so a stage means the active trajectory will run to its end and bring the
-        /// arm to a stop before the staged motion begins.
+        /// its own sends: a pivot is invisible to the arm, but a stage means the active
+        /// trajectory runs to its end, where the arm's velocity reaches zero before the
+        /// staged motion begins.
         ///
         /// The two values for a stage that followed a comparison distinguish the reasons a
         /// pivot was refused. One says the call arrived after the point it needed to change
@@ -86,7 +86,7 @@ class session {
             k_pivot = 1,                  ///< Replaced the active trajectory; sampling continues unbroken
             k_staged_branch_sampled = 2,  ///< Staged; sampling had already passed the branch
             k_staged_unsamplable = 3,     ///< Staged; less than one sample period of motion added
-            k_staged_again = 4,           ///< Staged; batches were already staged, so nothing was compared
+            k_staged_again = 4,           ///< Staged; the session was already staging, so nothing was compared
             k_noop = 5,                   ///< Nothing beyond the seam waypoint; session unchanged
         };
 
@@ -103,10 +103,9 @@ class session {
     ///
     /// @param path_options Path-construction options (used for every trajectory built by the session)
     /// @param trajectory_options Trajectory-construction options (used for every trajectory built by the session)
-    /// @param sample_rate Nominal sample rate. Each underlying trajectory's sampler is
-    ///                    quantized to land its last sample exactly on the trajectory's
-    ///                    duration, so per-sample spacing approximates 1 / sample_rate
-    ///                    with small per-trajectory drift. This parameter's shape may
+    /// @param sample_rate Nominal sample rate. Samples are spaced approximately
+    ///                    1 / sample_rate apart, and the exact spacing may differ slightly
+    ///                    from one trajectory to the next. This parameter's shape may
     ///                    change if a sampler factory is added later.
     ///
     session(path::options path_options, trajectory::options trajectory_options, types::hertz sample_rate);
@@ -116,11 +115,11 @@ class session {
     ///
     /// If no active trajectory exists, builds the initial one from `batch`.
     /// Otherwise, requires `batch`'s first waypoint to compare bit-exactly equal to the
-    /// session's most recently stored waypoint, then absorbs the remainder of `batch` and
-    /// attempts to build a trajectory incorporating it. The result is either swapped in
-    /// (a pivot) or held aside for later (a stage). The returned `extend_result` says
-    /// which, along with the timing a caller needs in order to pace its own sends; a
-    /// caller with no interest in either may discard it.
+    /// session's most recently stored waypoint, then either pivots the active trajectory
+    /// onto one incorporating the remainder of `batch`, or stages that remainder to follow
+    /// the active trajectory. The returned `extend_result` says which, along with the
+    /// timing a caller needs in order to pace its own sends; a caller with no interest in
+    /// either may discard it.
     ///
     /// Waypoints in `batch` are assumed to have been deduplicated by the caller. The
     /// bit-exact seam requirement means the merged sequence retains the dedup invariant
@@ -134,6 +133,20 @@ class session {
     ///         trajectory fails. Session state is unchanged in that case.
     ///
     extend_result extend(const waypoint_accumulator& batch);
+
+    ///
+    /// Stops the session pivoting, so that every subsequent `extend()` stages its batch.
+    ///
+    /// The cost of an `extend()` that pivots grows with the motion added since the last
+    /// rebase. Calling this starts that growth over at the next rebase, at the price of the
+    /// arm's velocity reaching zero at the end of the active trajectory before the staged
+    /// motion begins.
+    ///
+    /// Staging lasts until the next rebase, after which `extend()` pivots again. Calling
+    /// this while already staging has no effect, and neither does calling it before the
+    /// first `extend()`, since the first batch always builds the first trajectory.
+    ///
+    void start_staging() noexcept;
 
     ///
     /// Returns the global time of the most recently emitted sample, or zero if no samples
@@ -153,12 +166,10 @@ class session {
     /// recently emitted sample, and it is clamped at zero rather than allowed to go
     /// slightly negative when the last sample lands on the trajectory's end.
     ///
-    /// It counts only the active trajectory. Motion sitting in staged batches has no
-    /// trajectory yet, and so has no duration to report, which means this value drains
-    /// toward zero while batches are staged even though the session still has work
-    /// queued, and then jumps back up when the rebase builds a trajectory for that work.
-    /// A caller pacing itself against this number needs to know that. Reporting a true
-    /// session-wide total has to wait until staged batches carry timing of their own.
+    /// It counts only the active trajectory, not staged motion, so it drains toward zero
+    /// while batches are staged even though the session still has work queued, and jumps
+    /// back up when that work becomes active at the rebase. A caller pacing itself against
+    /// this number needs to know that.
     ///
     /// @return Unsampled time left in the active trajectory, or zero if there is none
     ///
@@ -167,10 +178,9 @@ class session {
     ///
     /// Pulls the next `n` samples from the session, advancing the sampling cursor.
     ///
-    /// What "next" means is sampler-defined; for the current uniform sampler, samples are
-    /// spaced according to the session's sample rate. Returns fewer than `n` samples if the
-    /// session is exhausted (active trajectory ran out and no staged batches were available
-    /// to rebase onto).
+    /// Samples are spaced approximately one sample period apart, per the sample rate given at
+    /// construction. Returns fewer than `n` samples if the session is exhausted, which happens
+    /// when the active trajectory has run out and nothing is staged to follow it.
     ///
     /// @param n Number of samples to attempt to produce. Defaults to 1.
     /// @return Vector of up to `n` samples
@@ -182,8 +192,8 @@ class session {
     /// `current_time() + horizon`, advancing the sampling cursor accordingly.
     ///
     /// Returns fewer (possibly zero) samples than that target if the session is exhausted.
-    /// The name says `at_least` because a non-uniform sampler may overshoot the requested
-    /// horizon by a bounded amount; the session does not split a sample period.
+    /// The last sample may land somewhat past the horizon, since the session never splits a
+    /// sample period to hit it exactly.
     ///
     /// @param horizon Minimum amount of time to advance before stopping
     /// @return Vector of samples covering at least `horizon`, or fewer on exhaustion
@@ -249,8 +259,9 @@ class session {
     std::optional<struct trajectory::sample> sample_one_();
 
     // Rebuilds the active trajectory from {terminal_pose, ...staged_batches}, advances
-    // the epoch by the prior active's duration, clears staging, and increments the
-    // generation count. Preconditions: active_ holds a value, staged_batches_ is non-empty.
+    // the epoch by the prior active's duration, ends staging, and increments the
+    // generation count. Preconditions: active_ holds a value, staged_batches_ holds a
+    // non-empty vector.
     void rebase_();
 
     // Construction-time configuration. Reused for every trajectory the session builds.
@@ -277,11 +288,10 @@ class session {
     // transitions instead of comparing pointers.
     std::optional<trajectory> active_;
 
-    // Per-trajectory uniform sampler and cursor. Reconstructed at every transition
-    // (first build, pivot, rebase) so each new active is sampled on a fresh grid
-    // aligned to its own duration. Both reference active_; reconstruction order is
-    // always (assign active_) -> (emplace sampler_/cursor_) so the cursor points at
-    // the freshly-installed trajectory.
+    // The sampler and cursor for the active trajectory. Both are rebuilt whenever a new
+    // trajectory becomes active, so that each one is sampled on a fresh grid aligned to its
+    // own duration. Both refer to active_, so they are emplaced only after the new trajectory
+    // has been assigned to it.
     std::optional<uniform_sampler> sampler_;
     std::optional<trajectory::cursor> cursor_;
 
@@ -293,14 +303,17 @@ class session {
     // emitted yet. Cached for the current_time() accessor.
     trajectory::seconds current_time_{0.0};
 
-    // Cumulative count of samples emitted. Used at pivot time to distinguish "no
-    // samples yet" (start new sampler at offset 0) from "samples emitted" (start at
-    // current local time + one sample period).
+    // Cumulative count of samples emitted. A pivot uses it to decide where the new sampler
+    // starts, which is at zero if nothing has been emitted, and otherwise one sample period
+    // past the current local time.
     std::size_t emitted_sample_count_{0};
 
-    // Batches received while staging, each pre-stripped of its seam point. Drained
-    // into the new active during the next rebase.
-    std::vector<xmatrix<>> staged_batches_;
+    // Batches received while staging, each pre-stripped of its seam point. The optional is
+    // engaged exactly when the session is staging, which begins when a batch stages or the
+    // caller calls start_staging(), and ends at the rebase that drains the batches into the
+    // new active trajectory. An engaged but empty vector means the caller started staging
+    // before any batch arrived, so extend() must stage but sampling has nothing to rebase onto.
+    std::optional<std::vector<xmatrix<>>> staged_batches_;
 
     // The most recently received waypoint, against which the next extend's seam is
     // bit-exactly validated. Empty (shape (0,)) before the first extend.

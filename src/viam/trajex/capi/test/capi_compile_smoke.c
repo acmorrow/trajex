@@ -41,12 +41,14 @@ int main(void) {
     (void)viam_trajex_totg_streaming_session_create;
     (void)viam_trajex_totg_streaming_session_destroy;
     (void)viam_trajex_totg_streaming_session_extend;
+    (void)viam_trajex_totg_streaming_session_start_staging;
     (void)viam_trajex_totg_streaming_session_sample_next;
     (void)viam_trajex_totg_streaming_session_sample_at_least;
     (void)viam_trajex_totg_streaming_session_current_time_sec;
     (void)viam_trajex_totg_streaming_session_generation_count;
     (void)viam_trajex_totg_streaming_session_has_active_trajectory;
     (void)viam_trajex_totg_streaming_session_active_duration_sec;
+    (void)viam_trajex_totg_streaming_session_remaining_active_duration_sec;
 
     // Force-resolve every exported key constant.
     (void)viam_trajex_totg_key_waypoints_rads;

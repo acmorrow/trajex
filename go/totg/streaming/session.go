@@ -88,9 +88,9 @@ func (s *Session) Close() {
 // A batch either builds the session's first trajectory, replaces the active
 // trajectory with one that incorporates it, or waits in staging until the
 // active trajectory has been sampled through. The difference matters to a
-// caller pacing its own sends: a pivot is invisible to the arm, but every
-// trajectory ends at rest, so a stage means the active trajectory will run to
-// its end and bring the arm to a stop before the staged motion begins.
+// caller pacing its own sends: a pivot is invisible to the arm, but a stage
+// means the active trajectory runs to its end, where the arm's velocity reaches
+// zero before the staged motion begins.
 //
 // The two values for a stage that followed a comparison distinguish the reasons
 // a pivot was refused. One says the call arrived after the point it needed to
@@ -121,9 +121,10 @@ const (
 	// carried less than one sample period of motion.
 	ExtendStagedUnsamplable ExtendKind = 3
 
-	// ExtendStagedAgain means batches were already staged, so no candidate was
-	// built and this one joined them. Nothing was compared, so there is no
-	// branch slack. It can only follow one of the other two staged kinds.
+	// ExtendStagedAgain means the session was already staging, so the batch was
+	// staged without being compared against the active trajectory and there is
+	// no branch slack. It can only follow one of the other two staged kinds or a
+	// call to StartStaging.
 	ExtendStagedAgain ExtendKind = 4
 
 	// ExtendNoop means the batch carried nothing beyond the seam waypoint, so
@@ -154,12 +155,11 @@ func (d ExtendKind) String() string {
 }
 
 // ExtendResult reports what one Extend call did and the timing it produced
-// along the way. Both times are pointers because they only exist on some paths
-// through Extend: a branch slack needs a candidate trajectory to compare
-// against the active one, which a seam-only call, or one arriving when batches
-// are already staged, never builds, and a duration delta needs a trajectory to
-// have been installed, which staging by definition does not do. A pivot is the
-// only kind that reports both.
+// along the way. Both times are pointers because only some outcomes produce
+// them. A branch slack requires comparing the batch against the active
+// trajectory, which does not happen for a seam-only batch or while the session
+// is staging. A duration delta requires a new trajectory to become active,
+// which a stage never does. A pivot is the only kind that reports both.
 type ExtendResult struct {
 	// Kind is how the batch was handled.
 	Kind ExtendKind
@@ -222,6 +222,21 @@ func (s *Session) Extend(ctx context.Context, batch *trajex.TensorMap) (ExtendRe
 		BranchSlack:         optionalSeconds(branchSlackSec),
 		DeltaActiveDuration: optionalSeconds(deltaActiveDurationSec),
 	}, nil
+}
+
+// StartStaging stops the session pivoting, so that every later Extend stages
+// its batch and reports ExtendStagedAgain until the next rebase.
+//
+// The cost of an Extend that pivots grows with the motion added since the last
+// rebase. Calling this starts that growth over at the next rebase, at the price
+// of the arm's velocity reaching zero at the end of the active trajectory before
+// the staged motion begins. After the rebase, Extend pivots again.
+//
+// Calling this while already staging has no effect, and neither does calling
+// it before the first Extend, since the first batch always builds the first
+// trajectory.
+func (s *Session) StartStaging() {
+	C.viam_trajex_totg_streaming_session_start_staging(s.handle)
 }
 
 // optionalSeconds converts a C ABI duration into a Go duration, treating the
@@ -318,11 +333,10 @@ func (s *Session) ActiveDuration() time.Duration {
 // RemainingActiveDuration returns how much of the active trajectory has not yet
 // been sampled, or zero if there is none.
 //
-// This counts only the active trajectory. Motion sitting in staged batches has
-// no trajectory yet, and so has no duration to report, which means this value
-// drains toward zero while batches are staged even though the session still has
-// work queued, and then jumps back up when the rebase builds a trajectory for
-// that work. A caller pacing itself against this number needs to know that.
+// This counts only the active trajectory, not staged motion, so it drains
+// toward zero while batches are staged even though the session still has work
+// queued, and jumps back up when that work becomes active at the rebase. A
+// caller pacing itself against this number needs to know that.
 func (s *Session) RemainingActiveDuration() time.Duration {
 	var out C.double
 	C.viam_trajex_totg_streaming_session_remaining_active_duration_sec(s.handle, &out)
