@@ -49,6 +49,7 @@ int main(void) {
     (void)viam_trajex_totg_streaming_session_has_active_trajectory;
     (void)viam_trajex_totg_streaming_session_active_duration_sec;
     (void)viam_trajex_totg_streaming_session_remaining_active_duration_sec;
+    (void)viam_trajex_totg_streaming_session_remaining_total_duration_sec;
 
     // Force-resolve every exported key constant.
     (void)viam_trajex_totg_key_waypoints_rads;

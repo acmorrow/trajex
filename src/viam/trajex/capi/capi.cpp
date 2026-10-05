@@ -781,4 +781,8 @@ void viam_trajex_totg_streaming_session_remaining_active_duration_sec(const viam
     *out = session->sess.remaining_active_duration().count();
 }
 
+void viam_trajex_totg_streaming_session_remaining_total_duration_sec(const viam_trajex_totg_streaming_session_t* session, double* out) {
+    *out = session->sess.remaining_total_duration().count();
+}
+
 }  // extern "C"

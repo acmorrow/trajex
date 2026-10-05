@@ -3,26 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <numeric>
+#include <memory>
 #include <optional>
-#include <ranges>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-#if __has_include(<xtensor/views/xview.hpp>)
-#include <xtensor/views/xview.hpp>
-#else
-#include <xtensor/xview.hpp>
-#endif
-
 namespace viam::trajex::totg::streaming {
 
 namespace {
-
-// Staging keeps batches aside until the next rebase folds them in, and it cannot hold onto
-// the caller's accumulator to do so, because that accumulator views memory the caller owns.
-// These copy the rows it needs into arrays the session owns.
 
 // Compared bitwise rather than within a tolerance, because the seam waypoint is one the caller
 // was handed back and is expected to return unmodified. Anything else is a protocol error on
@@ -31,52 +20,16 @@ bool rows_bit_exact(const waypoint_accumulator::value_type& a, const xvector<>& 
     return std::ranges::equal(a, b);
 }
 
-// Caller must ensure batch.size() > from.
-xmatrix<> accumulator_tail_to_matrix(const waypoint_accumulator& batch, std::size_t from) {
-    // Allocated without initialising, since every element is written below.
-    auto result = xmatrix<>::from_shape(std::vector<std::size_t>{batch.size() - from, batch.dof()});
-
-    // Copied element by element for the reason waypoint_store::append gives: a view assignment
-    // per row costs more than the stores it performs at this width.
-    const auto dof = batch.dof();
-    std::size_t row = 0;
-    for (const auto& waypoint : batch | std::views::drop(from)) {
-        for (std::size_t joint = 0; joint != dof; ++joint) {
-            result(row, joint) = waypoint(joint);
-        }
-        ++row;
-    }
-    return result;
-}
-
-xmatrix<> stack_anchor_and_staged(const xvector<>& anchor, const std::vector<xmatrix<>>& staged) {
-    const auto staged_rows =
-        std::transform_reduce(staged.begin(), staged.end(), std::size_t{0}, std::plus{}, [](const auto& batch) { return batch.shape(0); });
-
-    auto result = xmatrix<>::from_shape(std::vector<std::size_t>{staged_rows + 1, anchor.shape(0)});
-    xt::view(result, 0, xt::all()) = anchor;
-
-    // Each staged batch is already a contiguous block of rows, so it lands in one assignment
-    // rather than a row at a time.
-    std::size_t row = 1;
-    for (const auto& batch : staged) {
-        const auto rows = batch.shape(0);
-        xt::view(result, xt::range(row, row + rows), xt::all()) = batch;
-        row += rows;
-    }
-    return result;
-}
-
-// Returns the local time of the branch, found by walking the integration points of `active`
-// and `candidate` in lockstep until they first disagree. If all of `active`'s integration
-// points are a prefix of `candidate`'s, the branch sits at the end of `active`, so its
+// Returns the local time of the branch, found by walking the integration points of `existing`
+// and `candidate` in lockstep until they first disagree. If all of `existing`'s integration
+// points are a prefix of `candidate`'s, the branch sits at the end of `existing`, so its
 // duration is returned.
-trajectory::seconds find_branch_local_time(const trajectory& active, const trajectory& candidate) {
-    const auto& active_pts = active.get_integration_points();
+trajectory::seconds find_branch_local_time(const trajectory& existing, const trajectory& candidate) {
+    const auto& existing_pts = existing.get_integration_points();
     const auto& candidate_pts = candidate.get_integration_points();
-    const auto result = std::ranges::mismatch(active_pts, candidate_pts);
-    if (result.in1 == active_pts.end()) {
-        return active.duration();
+    const auto result = std::ranges::mismatch(existing_pts, candidate_pts);
+    if (result.in1 == existing_pts.end()) {
+        return existing.duration();
     }
     return result.in1->time;
 }
@@ -94,7 +47,8 @@ session::session(path::options path_options, trajectory::options trajectory_opti
     : path_options_(std::move(path_options)),
       trajectory_options_(std::move(trajectory_options)),
       sample_rate_(sample_rate),
-      sample_period_(validate_sample_rate_and_compute_period(sample_rate)) {}
+      sample_period_(validate_sample_rate_and_compute_period(sample_rate)),
+      waypoints_(std::make_unique<waypoint_store>()) {}
 
 session::extend_result session::extend(const waypoint_accumulator& batch) {
     using kinds = extend_result::kinds;
@@ -109,12 +63,12 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         // The store has to be populated before the trajectory can be built from it, so a failed
         // build leaves waypoints behind that no trajectory corresponds to. Empty it before
         // rethrowing, so a caller retrying with a corrected batch starts where it was.
-        waypoints_.append(batch, 0);
+        waypoints_->append(batch, 0);
         auto new_active = [&] {
             try {
-                return build_trajectory_from_(waypoints_.waypoints());  // throws on validation failure
+                return build_trajectory_from_(waypoints_->waypoints());  // throws on validation failure
             } catch (...) {
-                waypoints_.truncate(0);
+                waypoints_->truncate(0);
                 throw;
             }
         }();
@@ -123,7 +77,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         // contract (state unchanged on failure) is preserved.
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, trajectory::seconds{0.0});
 
-        last_waypoint_ = waypoints_.last();
+        last_waypoint_ = waypoints_->last();
         active_ = std::move(new_active);
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
@@ -136,29 +90,24 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
     // Every later batch must agree with the session on DOF and on the seam waypoint, and both are
     // checked before any state is touched.
-    if (batch.dof() != waypoints_.dof()) {
+    if (batch.dof() != waypoints_->dof()) {
         throw std::invalid_argument("streaming::session::extend: DOF mismatch");
     }
     if (!rows_bit_exact(batch.at(0), last_waypoint_)) {
         throw std::invalid_argument("streaming::session::extend: seam mismatch");
     }
 
-    const std::size_t post_seam_count = batch.size() - 1;
-
-    // A session that is already staging builds no candidate, and only records the new waypoints.
-    // Nothing is compared, so neither time can be reported.
-    if (staged_batches_) {
-        if (post_seam_count == 0) {
-            return {kinds::k_noop, std::nullopt, std::nullopt};
-        }
-        staged_batches_->push_back(accumulator_tail_to_matrix(batch, 1));
-        last_waypoint_ = batch.at(batch.size() - 1);
-        return {kinds::k_staged_again, std::nullopt, std::nullopt};
+    // A batch that carries nothing past the seam leaves the session unchanged.
+    if (batch.size() == 1) {
+        return {kinds::k_noop, std::nullopt, std::nullopt};
     }
 
-    // A batch that carries nothing past the seam leaves the session unchanged.
-    if (post_seam_count == 0) {
-        return {kinds::k_noop, std::nullopt, std::nullopt};
+    // A session that is already staging takes the batch into the staged motion, which nothing
+    // has sampled yet, so there is no question of pivoting the active trajectory.
+    if (staging_) {
+        const auto [branch_slack, growth] = stage_(*staging_, batch);
+        last_waypoint_ = batch.at(batch.size() - 1);
+        return {kinds::k_staged_again, branch_slack, growth};
     }
 
     // Build a candidate trajectory from the active waypoints plus the batch's new waypoints,
@@ -168,13 +117,13 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // Appending is provisional: the candidate may lose to staging below, and building it may
     // fail outright, so the store is wound back to `committed_waypoints` on either path. Only
     // a pivot keeps the appended waypoints, because only then do they describe `active_`.
-    const auto committed_waypoints = waypoints_.size();
-    waypoints_.append(batch, 1);
+    const auto committed_waypoints = waypoints_->size();
+    waypoints_->append(batch, 1);
     auto candidate = [&] {
         try {
-            return build_trajectory_from_(waypoints_.waypoints());  // throws on validation failure
+            return build_trajectory_from_(waypoints_->waypoints());  // throws on validation failure
         } catch (...) {
-            waypoints_.truncate(committed_waypoints);
+            waypoints_->truncate(committed_waypoints);
             throw;
         }
     }();
@@ -189,7 +138,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // keeps the spacing roughly uniform across the pivot, and if that lands at or past the
     // candidate's end, the candidate has less than one sample period left after the branch. A
     // pivot would then produce no new samples, and quantized_for_trajectory would reject the
-    // start anyway, so the batch stages instead and folds in at the next rebase.
+    // start anyway, so the batch stages instead and becomes active at the next rebase.
     const auto starting_local_time = (emitted_sample_count_ == 0) ? trajectory::seconds{0.0} : (current_time_ - epoch_) + sample_period_;
     const bool branch_ahead = (emitted_sample_count_ == 0) || (branch_global > current_time_);
     const bool has_samplable_material = starting_local_time < candidate.duration();
@@ -203,7 +152,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
 
-        last_waypoint_ = waypoints_.last();
+        last_waypoint_ = waypoints_->last();
         active_ = std::move(candidate);
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
@@ -212,29 +161,70 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     }
 
     // Staging instead of pivoting, so the candidate is discarded and its waypoints along with
-    // it. They arrive again by way of `staged_batches_` at the next rebase. The early return
-    // for a session that is already staging means this stage is the one that starts it. The
-    // matrix is built before the optional is engaged, so that a failed allocation cannot leave
-    // the session staging with nothing staged.
-    waypoints_.truncate(committed_waypoints);
-    auto staged = accumulator_tail_to_matrix(batch, 1);
-    staged_batches_.emplace().push_back(std::move(staged));
+    // it. The batch starts the staged motion instead. That is built aside and only kept once it
+    // succeeds, so a batch the staged motion cannot take leaves the session as it was. Slack
+    // against the active trajectory is what explains the stage, so it is the slack reported.
+    waypoints_->truncate(committed_waypoints);
+    staging_state staging;
+    const auto growth = stage_(staging, batch).second;
+    staging_ = std::move(staging);
     last_waypoint_ = batch.at(batch.size() - 1);
 
     // Both stage conditions can hold at once. Report lateness in that case, because it is the
     // one the caller can do something about: sending sooner fixes a branch that has already
     // been sampled, whereas an unsamplable candidate needs a larger batch instead.
     const auto kind = branch_ahead ? kinds::k_staged_unsamplable : kinds::k_staged_branch_sampled;
-    return {kind, branch_slack, std::nullopt};
+    return {kind, branch_slack, growth};
+}
+
+std::pair<std::optional<trajectory::seconds>, trajectory::seconds> session::stage_(staging_state& staging,
+                                                                                   const waypoint_accumulator& batch) {
+    // The staged motion starts where the active trajectory ends, at its last waypoint rather
+    // than at its sampled terminal pose, for the reason given at install_staged_. The store is
+    // allocated here rather than when staging begins, so that start_staging() need not allocate.
+    if (!staging.waypoints) {
+        staging.waypoints = std::make_unique<waypoint_store>();
+    }
+    auto& store = *staging.waypoints;
+    const auto committed_waypoints = store.size();
+    if (store.empty()) {
+        store.append(waypoints_->waypoints(), waypoints_->size() - 1);
+    }
+
+    // As with a pivot, appending is provisional until the trajectory builds.
+    store.append(batch, 1);
+    auto candidate = [&] {
+        try {
+            return build_trajectory_from_(store.waypoints());  // throws on validation failure
+        } catch (...) {
+            store.truncate(committed_waypoints);
+            throw;
+        }
+    }();
+
+    // With no staged trajectory yet there is nothing to compare against, and the whole of the
+    // new one counts as growth. Otherwise the branch is measured against the staged trajectory
+    // being replaced, which will start where the active trajectory ends in global time.
+    if (!staging.next) {
+        const auto growth = candidate.duration();
+        staging.next = std::move(candidate);
+        return {std::nullopt, growth};
+    }
+
+    const auto staged_epoch = epoch_ + active_->duration();
+    const auto branch_slack = staged_epoch + find_branch_local_time(*staging.next, candidate) - current_time_;
+    const auto growth = candidate.duration() - staging.next->duration();
+    staging.next = std::move(candidate);
+    return {branch_slack, growth};
 }
 
 void session::start_staging() noexcept {
     // Before the first trajectory exists there is nothing to stage behind, and remembering the
     // request would make the session stage the second batch instead, long after the caller
-    // asked. If the session is already staging, emplacing again would destroy the batches it
-    // holds, so it is left alone.
-    if (active_ && !staged_batches_) {
-        staged_batches_.emplace();
+    // asked. If the session is already staging, emplacing again would discard the staged
+    // motion, so it is left alone.
+    if (active_ && !staging_) {
+        staging_.emplace();
     }
 }
 
@@ -255,6 +245,23 @@ trajectory::seconds session::remaining_active_duration() const noexcept {
         return trajectory::seconds{0.0};
     }
     return active_end - current_time_;
+}
+
+trajectory::seconds session::remaining_total_duration() const noexcept {
+    if (!active_) {
+        return trajectory::seconds{0.0};
+    }
+
+    // Staged motion starts where the active trajectory ends, so its end in global time is the
+    // active trajectory's end plus its own duration.
+    auto end = epoch_ + active_->duration();
+    if (const auto* staged = staged_trajectory_()) {
+        end = end + staged->duration();
+    }
+    if (end <= current_time_) {
+        return trajectory::seconds{0.0};
+    }
+    return end - current_time_;
 }
 
 std::vector<struct trajectory::sample> session::sample_next(std::size_t n) {
@@ -309,14 +316,13 @@ std::optional<struct trajectory::sample> session::sample_one_() {
     }
 
     // If the next sample would be the active trajectory's terminal and staged motion is waiting
-    // to follow it, rebase first and emit the new trajectory's first sample in its place. The two
-    // describe the same instant, at the same pose and at zero velocity, but the terminal reports
-    // zero acceleration where the new trajectory's first sample reports the acceleration it
-    // starts with, so the acceleration goes straight from one trajectory's final deceleration to
-    // the next one's initial acceleration. Rebasing before the terminal is pulled, rather than
-    // after, means a rebuild that throws leaves the terminal unemitted and the session as it was.
-    if (sampler_->remaining() == 1 && has_staged_batches_()) {
-        rebase_(trajectory::seconds{0.0});
+    // to follow it, rebase first and emit the staged trajectory's first sample in its place. The
+    // two describe the same instant, at the same pose and at zero velocity, but the terminal
+    // reports zero acceleration where the staged trajectory's first sample reports the
+    // acceleration it starts with, so the acceleration goes straight from one trajectory's final
+    // deceleration to the next one's initial acceleration.
+    if (sampler_->remaining() == 1 && staged_trajectory_()) {
+        install_staged_(trajectory::seconds{0.0});
     }
 
     auto local_sample = sampler_->next(*cursor_);
@@ -325,10 +331,10 @@ std::optional<struct trajectory::sample> session::sample_one_() {
         // session that is staging but still has nothing staged has nothing to rebase onto, so it
         // reports itself drained. It stays staging, and the next batch to arrive follows on from
         // the end of the active trajectory.
-        if (!has_staged_batches_()) {
+        if (!staged_trajectory_()) {
             return std::nullopt;
         }
-        rebase_(sample_period_);
+        install_staged_(sample_period_);
         local_sample = sampler_->next(*cursor_);
         if (!local_sample) {
             // The freshly built sampler should always have at least one sample to emit. If a
@@ -345,35 +351,30 @@ std::optional<struct trajectory::sample> session::sample_one_() {
     return sample;
 }
 
-bool session::has_staged_batches_() const noexcept {
-    return staged_batches_ && !staged_batches_->empty();
+const trajectory* session::staged_trajectory_() const noexcept {
+    return (staging_ && staging_->next) ? &*staging_->next : nullptr;
 }
 
-void session::rebase_(trajectory::seconds start) {
-    // Preconditions: active_ holds, staged_batches_ holds a non-empty vector.
+void session::install_staged_(trajectory::seconds start) {
+    // Preconditions: active_ holds, and a staged trajectory exists.
     //
-    // The new chain's first waypoint is the active's last waypoint (the literal end of the
-    // prior chain's waypoint sequence), not the sampled terminal pose. Sampling the trajectory
-    // at its duration would give a value that is mathematically equal to the last waypoint for
-    // a rest-to-rest trajectory but can differ by a little floating-point drift, and trajex's
-    // path-coalescing tolerances can react badly to that difference. Keep the streaming layer
-    // in the waypoint domain.
+    // The staged trajectory and its waypoints were built as batches arrived, so nothing here
+    // builds a trajectory or copies waypoints. The staged waypoints begin with the active
+    // trajectory's last waypoint, not its sampled terminal pose. Sampling the trajectory at its
+    // duration would give a value that is mathematically equal to the last waypoint for a
+    // rest-to-rest trajectory but can differ by a little floating-point drift, and trajex's
+    // path-coalescing tolerances can react badly to that difference. Keep the streaming layer in
+    // the waypoint domain.
     const auto old_duration = active_->duration();
-    auto anchor = waypoints_.last();
+    auto& staged = *staging_->next;
 
-    // Assembled into a flat array first, and loaded into the store only once the trajectory
-    // has been built from it, so that a failed build leaves the session's waypoints as they
-    // were rather than half-replaced.
-    auto new_waypoints = stack_anchor_and_staged(anchor, *staged_batches_);
-    const waypoint_accumulator replacement{new_waypoints};
-    auto new_active = build_trajectory_from_(replacement);
-
-    // The new sampler starts `start` into the new trajectory. At zero, the new trajectory's
-    // first sample takes the place of the previous terminal, which has not been emitted. Otherwise
-    // the previous terminal has already gone out at global time epoch_ + old_duration, and the
-    // caller starts one sample period past it, so that the seam carries no duplicate sample.
+    // The new sampler starts `start` into the staged trajectory. At zero, the staged trajectory's
+    // first sample takes the place of the previous terminal, which has not been emitted.
+    // Otherwise the previous terminal has already gone out at global time epoch_ + old_duration,
+    // and the caller starts one sample period past it, so that the seam carries no duplicate
+    // sample.
     //
-    // A rebuilt trajectory shorter than that one sample period would put the start at or past
+    // A staged trajectory shorter than that one sample period would put the start at or past
     // its end, where quantized_for_trajectory refuses to start. This is the same case extend()
     // guards against on the pivot side. The staged motion is still valid and reachable, so we
     // must deliver it rather than drop it, but the whole move fits inside one sample period, so
@@ -381,21 +382,15 @@ void session::rebase_(trajectory::seconds start) {
     // come to rest at the destination. Build a one-sample grid that lands on the trajectory's
     // end. Emitting only the terminal also avoids repeating the seam sample, which a sampler that
     // started at zero would do.
-    uniform_sampler new_sampler = (start < new_active.duration())
-                                      ? uniform_sampler::quantized_for_trajectory(new_active, sample_rate_, start)
-                                      : uniform_sampler{std::size_t{1}};
+    uniform_sampler new_sampler = (start < staged.duration()) ? uniform_sampler::quantized_for_trajectory(staged, sample_rate_, start)
+                                                              : uniform_sampler{std::size_t{1}};
 
-    // The anchor is already the store's last waypoint and also row zero of `new_waypoints`,
-    // so reducing the store to it and appending the remainder replaces the contents without
-    // storing that waypoint twice.
-    waypoints_.reset_to_last();
-    waypoints_.append(replacement, 1);
-
-    active_ = std::move(new_active);
+    active_ = std::move(staged);
+    waypoints_ = std::move(staging_->waypoints);
     cursor_.emplace(active_->create_cursor());
     sampler_.emplace(std::move(new_sampler));
     epoch_ = epoch_ + old_duration;
-    staged_batches_.reset();
+    staging_.reset();
     ++generation_count_;
 }
 

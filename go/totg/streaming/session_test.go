@@ -253,6 +253,12 @@ func TestSessionStartStaging(t *testing.T) {
 	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendStagedAgain)
 	test.That(t, res.BranchSlack, test.ShouldBeNil)
 	test.That(t, sess.GenerationCount(), test.ShouldEqual, int64(1))
+
+	// The staged motion has not been sampled, so the total remaining exceeds what is left of
+	// the active trajectory by about its whole duration, which the extend reported as growth.
+	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
+	staged := sess.RemainingTotalDuration() - sess.RemainingActiveDuration()
+	test.That(t, staged.Seconds(), test.ShouldAlmostEqual, res.DeltaActiveDuration.Seconds(), 1e-6)
 }
 
 func TestSessionCloseIdempotent(t *testing.T) {

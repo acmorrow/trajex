@@ -425,15 +425,15 @@ void viam_trajex_totg_streaming_session_destroy(viam_trajex_totg_streaming_sessi
 /// How `viam_trajex_totg_streaming_session_extend` handled a batch.
 ///
 /// A batch either builds the session's first trajectory, replaces the active trajectory
-/// with one that incorporates it, or waits in staging until the active trajectory has been
-/// sampled through. The difference matters to a caller pacing its own sends: a pivot is
-/// invisible to the arm, but a stage means the active trajectory runs to its end, where the
-/// arm's velocity reaches zero before the staged motion begins.
+/// with one that incorporates it, or joins staged motion that follows the active trajectory
+/// once it has been sampled through. The difference matters to a caller pacing its own
+/// sends: a pivot is invisible to the arm, but a stage means the active trajectory runs to
+/// its end, where the arm's velocity reaches zero before the staged motion begins.
 ///
-/// The two values for a stage that followed a comparison distinguish the reasons a pivot
-/// was refused. One says the call arrived after the point it needed to change had already
-/// been handed out; the other says it arrived in time but carried less than one sample
-/// period of motion. The remedies differ, so the values do too.
+/// The two values for the batch that starts staging distinguish the reasons a pivot was
+/// refused. One says the call arrived after the point it needed to change had already been
+/// handed out; the other says it arrived in time but carried less than one sample period of
+/// motion. The remedies differ, so the values do too.
 ///
 /// These correspond one-to-one with `viam::trajex::totg::streaming::session::extend_result::kinds`.
 ///
@@ -444,7 +444,7 @@ typedef enum {                                                            // NOL
     VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_PIVOT = 1,                  ///< Replaced the active trajectory; sampling continues unbroken
     VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_BRANCH_SAMPLED = 2,  ///< Staged; sampling had already passed the branch
     VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_UNSAMPLABLE = 3,     ///< Staged; less than one sample period of motion added
-    VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_AGAIN = 4,           ///< Staged; session was already staging, nothing compared
+    VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_STAGED_AGAIN = 4,           ///< Staged; session was already staging
     VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP = 5,                   ///< Nothing beyond the seam waypoint; session unchanged
 } viam_trajex_totg_streaming_session_extend_kind_t;
 
@@ -480,29 +480,34 @@ typedef enum {                                                            // NOL
 ///
 /// @param branch_slack_sec_out Receives, in seconds, how far the branch sits from the most
 ///                              recently emitted sample, the branch being the point at
-///                              which the candidate first stops agreeing with the active
-///                              trajectory. Positive means the branch was still ahead of
-///                              everything handed out and the call beat the deadline by
-///                              that much; negative means it sat in the already-emitted
-///                              past, which is what forces a stage. Only PIVOT,
-///                              STAGED_BRANCH_SAMPLED and STAGED_UNSAMPLABLE compare a
-///                              candidate against the active trajectory; for the rest, NaN
-///                              is written. May be NULL.
+///                              which the candidate first stops agreeing with the motion
+///                              the batch extends: the active trajectory, or the staged
+///                              motion if the session is already staging. Positive means
+///                              the branch was still ahead of everything handed out and
+///                              the call beat the deadline by that much; negative means it
+///                              sat in the already-emitted past, which is what forces a
+///                              stage. Staged motion has not been sampled, so slack
+///                              measured against it is never negative. NaN is written for
+///                              FIRST_BUILD, NOOP, and the first batch staged after
+///                              `viam_trajex_totg_streaming_session_start_staging`, which
+///                              have nothing to compare against. May be NULL.
 ///
-/// @param delta_active_duration_sec_out Receives, in seconds, how much longer the newly
-///                                      installed trajectory is than the one it replaced.
-///                                      Comparing this against the interval
-///                                      between calls says whether the caller is adding
-///                                      motion faster than sampling consumes it. Written
-///                                      only for FIRST_BUILD, where it is the whole of the
-///                                      new trajectory's duration, and PIVOT; NaN
-///                                      otherwise. May be NULL.
+/// @param delta_active_duration_sec_out Receives, in seconds, how much longer the motion
+///                                      that took the batch is than it was before: the
+///                                      active trajectory for PIVOT, and the staged motion
+///                                      for the staged kinds. Where there was nothing
+///                                      before, it is the whole of the new duration.
+///                                      Comparing this against the interval between calls
+///                                      says whether the caller is adding motion faster than
+///                                      sampling consumes it. NaN is written only for NOOP.
+///                                      May be NULL.
 ///
 /// @param error_out On `-1` return, receives a newly-allocated diagnostic string the
 ///                  caller releases via `viam_trajex_string_destroy`. May be NULL.
 ///
 /// @return 0 on success, -1 on bad arguments or any caught exception (seam mismatch,
-///         DOF mismatch, trajectory generation failure, etc.).
+///         DOF mismatch, a batch that cannot be built into the active trajectory or the
+///         staged motion, etc.). The session is unchanged by a call that fails.
 ///
 int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session_t* session,
                                               const viam_trajex_tensor_map_t* batch,
@@ -515,10 +520,10 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
 /// Stop the session pivoting, so that every later `extend` stages its batch and reports
 /// STAGED_AGAIN until the next rebase.
 ///
-/// The cost of an `extend` that pivots grows with the motion added since the last rebase.
-/// Calling this starts that growth over at the next rebase, at the price of the arm's
-/// velocity reaching zero at the end of the active trajectory before the staged motion
-/// begins. After the rebase, `extend` pivots again.
+/// The cost of an `extend` grows with the motion added since staging last began, or since
+/// the session started if it never has. Calling this starts that growth over, at the price
+/// of the arm's velocity reaching zero at the end of the active trajectory before the staged
+/// motion begins. After the rebase, `extend` pivots again.
 ///
 /// Calling this while already staging has no effect, and neither does calling it before the
 /// first `extend`, since the first batch always builds the first trajectory.
@@ -631,9 +636,19 @@ void viam_trajex_totg_streaming_session_active_duration_sec(const viam_trajex_to
 /// This counts only the active trajectory, not staged motion, so it drains toward zero
 /// while batches are staged even though the session still has work queued, and jumps back
 /// up when that work becomes active at the rebase. A caller pacing itself against this
-/// number needs to know that.
+/// number needs to know that. `viam_trajex_totg_streaming_session_remaining_total_duration_sec`
+/// counts the staged motion too.
 ///
 void viam_trajex_totg_streaming_session_remaining_active_duration_sec(const viam_trajex_totg_streaming_session_t* session, double* out);
+
+///
+/// Motion the session has yet to sample, in seconds, staged motion included, or zero if there
+/// is none.
+///
+/// This is the end of the staged motion in global time, or of the active trajectory if
+/// nothing is staged, less the time of the most recently emitted sample.
+///
+void viam_trajex_totg_streaming_session_remaining_total_duration_sec(const viam_trajex_totg_streaming_session_t* session, double* out);
 
 /// @}
 

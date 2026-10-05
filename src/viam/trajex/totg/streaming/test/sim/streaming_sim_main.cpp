@@ -31,6 +31,7 @@
 #include <viam/trajex/totg/tools/replay.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
+#include <viam/trajex/totg/waypoint_utils.hpp>
 #include <viam/trajex/types/hertz.hpp>
 
 namespace {
@@ -156,6 +157,41 @@ trajectory::options trajectory_options_from_replay(const viam::trajex::totg::pla
     return topts;
 }
 
+// The session requires its callers to deduplicate waypoints, and recorded workloads repeat
+// them, so the workload is deduplicated once, before any cell runs, where it costs the session
+// nothing. The tolerance is the one the C ABI applies by default, since the record carries none.
+xmatrix<> deduplicate_workload(const xmatrix<>& workload) {
+    constexpr double k_dedup_tolerance_rads = 1e-5;
+    const auto deduplicated = viam::trajex::totg::deduplicate_waypoints(waypoint_accumulator{workload}, k_dedup_tolerance_rads);
+
+    auto result = xmatrix<>::from_shape(std::vector<std::size_t>{deduplicated.size(), deduplicated.dof()});
+    std::size_t row = 0;
+    for (const auto& waypoint : deduplicated) {
+        xt::view(result, row, xt::all()) = waypoint;
+        ++row;
+    }
+    return result;
+}
+
+// The q-th quantile of a set of latencies, by nearest rank, or nothing for an empty set.
+std::optional<double> quantile(std::vector<double> values, double q) {
+    if (values.empty()) {
+        return std::nullopt;
+    }
+    std::ranges::sort(values);
+    return values[static_cast<std::size_t>(q * static_cast<double>(values.size() - 1))];
+}
+
+// Runs `f`, appending how long it took, in milliseconds, to `sink`.
+template <typename F>
+auto timed_ms(std::vector<double>& sink, F&& f) {
+    const auto start = std::chrono::steady_clock::now();
+    auto result = std::forward<F>(f)();
+    const auto stop = std::chrono::steady_clock::now();
+    sink.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
+    return result;
+}
+
 struct cell_result {
     double w_c{};
     double w_r{};
@@ -182,6 +218,13 @@ struct cell_result {
     // a hair away from staging -- `rebases` scores both as zero. Negative once a cell
     // starts missing, and then it reads as how much sooner the batch needed to arrive.
     std::optional<double> min_branch_slack;
+
+    // Wall-clock latency of every extend() and every sample_next() call, in milliseconds,
+    // with the extends that staged kept apart as well, since what they cost grows with the
+    // staged motion rather than with the active trajectory.
+    std::vector<double> extend_ms;
+    std::vector<double> staged_extend_ms;
+    std::vector<double> sample_ms;
 };
 
 cell_result simulate_cell(const xmatrix<>& workload,
@@ -229,7 +272,7 @@ cell_result simulate_cell(const xmatrix<>& workload,
             const double target = w_r;
             while (sess.current_time().count() < target) {
                 const auto pre = sess.trajectory_generation_count();
-                auto s = sess.sample_next(1);
+                auto s = timed_ms(result.sample_ms, [&] { return sess.sample_next(1); });
                 const auto post = sess.trajectory_generation_count();
                 if (post > pre) {
                     result.rebases += static_cast<int>(post - pre);
@@ -267,7 +310,7 @@ cell_result simulate_cell(const xmatrix<>& workload,
             // rebase internally; track the generation count delta to count rebases.
             while (sess.current_time().count() < arm_time + w_r) {
                 const auto pre = sess.trajectory_generation_count();
-                auto s = sess.sample_next(1);
+                auto s = timed_ms(result.sample_ms, [&] { return sess.sample_next(1); });
                 const auto post = sess.trajectory_generation_count();
                 if (post > pre) {
                     result.rebases += static_cast<int>(post - pre);
@@ -308,6 +351,10 @@ cell_result simulate_cell(const xmatrix<>& workload,
                 const auto stop = std::chrono::steady_clock::now();
                 const double elapsed_real = std::chrono::duration<double>(stop - start).count();
                 const double arm_advance = elapsed_real * speed_factor;
+                result.extend_ms.push_back(elapsed_real * 1000.0);
+                if (outcome.kind != streaming::session::extend_result::kinds::k_pivot) {
+                    result.staged_extend_ms.push_back(elapsed_real * 1000.0);
+                }
 
                 // Starve check: if the arm would advance past the watermark during this extend,
                 // the consumer is asking for a sample the session hasn't produced. The starve
@@ -361,28 +408,45 @@ cell_result simulate_cell(const xmatrix<>& workload,
     return result;
 }
 
-void write_csv(const sim_config& cfg, std::size_t n_waypoints, const std::vector<cell_result>& cells) {
+// Writes an optional value, leaving the field empty when there is none.
+void write_optional(std::ostream& out, const std::optional<double>& value) {
+    if (value) {
+        out << *value;
+    }
+}
+
+void write_csv(const sim_config& cfg, std::size_t n_waypoints, std::size_t n_duplicates, const std::vector<cell_result>& cells) {
     std::ofstream out(cfg.output_path);
     if (!out) {
         throw std::runtime_error("failed to open output file: " + cfg.output_path.string());
     }
     out << "# workload: " << cfg.replay_path.filename().string() << "\n";
     out << "# n_waypoints: " << n_waypoints << "\n";
+    out << "# duplicates_removed: " << n_duplicates << "\n";
     out << "# sample_rate_hz: " << cfg.sample_rate_hz << "\n";
     out << "# speed_factor: " << cfg.speed_factor << "\n";
     out << "# batch_size: " << cfg.batch_size << "\n";
-    // The reporting columns are appended rather than interleaved so readers that select
-    // by name (the plot script uses csv.DictReader) keep working untouched.
+    // The reporting and latency columns are appended rather than interleaved so readers that
+    // select by name (the plot script uses csv.DictReader) keep working untouched.
     out << "commit_window,replan_budget,rebases,starved_at_waypoint,"
-        << "pivots,staged_branch_sampled,staged_unsamplable,staged_again,min_branch_slack\n";
+        << "pivots,staged_branch_sampled,staged_unsamplable,staged_again,min_branch_slack,"
+        << "extend_p50_ms,extend_p99_ms,extend_max_ms,staged_extend_p99_ms,staged_extend_max_ms,sample_p99_ms,sample_max_ms\n";
     for (const auto& c : cells) {
         out << c.w_c << "," << c.w_r << "," << c.rebases << ",";
         if (c.starved_at_waypoint) {
             out << *c.starved_at_waypoint;
         }
         out << "," << c.pivots << "," << c.staged_branch_sampled << "," << c.staged_unsamplable << "," << c.staged_again << ",";
-        if (c.min_branch_slack) {
-            out << *c.min_branch_slack;
+        write_optional(out, c.min_branch_slack);
+        for (const auto& [values, q] : {std::pair{&c.extend_ms, 0.5},
+                                        std::pair{&c.extend_ms, 0.99},
+                                        std::pair{&c.extend_ms, 1.0},
+                                        std::pair{&c.staged_extend_ms, 0.99},
+                                        std::pair{&c.staged_extend_ms, 1.0},
+                                        std::pair{&c.sample_ms, 0.99},
+                                        std::pair{&c.sample_ms, 1.0}}) {
+            out << ",";
+            write_optional(out, quantile(*values, q));
         }
         out << "\n";
     }
@@ -393,10 +457,13 @@ void write_csv(const sim_config& cfg, std::size_t n_waypoints, const std::vector
 int main(int argc, char* argv[]) try {
     const sim_config cfg = parse_args(argc, argv);
 
-    auto [planner_cfg, workload] = parse_replay_record(cfg.replay_path);
+    auto [planner_cfg, recorded] = parse_replay_record(cfg.replay_path);
+    const auto workload = deduplicate_workload(recorded);
     const std::size_t n = workload.shape(0);
+    const std::size_t n_duplicates = recorded.shape(0) - n;
+    std::cerr << "removed " << n_duplicates << " duplicate waypoints, leaving " << n << "\n";
     if (n < 2) {
-        throw std::runtime_error("replay record must contain at least 2 waypoints");
+        throw std::runtime_error("replay record must contain at least 2 distinct waypoints");
     }
 
     const auto popts = path_options_from_replay(planner_cfg);
@@ -421,6 +488,12 @@ int main(int argc, char* argv[]) try {
             if (r.min_branch_slack) {
                 std::cerr << " min_slack=" << *r.min_branch_slack;
             }
+            if (const auto p99 = quantile(r.extend_ms, 0.99)) {
+                std::cerr << " extend_ms(p99/max)=" << *p99 << "/" << *quantile(r.extend_ms, 1.0);
+            }
+            if (const auto max = quantile(r.sample_ms, 1.0)) {
+                std::cerr << " sample_ms(max)=" << *max;
+            }
             if (r.extend_threw) {
                 std::cerr << " EXTEND-THREW@" << *r.starved_at_waypoint << ": " << r.extend_throw_message;
             } else if (r.starved_at_waypoint) {
@@ -430,7 +503,7 @@ int main(int argc, char* argv[]) try {
         }
     }
 
-    write_csv(cfg, n, cells);
+    write_csv(cfg, n, n_duplicates, cells);
     std::cerr << "wrote " << cfg.output_path.string() << "\n";
     return 0;
 } catch (const std::exception& e) {
