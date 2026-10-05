@@ -830,12 +830,10 @@ BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
     const auto second_stage = sess.extend(batch_b.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // still just accumulated
 
-    // The second call is compared against the staged motion it extends. Nothing of that
-    // motion has been sampled, so the slack is never negative, and the growth is what batch_b
-    // added to the staged motion's duration.
+    // The second call joins the staged motion without deciding anything, so there is no slack,
+    // and the growth is what batch_b added to the staged motion's duration.
     BOOST_CHECK(second_stage.kind == streaming::session::extend_result::kinds::k_staged_again);
-    BOOST_REQUIRE(second_stage.branch_slack.has_value());
-    BOOST_CHECK_GE(second_stage.branch_slack->count(), 0.0);
+    BOOST_CHECK(!second_stage.branch_slack.has_value());
     const auto staged_after_a = reference_trajectory(batch_a.data()).duration();
     const auto staged_after_b = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {3.0, 2.0}}).duration();
     BOOST_CHECK_EQUAL(second_stage.delta_total_duration.count(), (staged_after_b - staged_after_a).count());
@@ -898,7 +896,7 @@ BOOST_AUTO_TEST_CASE(start_staging_before_first_extend_has_no_effect) {
 BOOST_AUTO_TEST_CASE(extend_after_start_staging_stages_without_comparing) {
     // After one sample the branch for this extension is still well ahead, so without the
     // request the extend would pivot, as the previous case shows. With it, the batch stages.
-    // There is no staged motion yet to compare it against, so there is no slack, and the
+    // Staging decides nothing, so there is no slack, and with no staged motion before it the
     // growth is the whole of the staged motion's duration.
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
@@ -989,7 +987,7 @@ BOOST_AUTO_TEST_CASE(failed_first_batch_after_start_staging_leaves_nothing_stage
     BOOST_CHECK_THROW(sess.extend(bad.accumulator()), std::invalid_argument);
     BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
 
-    // Still the first batch to be staged, so still nothing to compare against.
+    // Still the first batch to be staged, so the growth is the whole of the staged duration.
     const pinned_waypoints corrected(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     const auto result = sess.extend(corrected.accumulator());
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
@@ -1007,11 +1005,10 @@ BOOST_AUTO_TEST_SUITE_END()  // start_staging
 
 BOOST_AUTO_TEST_SUITE(staged_motion)
 
-BOOST_AUTO_TEST_CASE(staged_extend_reports_slack_and_growth_against_the_staged_motion) {
-    // An extend that joins staged motion is compared against that motion, which starts where
-    // the active trajectory ends. None of it has been sampled, so the branch is never earlier
-    // than the active trajectory's end, and the slack is at least the active trajectory's
-    // unsampled remainder. The growth is what the batch added to the staged motion's duration.
+BOOST_AUTO_TEST_CASE(staged_extend_reports_growth_but_no_slack) {
+    // An extend that joins staged motion decides nothing, since every batch is taken in while
+    // staging, so there is no deadline and no slack. The growth is what the batch added to the
+    // staged motion's duration.
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
@@ -1024,8 +1021,7 @@ BOOST_AUTO_TEST_CASE(staged_extend_reports_slack_and_growth_against_the_staged_m
     const pinned_waypoints second(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
     const auto result = sess.extend(second.accumulator());
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
-    BOOST_REQUIRE(result.branch_slack.has_value());
-    BOOST_CHECK_GE(result.branch_slack->count(), sess.remaining_active_duration().count());
+    BOOST_CHECK(!result.branch_slack.has_value());
 
     const auto before = reference_trajectory(first.data()).duration();
     const auto after = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}}).duration();

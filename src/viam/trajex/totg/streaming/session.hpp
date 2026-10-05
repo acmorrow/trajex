@@ -45,24 +45,19 @@ class session {
     /// What one `extend()` call did with the batch it was given, and the timing it computed
     /// along the way.
     ///
-    /// The branch slack is optional because only some outcomes produce it. It requires
-    /// comparing the batch against the motion it changes, which does not happen for the first
-    /// build, for a seam-only batch, or for the first batch staged after `start_staging()`,
-    /// when there is no staged motion yet to compare against.
+    /// The branch slack is optional because only the calls that decide between pivoting and
+    /// staging produce it, and those report `k_pivot`, `k_staged_branch_sampled` or
+    /// `k_staged_unsamplable`. Once the session is staging nothing is decided, since every
+    /// batch joins the staged motion, so there is no deadline for a slack to measure.
     ///
     /// `branch_slack` is measured from the most recently emitted sample to the branch: the
-    /// point at which the candidate first stops agreeing with the motion the batch extends,
-    /// both expressed in global time. That motion is the active trajectory, unless the session
-    /// is already staging, in which case it is the staged motion that follows the active
-    /// trajectory. Positive means the branch was still ahead of everything handed out, and the
-    /// call beat the deadline by that much. Negative means it sat in the already-emitted past,
-    /// which is what forces a stage, and the magnitude is how much earlier the call needed to
-    /// happen. Staged motion has not been sampled, so slack measured against it is never
-    /// negative. The comparison is against what the session has emitted, not what the arm has
-    /// executed, so a caller that pulls samples far ahead of execution spends its own slack
-    /// doing so. It is present for `k_pivot`, `k_staged_branch_sampled` and
-    /// `k_staged_unsamplable`, and for `k_staged_again` when there was staged motion to
-    /// compare against.
+    /// point at which the candidate first stops agreeing with the active trajectory, both
+    /// expressed in global time. Positive means the branch was still ahead of everything
+    /// handed out, and the call beat the deadline by that much. Negative means it sat in the
+    /// already-emitted past, which is what forces a stage, and the magnitude is how much
+    /// earlier the call needed to happen. The comparison is against what the session has
+    /// emitted, not what the arm has executed, so a caller that pulls samples far ahead of
+    /// execution spends its own slack doing so.
     ///
     /// `delta_total_duration` is how much the call changed `remaining_total_duration()`, which
     /// is to say how much it added to the motion the session has yet to sample. For
@@ -289,10 +284,10 @@ class session {
     trajectory build_trajectory_from_(const waypoint_accumulator& waypoints) const;
 
     // Appends `batch` past its seam to the staged waypoints and rebuilds the staged trajectory
-    // from them. Returns the branch slack against the staged trajectory it replaced, if there
-    // was one, and the growth in duration over it. If the build throws, `staging` is left as
+    // from them. Returns the growth in duration over the staged trajectory it replaced, or the
+    // whole of the new duration if there was none. If the build throws, `staging` is left as
     // it was.
-    std::pair<std::optional<trajectory::seconds>, trajectory::seconds> stage_(staging_state& staging, const waypoint_accumulator& batch);
+    trajectory::seconds stage_(staging_state& staging, const waypoint_accumulator& batch);
 
     // Emits a single sample, advancing the cursor. Installs the staged trajectory when the
     // active trajectory is about to emit its terminal, or already has. Returns nullopt when

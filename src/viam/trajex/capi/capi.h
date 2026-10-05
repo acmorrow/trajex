@@ -480,17 +480,14 @@ typedef enum {                                                            // NOL
 ///
 /// @param branch_slack_sec_out Receives, in seconds, how far the branch sits from the most
 ///                              recently emitted sample, the branch being the point at
-///                              which the candidate first stops agreeing with the motion
-///                              the batch extends: the active trajectory, or the staged
-///                              motion if the session is already staging. Positive means
-///                              the branch was still ahead of everything handed out and
-///                              the call beat the deadline by that much; negative means it
-///                              sat in the already-emitted past, which is what forces a
-///                              stage. Staged motion has not been sampled, so slack
-///                              measured against it is never negative. NaN is written for
-///                              FIRST_BUILD, NOOP, and the first batch staged after
-///                              `viam_trajex_totg_streaming_session_start_staging`, which
-///                              have nothing to compare against. May be NULL.
+///                              which the candidate first stops agreeing with the active
+///                              trajectory. Positive means the branch was still ahead of
+///                              everything handed out and the call beat the deadline by
+///                              that much; negative means it sat in the already-emitted
+///                              past, which is what forces a stage. Only the calls that
+///                              decide between pivoting and staging report it, namely
+///                              PIVOT, STAGED_BRANCH_SAMPLED and STAGED_UNSAMPLABLE; for
+///                              the rest, NaN is written. May be NULL.
 ///
 /// @param delta_total_duration_sec_out Receives, in seconds, how much the call changed
 ///                                     `viam_trajex_totg_streaming_session_remaining_total_duration_sec`,

@@ -122,11 +122,9 @@ const (
 	ExtendStagedUnsamplable ExtendKind = 3
 
 	// ExtendStagedAgain means the session was already staging, so the batch
-	// joined the staged motion rather than being considered for a pivot. The
-	// branch slack and duration delta are measured against the staged motion,
-	// except that the first batch after StartStaging has nothing to compare
-	// against and reports no slack. It can only follow one of the other two
-	// staged kinds or a call to StartStaging.
+	// joined the staged motion rather than being considered for a pivot.
+	// Nothing was decided, so there is no branch slack. It can only follow one
+	// of the other two staged kinds or a call to StartStaging.
 	ExtendStagedAgain ExtendKind = 4
 
 	// ExtendNoop means the batch carried nothing beyond the seam waypoint, so
@@ -157,27 +155,25 @@ func (d ExtendKind) String() string {
 }
 
 // ExtendResult reports what one Extend call did and the timing it produced
-// along the way. The branch slack is a pointer because only some outcomes
-// produce it. It requires comparing the batch against the motion it changes,
-// which does not happen for the first build, for a seam-only batch, or for the
-// first batch staged after StartStaging.
+// along the way. The branch slack is a pointer because only the calls that
+// decide between pivoting and staging produce it: ExtendPivot,
+// ExtendStagedBranchSampled and ExtendStagedUnsamplable. Once the session is
+// staging nothing is decided, since every batch joins the staged motion, so
+// there is no deadline for a slack to measure.
 type ExtendResult struct {
 	// Kind is how the batch was handled.
 	Kind ExtendKind
 
 	// BranchSlack is how far the branch sits from the most recently emitted
 	// sample, the branch being the point at which the candidate first stops
-	// agreeing with the motion the batch extends: the active trajectory, or the
-	// staged motion if the session is already staging. Positive means the
-	// branch was still ahead of everything handed out and the call beat the
-	// deadline by that much; negative means it sat in the already-emitted past,
-	// which is what forces a stage, and the magnitude is how much earlier the
-	// call needed to happen. Staged motion has not been sampled, so slack
-	// measured against it is never negative. Note that the comparison is
-	// against what the session has emitted, not what the arm has executed, so a
-	// caller that pulls samples far ahead of execution spends its own slack
-	// doing so. Nil for ExtendFirstBuild, ExtendNoop, and the first batch
-	// staged after StartStaging.
+	// agreeing with the active trajectory. Positive means the branch was still
+	// ahead of everything handed out and the call beat the deadline by that
+	// much; negative means it sat in the already-emitted past, which is what
+	// forces a stage, and the magnitude is how much earlier the call needed to
+	// happen. Note that the comparison is against what the session has emitted,
+	// not what the arm has executed, so a caller that pulls samples far ahead of
+	// execution spends its own slack doing so. Nil for ExtendFirstBuild,
+	// ExtendStagedAgain and ExtendNoop.
 	BranchSlack *time.Duration
 
 	// DeltaTotalDuration is how much the call changed RemainingTotalDuration,

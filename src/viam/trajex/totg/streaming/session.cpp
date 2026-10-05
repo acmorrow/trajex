@@ -103,11 +103,12 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     }
 
     // A session that is already staging takes the batch into the staged motion, which nothing
-    // has sampled yet, so there is no question of pivoting the active trajectory.
+    // has sampled yet, so there is no question of pivoting the active trajectory and no
+    // deadline the batch could have missed. That is why there is no slack to report.
     if (staging_) {
-        const auto [branch_slack, growth] = stage_(*staging_, batch);
+        const auto growth = stage_(*staging_, batch);
         last_waypoint_ = batch.at(batch.size() - 1);
-        return {kinds::k_staged_again, branch_slack, growth};
+        return {kinds::k_staged_again, std::nullopt, growth};
     }
 
     // Build a candidate trajectory from the active waypoints plus the batch's new waypoints,
@@ -166,7 +167,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     // against the active trajectory is what explains the stage, so it is the slack reported.
     waypoints_->truncate(committed_waypoints);
     staging_state staging;
-    const auto growth = stage_(staging, batch).second;
+    const auto growth = stage_(staging, batch);
     staging_ = std::move(staging);
     last_waypoint_ = batch.at(batch.size() - 1);
 
@@ -177,8 +178,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     return {kind, branch_slack, growth};
 }
 
-std::pair<std::optional<trajectory::seconds>, trajectory::seconds> session::stage_(staging_state& staging,
-                                                                                   const waypoint_accumulator& batch) {
+trajectory::seconds session::stage_(staging_state& staging, const waypoint_accumulator& batch) {
     // The staged motion starts where the active trajectory ends, at its last waypoint rather
     // than at its sampled terminal pose, for the reason given at install_staged_. The store is
     // allocated here rather than when staging begins, so that start_staging() need not allocate.
@@ -202,20 +202,10 @@ std::pair<std::optional<trajectory::seconds>, trajectory::seconds> session::stag
         }
     }();
 
-    // With no staged trajectory yet there is nothing to compare against, and the whole of the
-    // new one counts as growth. Otherwise the branch is measured against the staged trajectory
-    // being replaced, which will start where the active trajectory ends in global time.
-    if (!staging.next) {
-        const auto growth = candidate.duration();
-        staging.next = std::move(candidate);
-        return {std::nullopt, growth};
-    }
-
-    const auto staged_epoch = epoch_ + active_->duration();
-    const auto branch_slack = staged_epoch + find_branch_local_time(*staging.next, candidate) - current_time_;
-    const auto growth = candidate.duration() - staging.next->duration();
+    // With no staged trajectory yet, the whole of the new one counts as growth.
+    const auto growth = staging.next ? candidate.duration() - staging.next->duration() : candidate.duration();
     staging.next = std::move(candidate);
-    return {branch_slack, growth};
+    return growth;
 }
 
 void session::start_staging() noexcept {
