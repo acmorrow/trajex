@@ -187,8 +187,7 @@ func TestSessionExtendReporting(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendFirstBuild)
 	test.That(t, res.BranchSlack, test.ShouldBeNil)
-	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
-	test.That(t, *res.DeltaActiveDuration, test.ShouldEqual, sess.ActiveDuration())
+	test.That(t, res.DeltaTotalDuration, test.ShouldEqual, sess.ActiveDuration())
 
 	test.That(t, sess.RemainingActiveDuration(), test.ShouldEqual, sess.ActiveDuration())
 
@@ -211,7 +210,6 @@ func TestSessionExtendReporting(t *testing.T) {
 	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendPivot)
 	test.That(t, res.BranchSlack, test.ShouldNotBeNil)
 	test.That(t, *res.BranchSlack, test.ShouldBeGreaterThan, time.Duration(0))
-	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
 }
 
 // TestSessionStartStaging checks that StartStaging reaches the C++ session. The staging
@@ -256,9 +254,8 @@ func TestSessionStartStaging(t *testing.T) {
 
 	// The staged motion has not been sampled, so the total remaining exceeds what is left of
 	// the active trajectory by about its whole duration, which the extend reported as growth.
-	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
 	staged := sess.RemainingTotalDuration() - sess.RemainingActiveDuration()
-	test.That(t, staged.Seconds(), test.ShouldAlmostEqual, res.DeltaActiveDuration.Seconds(), 1e-6)
+	test.That(t, staged.Seconds(), test.ShouldAlmostEqual, res.DeltaTotalDuration.Seconds(), 1e-6)
 }
 
 func TestSessionCloseIdempotent(t *testing.T) {

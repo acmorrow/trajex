@@ -157,11 +157,10 @@ func (d ExtendKind) String() string {
 }
 
 // ExtendResult reports what one Extend call did and the timing it produced
-// along the way. Both times are pointers because only some outcomes produce
-// them. A branch slack requires comparing the batch against the motion it
-// changes, which does not happen for the first build, for a seam-only batch,
-// or for the first batch staged after StartStaging. A duration delta requires
-// the batch to have been taken in, which a seam-only batch never is.
+// along the way. The branch slack is a pointer because only some outcomes
+// produce it. It requires comparing the batch against the motion it changes,
+// which does not happen for the first build, for a seam-only batch, or for the
+// first batch staged after StartStaging.
 type ExtendResult struct {
 	// Kind is how the batch was handled.
 	Kind ExtendKind
@@ -181,15 +180,14 @@ type ExtendResult struct {
 	// staged after StartStaging.
 	BranchSlack *time.Duration
 
-	// DeltaActiveDuration is how much longer the motion that took the batch is
-	// than it was before: the active trajectory for ExtendPivot, and the staged
-	// motion for the staged kinds. Where there was nothing before, it is the
-	// whole of the new duration. Comparing it against the interval between
-	// calls says whether the caller is adding motion faster than sampling
-	// consumes it. It can in principle be negative, because the replacement no
-	// longer has to stop at the old terminal waypoint and so covers the shared
-	// part of the path faster than its predecessor did. Nil only for ExtendNoop.
-	DeltaActiveDuration *time.Duration
+	// DeltaTotalDuration is how much the call changed RemainingTotalDuration,
+	// which is how much it added to the motion the session has yet to sample.
+	// It is zero for ExtendNoop. Comparing it against the interval between calls
+	// says whether the caller is adding motion faster than sampling consumes it.
+	// It can in principle be negative, because a pivot's replacement no longer
+	// has to stop at the old terminal waypoint and so covers the shared part of
+	// the path faster than its predecessor did.
+	DeltaTotalDuration time.Duration
 }
 
 // Extend appends a waypoint batch to the session. The batch must contain a
@@ -213,19 +211,19 @@ func (s *Session) Extend(ctx context.Context, batch *trajex.TensorMap) (ExtendRe
 	batchHandle := (*C.viam_trajex_tensor_map_t)(batch.UnsafeHandle())
 	var kind C.viam_trajex_totg_streaming_session_extend_kind_t
 	var branchSlackSec C.double
-	var deltaActiveDurationSec C.double
+	var deltaTotalDurationSec C.double
 	var errOut *C.char
 	rc := C.viam_trajex_totg_streaming_session_extend(
-		s.handle, batchHandle, &kind, &branchSlackSec, &deltaActiveDurationSec, &errOut)
+		s.handle, batchHandle, &kind, &branchSlackSec, &deltaTotalDurationSec, &errOut)
 	if rc != 0 {
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)
 		return ExtendResult{}, errors.Errorf("trajex/totg/streaming: Extend failed: %s", msg)
 	}
 	return ExtendResult{
-		Kind:                ExtendKind(kind),
-		BranchSlack:         optionalSeconds(branchSlackSec),
-		DeltaActiveDuration: optionalSeconds(deltaActiveDurationSec),
+		Kind:               ExtendKind(kind),
+		BranchSlack:        optionalSeconds(branchSlackSec),
+		DeltaTotalDuration: time.Duration(float64(deltaTotalDurationSec) * float64(time.Second)),
 	}, nil
 }
 

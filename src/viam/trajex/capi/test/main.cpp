@@ -511,17 +511,17 @@ BOOST_AUTO_TEST_CASE(streaming_extend_leaves_reporting_parameters_untouched_on_f
     auto kind = VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP;
     constexpr double k_sentinel = -12345.0;
     double branch_slack_sec = k_sentinel;
-    double delta_active_duration_sec = k_sentinel;
+    double delta_total_duration_sec = k_sentinel;
 
     // First waypoint does not match the session's last, so the seam check rejects the batch.
     const auto mismatched = make_waypoint_batch({9.0, 9.0, 8.0, 8.0});
     const char* raw = nullptr;
     const int status = viam_trajex_totg_streaming_session_extend(
-        session.get(), mismatched.get(), &kind, &branch_slack_sec, &delta_active_duration_sec, &raw);
+        session.get(), mismatched.get(), &kind, &branch_slack_sec, &delta_total_duration_sec, &raw);
     const error_string owned_error{raw};
 
     BOOST_TEST_REQUIRE(status == -1);
     BOOST_TEST(kind == VIAM_TRAJEX_TOTG_STREAMING_SESSION_EXTEND_NOOP);
     BOOST_TEST(branch_slack_sec == k_sentinel);
-    BOOST_TEST(delta_active_duration_sec == k_sentinel);
+    BOOST_TEST(delta_total_duration_sec == k_sentinel);
 }

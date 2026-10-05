@@ -492,15 +492,16 @@ typedef enum {                                                            // NOL
 ///                              `viam_trajex_totg_streaming_session_start_staging`, which
 ///                              have nothing to compare against. May be NULL.
 ///
-/// @param delta_active_duration_sec_out Receives, in seconds, how much longer the motion
-///                                      that took the batch is than it was before: the
-///                                      active trajectory for PIVOT, and the staged motion
-///                                      for the staged kinds. Where there was nothing
-///                                      before, it is the whole of the new duration.
-///                                      Comparing this against the interval between calls
-///                                      says whether the caller is adding motion faster than
-///                                      sampling consumes it. NaN is written only for NOOP.
-///                                      May be NULL.
+/// @param delta_total_duration_sec_out Receives, in seconds, how much the call changed
+///                                     `viam_trajex_totg_streaming_session_remaining_total_duration_sec`,
+///                                     which is how much it added to the motion the session
+///                                     has yet to sample. It is zero for NOOP. Comparing this
+///                                     against the interval between calls says whether the
+///                                     caller is adding motion faster than sampling consumes
+///                                     it. It can be negative, because a pivot's replacement
+///                                     covers the shared part of the path faster than its
+///                                     predecessor did. Always written on success. May be
+///                                     NULL.
 ///
 /// @param error_out On `-1` return, receives a newly-allocated diagnostic string the
 ///                  caller releases via `viam_trajex_string_destroy`. May be NULL.
@@ -513,7 +514,7 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
                                               const viam_trajex_tensor_map_t* batch,
                                               viam_trajex_totg_streaming_session_extend_kind_t* kind_out,
                                               double* branch_slack_sec_out,
-                                              double* delta_active_duration_sec_out,
+                                              double* delta_total_duration_sec_out,
                                               const char** error_out);
 
 ///

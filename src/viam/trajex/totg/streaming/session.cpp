@@ -99,7 +99,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
 
     // A batch that carries nothing past the seam leaves the session unchanged.
     if (batch.size() == 1) {
-        return {kinds::k_noop, std::nullopt, std::nullopt};
+        return {kinds::k_noop, std::nullopt, trajectory::seconds{0.0}};
     }
 
     // A session that is already staging takes the batch into the staged motion, which nothing
@@ -148,7 +148,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
     if (branch_ahead && has_samplable_material) {
         // Both durations have to be read before the moves below: afterwards `candidate` is
         // gutted and `active_` names the new trajectory, so the difference would come out zero.
-        const auto delta_active_duration = candidate.duration() - active_->duration();
+        const auto delta_total_duration = candidate.duration() - active_->duration();
 
         uniform_sampler new_sampler = uniform_sampler::quantized_for_trajectory(candidate, sample_rate_, starting_local_time);
 
@@ -157,7 +157,7 @@ session::extend_result session::extend(const waypoint_accumulator& batch) {
         cursor_.emplace(active_->create_cursor());
         sampler_.emplace(std::move(new_sampler));
         ++generation_count_;
-        return {kinds::k_pivot, branch_slack, delta_active_duration};
+        return {kinds::k_pivot, branch_slack, delta_total_duration};
     }
 
     // Staging instead of pivoting, so the candidate is discarded and its waypoints along with

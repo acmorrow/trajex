@@ -210,8 +210,7 @@ BOOST_AUTO_TEST_CASE(first_extend_with_valid_batch_creates_active_trajectory) {
     // trajectory counts as growth.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_first_build);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), sess.active_trajectory()->duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), sess.active_trajectory()->duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argument) {
@@ -372,7 +371,7 @@ BOOST_AUTO_TEST_CASE(seam_only_batch_leaves_the_session_untouched) {
 
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_noop);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_CHECK(!result.delta_active_duration.has_value());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), 0.0);
 
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), generation_before);
     BOOST_CHECK_EQUAL(sess.current_time().count(), time_before.count());
@@ -401,14 +400,13 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_last_sample_pivots) {
     BOOST_CHECK(sess.active_trajectory() != nullptr);
 
     // The pivot is admitted precisely because the branch sits ahead of the last emitted
-    // sample, so the reported slack must be positive. The duration delta has to be measured against the
-    // trajectory being replaced, which means capturing its duration before the swap; reading
-    // it afterwards would report zero.
+    // sample, so the reported slack must be positive. The duration delta has to be measured
+    // against the trajectory being replaced, which means capturing its duration before the
+    // swap; reading it afterwards would report zero.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_pivot);
     BOOST_REQUIRE(result.branch_slack.has_value());
     BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), (sess.active_trajectory()->duration() - duration_before).count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), (sess.active_trajectory()->duration() - duration_before).count());
 }
 
 BOOST_AUTO_TEST_CASE(pivot_preserves_active_epoch) {
@@ -483,8 +481,7 @@ BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
     BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
 
     // The batch starts the staged motion, so the growth is the whole of its duration.
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), reference_trajectory(extension.data()).duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
@@ -615,8 +612,7 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_behind_last_sample_stages) {
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_branch_sampled);
     BOOST_REQUIRE(result.branch_slack.has_value());
     BOOST_CHECK_LE(result.branch_slack->count(), 0.0);
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), reference_trajectory(extension.data()).duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
@@ -840,10 +836,9 @@ BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
     BOOST_CHECK(second_stage.kind == streaming::session::extend_result::kinds::k_staged_again);
     BOOST_REQUIRE(second_stage.branch_slack.has_value());
     BOOST_CHECK_GE(second_stage.branch_slack->count(), 0.0);
-    BOOST_REQUIRE(second_stage.delta_active_duration.has_value());
     const auto staged_after_a = reference_trajectory(batch_a.data()).duration();
     const auto staged_after_b = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {3.0, 2.0}}).duration();
-    BOOST_CHECK_EQUAL(second_stage.delta_active_duration->count(), (staged_after_b - staged_after_a).count());
+    BOOST_CHECK_EQUAL(second_stage.delta_total_duration.count(), (staged_after_b - staged_after_a).count());
 
     // Draining fires a single rebase that makes the motion from both staged batches active.
     const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
@@ -916,8 +911,7 @@ BOOST_AUTO_TEST_CASE(extend_after_start_staging_stages_without_comparing) {
 
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), reference_trajectory(extension.data()).duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
 }
 
@@ -1000,8 +994,7 @@ BOOST_AUTO_TEST_CASE(failed_first_batch_after_start_staging_leaves_nothing_stage
     const auto result = sess.extend(corrected.accumulator());
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), reference_trajectory(corrected.data()).duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(corrected.data()).duration().count());
 
     const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
     BOOST_REQUIRE(!drained.empty());
@@ -1036,8 +1029,7 @@ BOOST_AUTO_TEST_CASE(staged_extend_reports_slack_and_growth_against_the_staged_m
 
     const auto before = reference_trajectory(first.data()).duration();
     const auto after = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}}).duration();
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), (after - before).count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), (after - before).count());
 }
 
 BOOST_AUTO_TEST_CASE(staged_motion_built_over_several_extends_matches_a_direct_build) {
@@ -1312,6 +1304,43 @@ BOOST_AUTO_TEST_CASE(remaining_total_duration_counts_staged_motion) {
     sess.sample_at_least(initial_duration);
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
+}
+
+BOOST_AUTO_TEST_CASE(delta_total_duration_is_the_change_in_remaining_total_duration) {
+    // Whatever the kind, the reported delta is how much the extend changed the motion left to
+    // sample. extend() never moves the current time, so the change in remaining_total_duration()
+    // across the call is exactly what the call added. The comparison allows for rounding,
+    // because the remainder is a difference of global times summed in different orders.
+    auto sess = fresh_session();
+    const auto check_delta = [&](const pinned_waypoints& batch, streaming::session::extend_result::kinds expected_kind) {
+        const auto before = sess.remaining_total_duration();
+        const auto result = sess.extend(batch.accumulator());
+        BOOST_CHECK(result.kind == expected_kind);
+        BOOST_CHECK_SMALL((sess.remaining_total_duration() - before - result.delta_total_duration).count(), 1e-12);
+    };
+    using kinds = streaming::session::extend_result::kinds;
+
+    const pinned_waypoints initial(three_waypoints());
+    check_delta(initial, kinds::k_first_build);
+
+    sess.sample_next(1);
+    const pinned_waypoints pivot(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
+    check_delta(pivot, kinds::k_pivot);
+
+    const pinned_waypoints seam_only(xmatrix<>{{2.0, 1.0}});
+    check_delta(seam_only, kinds::k_noop);
+
+    // Draining the active trajectory puts the next branch in the sampled past, so the next
+    // batch starts staging, and the one after joins it.
+    sess.sample_at_least(trajectory::seconds{1000.0});
+    const pinned_waypoints first_stage(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
+    check_delta(first_stage, kinds::k_staged_branch_sampled);
+
+    const pinned_waypoints second_stage(xmatrix<>{{2.0, 2.0}, {3.0, 2.0}});
+    check_delta(second_stage, kinds::k_staged_again);
+
+    const pinned_waypoints staged_seam_only(xmatrix<>{{3.0, 2.0}});
+    check_delta(staged_seam_only, kinds::k_noop);
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // remaining_duration

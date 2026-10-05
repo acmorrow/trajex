@@ -45,11 +45,10 @@ class session {
     /// What one `extend()` call did with the batch it was given, and the timing it computed
     /// along the way.
     ///
-    /// Both times are optional because only some outcomes produce them. A branch slack
-    /// requires comparing the batch against the motion it changes, which does not happen for
-    /// the first build, for a seam-only batch, or for the first batch staged after
-    /// `start_staging()`, when there is no staged motion yet to compare against. A duration
-    /// delta requires the batch to have been taken in, which a seam-only batch never is.
+    /// The branch slack is optional because only some outcomes produce it. It requires
+    /// comparing the batch against the motion it changes, which does not happen for the first
+    /// build, for a seam-only batch, or for the first batch staged after `start_staging()`,
+    /// when there is no staged motion yet to compare against.
     ///
     /// `branch_slack` is measured from the most recently emitted sample to the branch: the
     /// point at which the candidate first stops agreeing with the motion the batch extends,
@@ -65,17 +64,16 @@ class session {
     /// `k_staged_unsamplable`, and for `k_staged_again` when there was staged motion to
     /// compare against.
     ///
-    /// `delta_active_duration` compares the duration of the motion that took the batch against
-    /// what it was before. For `k_pivot` that motion is the active trajectory, and for the
-    /// staged kinds it is the staged motion. When there was nothing before, it is the whole
-    /// of the new duration: the session's first trajectory for `k_first_build`, and the staged
-    /// motion for the batch that starts staging or the first one after `start_staging()`.
-    /// Weighed against the interval between calls, it says whether the caller is adding motion
-    /// faster than sampling consumes it. It is signed rather than unsigned because the
-    /// replacement no longer has to stop at the old terminal waypoint and so covers the shared
-    /// part of the path faster than its predecessor did; that saving is normally smaller than
-    /// the motion being added, but nothing guarantees it. It is present for every kind except
-    /// `k_noop`.
+    /// `delta_total_duration` is how much the call changed `remaining_total_duration()`, which
+    /// is to say how much it added to the motion the session has yet to sample. For
+    /// `k_first_build` that is the whole of the first trajectory, for `k_pivot` the difference
+    /// between the replacement and the trajectory it replaced, for the staged kinds the growth
+    /// of the staged motion, and for `k_noop` zero. Weighed against the interval between calls,
+    /// it says whether the caller is adding motion faster than sampling consumes it. It is
+    /// signed rather than unsigned because a pivot's replacement no longer has to stop at the
+    /// old terminal waypoint and so covers the shared part of the path faster than its
+    /// predecessor did; that saving is normally smaller than the motion being added, but
+    /// nothing guarantees it.
     ///
     struct extend_result {
         ///
@@ -104,9 +102,9 @@ class session {
             k_noop = 5,                   ///< Nothing beyond the seam waypoint; session unchanged
         };
 
-        kinds kind;                                                ///< How the batch was handled
-        std::optional<trajectory::seconds> branch_slack;           ///< Time by which the branch beat the last sample
-        std::optional<trajectory::seconds> delta_active_duration;  ///< Growth of the motion that took the batch
+        kinds kind;                                       ///< How the batch was handled
+        std::optional<trajectory::seconds> branch_slack;  ///< Time by which the branch beat the last sample
+        trajectory::seconds delta_total_duration;         ///< Change the call made to remaining_total_duration()
     };
 
     ///

@@ -648,7 +648,7 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
                                               const viam_trajex_tensor_map_t* batch,
                                               viam_trajex_totg_streaming_session_extend_kind_t* kind_out,
                                               double* branch_slack_sec_out,
-                                              double* delta_active_duration_sec_out,
+                                              double* delta_total_duration_sec_out,
                                               const char** error_out) {
     if (error_out) {
         *error_out = nullptr;
@@ -679,8 +679,8 @@ int viam_trajex_totg_streaming_session_extend(viam_trajex_totg_streaming_session
         if (branch_slack_sec_out) {
             *branch_slack_sec_out = seconds_to_capi(result.branch_slack);
         }
-        if (delta_active_duration_sec_out) {
-            *delta_active_duration_sec_out = seconds_to_capi(result.delta_active_duration);
+        if (delta_total_duration_sec_out) {
+            *delta_total_duration_sec_out = result.delta_total_duration.count();
         }
         return 0;
     } catch (const std::exception& e) {
