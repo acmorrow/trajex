@@ -992,20 +992,17 @@ std::optional<eq40_escape_bracket> find_eq40_escape_bracket(path::cursor search_
         const auto result = try_compute_eq40_delta(search_cursor, opt);
 
         // Crossing a segment boundary invalidates the baseline only when the boundary is
-        // discontinuous. The velocity limit is min_i(v_i / |q'_i|), a function of the tangent
-        // alone, so a tangent that survives the boundary leaves the limit curve continuous and
+        // discontinuous. The velocity limit is a function of the tangent alone, so a tangent
+        // that is invariant across the boundary leaves the limit curve continuous and
         // both samples describing the same phase plane point. A sign change across such a
-        // boundary is a real escape -- the velocity curve reaching a minimum that happens to sit
-        // on the boundary -- rather than the geometric discontinuity this reset was written for.
-        // Discarding it there is why a V-shaped dip with its minimum on a C-C boundary produces
-        // no switching point at all.
+        // boundary is a real escape.
         const auto current_segment = *search_cursor;
         const auto current_segment_end = current_segment.end();
         if (current_segment_end != previous_segment_end) {
             // Adjacency is required as well: a step large enough to clear a whole segment leaves
             // nothing meaningful to compare the tangents of.
-            const bool adjacent = (current_segment.start() == previous_segment_end);
-            const bool continuous = adjacent && [&] {
+            const auto adjacent = (current_segment.start() == previous_segment_end);
+            const auto continuous = adjacent && [&] {
                 const auto dot = xt::sum(previous_segment.tangent(previous_segment_end) * current_segment.tangent(previous_segment_end))();
                 return opt.epsilon.wrap(dot) == opt.epsilon.wrap(1.0);
             }();
