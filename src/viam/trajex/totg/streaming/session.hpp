@@ -50,12 +50,13 @@ class session {
     /// `k_staged_unsamplable`. Once the session is staging nothing is decided, since every
     /// batch joins the staged motion, so there is no deadline for a slack to measure.
     ///
-    /// `branch_slack` is measured from the most recently emitted sample to the branch: the
-    /// point at which the candidate first stops agreeing with the active trajectory, both
-    /// expressed in global time. Positive means the branch was still ahead of everything
-    /// handed out, and the call beat the deadline by that much. Negative means it sat in the
-    /// already-emitted past, which is what forces a stage, and the magnitude is how much
-    /// earlier the call needed to happen. The comparison is against what the session has
+    /// `branch_slack` is the time, in global time, between the most recently emitted sample
+    /// and the branch, the point at which the trajectory that would incorporate the batch first
+    /// differs from the active trajectory. A pivot is only possible while the branch is still
+    /// ahead of sampling, so this is the margin the call had. Positive means it arrived that
+    /// much ahead of the deadline; negative means sampling had already passed the branch,
+    /// which forces a stage, and the magnitude is how much sooner the call needed to arrive.
+    /// The comparison is against what the session has
     /// emitted, not what the arm has executed, so a caller that pulls samples far ahead of
     /// execution spends its own slack doing so.
     ///

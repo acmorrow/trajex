@@ -164,13 +164,13 @@ type ExtendResult struct {
 	// Kind is how the batch was handled.
 	Kind ExtendKind
 
-	// BranchSlack is how far the branch sits from the most recently emitted
-	// sample, the branch being the point at which the candidate first stops
-	// agreeing with the active trajectory. Positive means the branch was still
-	// ahead of everything handed out and the call beat the deadline by that
-	// much; negative means it sat in the already-emitted past, which is what
-	// forces a stage, and the magnitude is how much earlier the call needed to
-	// happen. Note that the comparison is against what the session has emitted,
+	// BranchSlack is the time between the most recently emitted sample and the
+	// branch, the point at which the trajectory that would incorporate the batch
+	// first differs from the active trajectory. A pivot is only possible while
+	// the branch is still ahead of sampling, so this is the margin the call had.
+	// Positive means it arrived that much ahead of the deadline; negative means
+	// sampling had already passed the branch, which forces a stage, and the
+	// magnitude is how much sooner the call needed to arrive. Note that the comparison is against what the session has emitted,
 	// not what the arm has executed, so a caller that pulls samples far ahead of
 	// execution spends its own slack doing so. Nil for ExtendFirstBuild,
 	// ExtendStagedAgain and ExtendNoop.

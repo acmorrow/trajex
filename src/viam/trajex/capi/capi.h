@@ -478,13 +478,14 @@ typedef enum {                                                            // NOL
 ///
 /// @param kind_out Receives how the batch was handled. May be NULL.
 ///
-/// @param branch_slack_sec_out Receives, in seconds, how far the branch sits from the most
-///                              recently emitted sample, the branch being the point at
-///                              which the candidate first stops agreeing with the active
-///                              trajectory. Positive means the branch was still ahead of
-///                              everything handed out and the call beat the deadline by
-///                              that much; negative means it sat in the already-emitted
-///                              past, which is what forces a stage. Only the calls that
+/// @param branch_slack_sec_out Receives, in seconds, the time between the most recently
+///                              emitted sample and the branch, the point at which the
+///                              trajectory that would incorporate the batch first differs
+///                              from the active trajectory. A pivot is only possible while
+///                              the branch is still ahead of sampling, so this is the
+///                              margin the call had. Positive means it arrived that much
+///                              ahead of the deadline; negative means sampling had already
+///                              passed the branch, which forces a stage. Only the calls that
 ///                              decide between pivoting and staging report it, namely
 ///                              PIVOT, STAGED_BRANCH_SAMPLED and STAGED_UNSAMPLABLE; for
 ///                              the rest, NaN is written. May be NULL.
