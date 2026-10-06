@@ -137,6 +137,30 @@ streaming::session fresh_session() {
     return streaming::session{default_path_options(), default_trajectory_options(), default_sample_rate()};
 }
 
+// The slow sample rate shared by the tests around the pivot overshoot guard, along with the
+// durations it is derived from. The active trajectory is the three-waypoint one, and the
+// candidate appends a tiny tail, {1.0, 1.05}, to it. The period is chosen so that resuming
+// one period past D_act/2 overshoots the candidate's duration by a fixed margin. Setting
+// period = D_cand - D_act/2 + margin makes that resume offset D_cand + margin whatever the
+// actual durations are. The period then lies in [D_act/2, D_act), so quantized_for_trajectory
+// samples the active trajectory on a three-sample grid at 0, D_act/2 and D_act.
+struct slow_rate {
+    trajectory::seconds active_duration;
+    trajectory::seconds candidate_duration;
+    double period_sec;
+
+    streaming::session make_session() const {
+        return streaming::session{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period_sec}};
+    }
+};
+
+slow_rate make_slow_rate() {
+    constexpr double k_margin_sec = 0.05;
+    const auto active_duration = reference_trajectory(three_waypoints()).duration();
+    const auto candidate_duration = reference_trajectory(xmatrix<>{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}}).duration();
+    return {active_duration, candidate_duration, candidate_duration.count() - (active_duration.count() / 2.0) + k_margin_sec};
+}
+
 }  // namespace
 
 BOOST_AUTO_TEST_SUITE(streaming_session_tests)
@@ -186,8 +210,7 @@ BOOST_AUTO_TEST_CASE(first_extend_with_valid_batch_creates_active_trajectory) {
     // trajectory counts as growth.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_first_build);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), sess.active_trajectory()->duration().count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), sess.active_trajectory()->duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argument) {
@@ -196,7 +219,8 @@ BOOST_AUTO_TEST_CASE(first_extend_with_single_waypoint_propagates_invalid_argume
 
     BOOST_CHECK_THROW(sess.extend(wp.accumulator()), std::invalid_argument);
 
-    // Failed extend leaves the session unchanged.
+    // A failed first extend must leave the session as fresh as it was, so that a caller can
+    // retry with a corrected batch.
     BOOST_CHECK(sess.active_trajectory() == nullptr);
     BOOST_CHECK_EQUAL(sess.current_time().count(), 0.0);
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 0U);
@@ -253,8 +277,8 @@ BOOST_AUTO_TEST_CASE(sample_at_least_zero_horizon_returns_exactly_one_sample) {
     const pinned_waypoints wp(six_waypoints());
     sess.extend(wp.accumulator());
 
-    // Zero horizon: the first sample's time equals current_time + dt > current_time + 0,
-    // so the stopping condition is satisfied after exactly one sample is emitted.
+    // With a zero horizon the target is the current time itself, which the first emitted
+    // sample always reaches, so exactly one sample comes back.
     const auto samples = sess.sample_at_least(trajectory::seconds{0.0});
     BOOST_CHECK_EQUAL(samples.size(), 1U);
 }
@@ -331,9 +355,8 @@ BOOST_AUTO_TEST_CASE(second_extend_with_bit_exact_seam_matches_merged_reference)
 
 BOOST_AUTO_TEST_CASE(seam_only_batch_leaves_the_session_untouched) {
     // A batch carrying nothing past the seam has no waypoints to absorb, so extend returns
-    // early without building a candidate. Nothing had exercised that path before: the concern
-    // is not the returned kind so much as the early return being a genuine no-op rather than
-    // something that advances the chain or disturbs the sampler.
+    // without building a candidate. What matters is less the returned kind than that the call
+    // is a true no-op, neither advancing the chain nor disturbing the sampler.
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
@@ -348,7 +371,7 @@ BOOST_AUTO_TEST_CASE(seam_only_batch_leaves_the_session_untouched) {
 
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_noop);
     BOOST_CHECK(!result.branch_slack.has_value());
-    BOOST_CHECK(!result.delta_active_duration.has_value());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), 0.0);
 
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), generation_before);
     BOOST_CHECK_EQUAL(sess.current_time().count(), time_before.count());
@@ -359,33 +382,31 @@ BOOST_AUTO_TEST_SUITE_END()  // seam_validation
 
 BOOST_AUTO_TEST_SUITE(pivot)
 
-BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_watermark_pivots) {
+BOOST_AUTO_TEST_CASE(extend_with_branch_ahead_of_last_sample_pivots) {
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
-    // One sample's worth of watermark advancement: far below where the branch will lie
-    // (the branch sits near the prefix's terminal blend, which is most of a trajectory away).
+    // After one sample the branch is still far ahead, since it sits near the terminal blend of
+    // the first trajectory, most of a trajectory away.
     sess.sample_next(1);
 
     const auto duration_before = sess.active_trajectory()->duration();
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     const auto result = sess.extend(extension.accumulator());
 
-    // Generation incremented: a new active trajectory was produced (pivot).
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
 
-    // The pivot is admitted precisely because the branch sits ahead of the watermark, so the
-    // reported slack must be positive. The duration delta has to be measured against the
-    // trajectory being replaced, which means capturing its duration before the swap; reading
-    // it afterwards would report zero.
+    // The pivot is admitted precisely because the branch sits ahead of the last emitted
+    // sample, so the reported slack must be positive. The duration delta has to be measured
+    // against the trajectory being replaced, which means capturing its duration before the
+    // swap; reading it afterwards would report zero.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_pivot);
     BOOST_REQUIRE(result.branch_slack.has_value());
     BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
-    BOOST_REQUIRE(result.delta_active_duration.has_value());
-    BOOST_CHECK_EQUAL(result.delta_active_duration->count(), (sess.active_trajectory()->duration() - duration_before).count());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), (sess.active_trajectory()->duration() - duration_before).count());
 }
 
 BOOST_AUTO_TEST_CASE(pivot_preserves_active_epoch) {
@@ -398,7 +419,7 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_active_epoch) {
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
 
-    // Confirm a pivot actually happened, then assert epoch is preserved across it.
+    // The epoch check means nothing unless a pivot happened, so require one first.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), pre_extend_epoch.count());
 }
@@ -413,7 +434,7 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_current_time) {
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
 
-    // Confirm a pivot actually happened, then assert current_time is preserved across it.
+    // The current time check means nothing unless a pivot happened, so require one first.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
     BOOST_CHECK_EQUAL(sess.current_time().count(), pre_extend_time.count());
 }
@@ -421,108 +442,89 @@ BOOST_AUTO_TEST_CASE(pivot_preserves_current_time) {
 BOOST_AUTO_TEST_CASE(pivot_whose_resume_offset_overshoots_candidate_stages) {
     // A pivot resumes its new sampler one sample period past the last emitted sample. If the
     // candidate has less than one sample period of trajectory left after the branch, that
-    // offset lands at or past the candidate's duration, and without a guard
-    // quantized_for_trajectory throws (start >= duration). The right behavior is to stage
-    // instead: with the branch that close to the end, a pivot would gain essentially no new
-    // samples to emit, so staging (and then draining and rebasing) is correct.
+    // offset lands at or past the candidate's end, where quantized_for_trajectory refuses to
+    // start. The session should stage instead, since a pivot that close to the end would have
+    // almost nothing new to emit, and the staged batch is delivered after the rebase.
     //
-    // In production this arises at ordinary sample rates through corner-cutting. The active's
-    // last waypoint is a hard endpoint (a full stop), but in the candidate that same waypoint
-    // becomes interior and gets a circular blend, so the branch sits within one sample period
-    // of the candidate's end. That exact geometry is fragile to reproduce deterministically,
-    // so we force the same inequality with a slow sample rate instead: a small appended tail
-    // leaves less than one (large) sample period of trajectory after the branch.
+    // In production this arises at ordinary sample rates through corner-cutting. The active
+    // trajectory's last waypoint is a hard endpoint, but in the candidate that waypoint becomes
+    // interior and gets a circular blend, so the branch sits within one sample period of the
+    // candidate's end. That geometry is fragile to reproduce deterministically, so we force
+    // the same inequality with a slow sample rate instead, which leaves a small appended tail
+    // with less than one long sample period of trajectory after the branch.
     //
-    // To set it up, we park the watermark at D_act/2 (the middle of a three-sample grid, and
-    // comfortably ahead of the branch, so the extend is admitted as a pivot) and choose the
-    // period so the resume offset (D_act/2 + period) overshoots the candidate's duration by a
-    // fixed margin. Setting period = D_cand - D_act/2 + margin makes that offset D_cand +
-    // margin regardless of the actual durations.
-    const auto d_act = reference_trajectory(three_waypoints()).duration();
-    const xmatrix<> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
-    const auto d_cand = reference_trajectory(merged).duration();
-
-    constexpr double k_margin_sec = 0.05;
-    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
-    // period lands in [D_act/2, D_act), so quantized_for_trajectory builds a three-sample grid
-    // at { 0, D_act/2, D_act } and sample_next(2) parks the watermark exactly at D_act/2.
-    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+    // To set it up, we use the slow rate from make_slow_rate and sample up to D_act/2, which is
+    // the middle of the three-sample grid and comfortably ahead of the branch, so the extend
+    // would otherwise pivot.
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
     sess.sample_next(2);
 
-    // Precondition: we are set up so the pivot's resume offset overshoots the candidate.
-    BOOST_REQUIRE_GE(sess.current_time().count() + period, d_cand.count());
+    // Check that the setup really does make the pivot's resume offset overshoot the candidate.
+    BOOST_REQUIRE_GE(sess.current_time().count() + rate.period_sec, rate.candidate_duration.count());
 
-    // The tiny appended tail would pivot (the branch is ahead of the watermark), but the
-    // resume offset overshoots, so the session must stage instead of throwing.
+    // The branch for the tiny appended tail is ahead of the last emitted sample, so it would
+    // pivot, but the resume offset overshoots, so the session must stage instead of throwing.
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}});
     streaming::session::extend_result result{};
     BOOST_CHECK_NO_THROW(result = sess.extend(extension.accumulator()));
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
 
-    // This is the discriminator between the two staged-after-comparison kinds: the branch was
-    // ahead of the watermark, so the slack is positive and lateness was never the problem.
+    // This is what tells the two kinds of compared stage apart. The branch was ahead of the
+    // last emitted sample, so the slack is positive and lateness was never the problem.
     // Reporting k_staged_branch_sampled here would send a caller chasing the wrong remedy.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_unsamplable);
     BOOST_REQUIRE(result.branch_slack.has_value());
     BOOST_CHECK_GT(result.branch_slack->count(), 0.0);
-    BOOST_CHECK(!result.delta_active_duration.has_value());
+
+    // The batch starts the staged motion, so the growth is the whole of its duration.
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
-    // Continuation of the staging test above. Once the overshoot guard declines the pivot and
-    // stages the tiny post-branch tail, draining the session has to fold that tail in: its
-    // waypoints are valid, reachable motion and must never be dropped. The rebuild (the active
-    // terminal waypoint plus the staged tail) is a legitimate trajectory that just runs shorter
-    // than one (slow) sample period, so rebase_'s resume-at-sample_period_ offset overshoots
-    // and quantized_for_trajectory throws (start >= duration) inside sample_one_. The fix
-    // handles this the same way the pivot side does: for a rebuild shorter than one sample
-    // period, clamp the resume so the batch's terminal is emitted and the rebase completes.
-    // This test asserts the batch is consumed; against the unfixed rebase it fails, because the
-    // drain throws instead of delivering the endpoint.
+    // This continues the case above. Once the session has declined the pivot and staged the
+    // tiny tail, draining it must still deliver that tail, which is valid, reachable motion
+    // that must never be dropped. The tail is staged before the active trajectory's terminal
+    // goes out, so the staged trajectory takes over at the seam and is sampled from its own
+    // start, even though all of it fits inside one slow sample period.
     //
-    // Construction mirrors the staging test above.
-    const auto d_act = reference_trajectory(three_waypoints()).duration();
-    const xmatrix<> merged{{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {1.0, 1.05}};
-    const auto d_cand = reference_trajectory(merged).duration();
-
-    constexpr double k_margin_sec = 0.05;
-    const double period = d_cand.count() - (d_act.count() / 2.0) + k_margin_sec;
-    streaming::session sess{default_path_options(), default_trajectory_options(), types::hertz{1.0 / period}};
+    // The construction mirrors the case above.
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
-    sess.sample_next(2);  // park the watermark at D_act/2: mid-grid and ahead of the branch
+    sess.sample_next(2);  // up to D_act/2, mid-grid and ahead of the branch
 
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}});
     sess.extend(extension.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, not pivoted
 
-    // Precondition: the rebuild rebase_ will attempt ({active terminal waypoint} + {staged
-    // tail}) is shorter than one sample period, so the unfixed resume-at-sample_period_ offset
-    // overshoots. This is the regime the fix must handle by consuming the batch, not dropping.
-    const auto d_rebuild = reference_trajectory(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}}).duration();
-    BOOST_REQUIRE_GE(period, d_rebuild.count());
-
-    // Draining past the active's terminal triggers the rebase. It must consume the staged tail,
+    // Draining through the active's end triggers the rebase. It must consume the staged tail,
     // neither throwing nor dropping it.
     std::vector<struct trajectory::sample> drained;
     BOOST_CHECK_NO_THROW(drained = sess.sample_next(8));
 
-    // The rebase completed: a new trajectory was installed for the staged batch.
+    // The rebase completed and made a trajectory for the staged batch active. The first sample
+    // drained stands at the seam in place of the old terminal, and the second is the staged
+    // trajectory's own terminal.
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_REQUIRE_EQUAL(drained.size(), 2U);
+    BOOST_CHECK_EQUAL(drained.front().time.count(), rate.active_duration.count());
 
-    // The batch's motion was delivered: the last emitted sample reaches the final waypoint.
+    // The batch's motion was delivered, since the last emitted sample reaches its final
+    // waypoint.
     BOOST_REQUIRE(!drained.empty());
     const auto& terminal = drained.back();
     const xvector<> final_waypoint{1.0, 1.05};
     BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
 
-    // The short-rebuild terminal is a true rest-to-rest endpoint, so it has zero velocity and
-    // acceleration, and it lands exactly at the rebased trajectory's end in global time (the
-    // epoch, advanced by the old duration, plus the short rebuild's own duration).
+    // The staged trajectory ends at rest, so its terminal sample has zero velocity and
+    // acceleration. It lands exactly at that trajectory's end in global time, which is the
+    // epoch, already advanced by the old duration, plus the staged trajectory's own duration.
     BOOST_CHECK_EQUAL(terminal.time.count(), (sess.active_epoch() + sess.active_trajectory()->duration()).count());
     BOOST_REQUIRE_EQUAL(terminal.velocity.shape(0), 2U);
     BOOST_REQUIRE_EQUAL(terminal.acceleration.shape(0), 2U);
@@ -539,14 +541,55 @@ BOOST_AUTO_TEST_CASE(overshoot_stage_then_drain_consumes_the_staged_batch) {
     BOOST_CHECK(tail.empty());
 }
 
+BOOST_AUTO_TEST_CASE(short_staged_motion_after_an_emitted_terminal_emits_only_its_terminal) {
+    // When the active trajectory's terminal has already gone out, the staged trajectory is
+    // sampled from one sample period in, so that the seam carries no duplicate sample. If the
+    // staged trajectory is shorter than that period, the start would land past its end, where
+    // quantized_for_trajectory refuses to start. The staged motion still has to be delivered,
+    // so the rebase emits only the staged trajectory's terminal, where the arm has completed
+    // the move.
+    //
+    // The sample rate is the same slow one as in the cases above, which gives the active
+    // trajectory a three-sample grid and leaves the tiny tail's staged trajectory shorter than
+    // one period.
+    const auto rate = make_slow_rate();
+    auto sess = rate.make_session();
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+
+    // Nothing is staged yet, so all three samples go out, the terminal among them.
+    const auto first_chain = sess.sample_next(3);
+    BOOST_REQUIRE_EQUAL(first_chain.size(), 3U);
+    BOOST_REQUIRE_EQUAL(first_chain.back().time.count(), rate.active_duration.count());
+
+    const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}});
+    sess.extend(extension.accumulator());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged
+
+    const auto d_staged = reference_trajectory(xmatrix<>{{1.0, 1.0}, {1.0, 1.05}}).duration();
+    BOOST_REQUIRE_GE(rate.period_sec, d_staged.count());
+
+    std::vector<struct trajectory::sample> drained;
+    BOOST_CHECK_NO_THROW(drained = sess.sample_next(8));
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+
+    // Only the staged trajectory's terminal comes out, at its end in global time.
+    BOOST_REQUIRE_EQUAL(drained.size(), 1U);
+    const auto& terminal = drained.front();
+    BOOST_CHECK_EQUAL(terminal.time.count(), (rate.active_duration + d_staged).count());
+    const xvector<> final_waypoint{1.0, 1.05};
+    BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // pivot
 
 BOOST_AUTO_TEST_SUITE(stage_and_rebase)
 
-BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
-    // Sampling all the way to the active trajectory's terminal pushes the watermark
-    // past where the divergence between the initial and merged trajectories sits, so
-    // the second extend must stage rather than pivot.
+BOOST_AUTO_TEST_CASE(extend_with_branch_behind_last_sample_stages) {
+    // Sampling all the way to the active trajectory's terminal moves the last emitted sample
+    // past the branch between the initial and merged trajectories, so the second extend must
+    // stage rather than pivot.
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
@@ -559,16 +602,17 @@ BOOST_AUTO_TEST_CASE(extend_with_branch_behind_watermark_stages) {
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     const auto result = sess.extend(extension.accumulator());
 
-    // Stage: no new trajectory became active, so the generation count is unchanged.
+    // No new trajectory became active, so the generation count is unchanged.
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), 0.0);
 
-    // The watermark has passed the branch, which is what forced the stage, so the slack is
-    // non-positive. Nothing was installed, so there is no duration delta to report.
+    // The last emitted sample has passed the branch, which is what forced the stage, so the
+    // slack is non-positive. The batch starts the staged motion, so the growth is the whole of
+    // its duration.
     BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_branch_sampled);
     BOOST_REQUIRE(result.branch_slack.has_value());
     BOOST_CHECK_LE(result.branch_slack->count(), 0.0);
-    BOOST_CHECK(!result.delta_active_duration.has_value());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
 }
 
 BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
@@ -584,7 +628,7 @@ BOOST_AUTO_TEST_CASE(staged_batch_rebases_when_sampling_past_terminal) {
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
 
-    // After extend: stage. Generation count is still 1.
+    // The batch staged, so the generation count is still 1.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     // Sampling further triggers the rebase from the original trajectory's terminal pose.
@@ -614,15 +658,15 @@ BOOST_AUTO_TEST_CASE(rebase_seam_configuration_is_continuous) {
 
     const auto post_rebase_samples = sess.sample_next(1);
     BOOST_REQUIRE_EQUAL(post_rebase_samples.size(), 1U);
-    // Confirm rebase actually happened.
+    // The seam comparison means nothing unless a rebase happened, so require one first.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
 
-    // The first post-rebase sample lives exactly one sample period into the new trajectory
-    // by construction of quantized_starting_at(new_active, rate, sample_period_). So its
-    // configuration differs from the terminal pose by the motion the trajectory plans over
-    // one sample period starting from rest: bounded above by 0.5 * max_accel * sample_period_^2
-    // = 0.5 * 5.0 * 0.01^2 = 2.5e-4 rad per joint, with blend curvature potentially adding
-    // a bit. 1e-3 leaves an order of magnitude of margin; tighter would be brittle.
+    // The first sample after the rebase sits exactly one sample period into the new
+    // trajectory, because that is where its sampler starts. Its configuration therefore
+    // differs from the terminal pose by the motion planned over one sample period from rest,
+    // which is at most 0.5 * max_accel * sample_period^2 = 0.5 * 5.0 * 0.01^2 = 2.5e-4 rad per
+    // joint, plus a little for blend curvature. A tolerance of 1e-3 leaves an order of
+    // magnitude of margin, and anything tighter would be brittle.
     BOOST_CHECK(configs_match(post_rebase_samples.front().configuration, terminal_sample.configuration, 1e-3));
 }
 
@@ -645,16 +689,14 @@ BOOST_AUTO_TEST_CASE(rebase_seam_time_keeps_flowing_forward) {
     BOOST_CHECK_GT(post_rebase_samples.front().time.count(), pre_rebase_time.count());
 }
 
-BOOST_AUTO_TEST_CASE(staged_batch_that_fails_to_build_surfaces_as_error_at_rebase) {
-    // A staged batch whose geometry cannot build a path must surface as a hard error when the
-    // rebase fires: this is robot motion, so a bad batch is never silently dropped nor masked
-    // as a clean drain. Duplicate consecutive waypoints yield a zero-length linear segment,
-    // which path::create rejects (path.cpp:77). We disable linear coalescing
-    // (max_linear_deviation = 0) so the duplicate is not quietly removed before it can throw.
-    //
-    // To make the failure land at the rebase rather than at the extend, the bad batch must
-    // arrive while the session is already locked out (staging non-empty): a locked-out extend
-    // only records the batch, deferring the build to rebase_.
+BOOST_AUTO_TEST_CASE(staged_batch_that_fails_to_build_is_rejected_by_extend) {
+    // A staged batch whose geometry cannot build a path must be rejected by the extend that
+    // carries it, leaving the staged motion as it was, so the caller can correct the batch and
+    // send it again. This is robot motion, so a bad batch must never be silently dropped, and
+    // it must not wedge the session either. Duplicate consecutive waypoints yield a zero-length
+    // linear segment, which path::create rejects. We disable linear coalescing by setting the
+    // maximum linear deviation to zero, so that the duplicate is not quietly removed before it
+    // can throw.
     path::options popt = default_path_options();
     popt.set_max_linear_deviation(0.0);
     streaming::session sess{popt, default_trajectory_options(), default_sample_rate()};
@@ -662,28 +704,35 @@ BOOST_AUTO_TEST_CASE(staged_batch_that_fails_to_build_surfaces_as_error_at_rebas
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
 
-    // Drain to the terminal so the next extend stages (branch behind the watermark), locking out.
+    // Drain to the terminal, so that the next extend's branch has already been sampled and the
+    // session starts staging.
     sess.sample_at_least(sess.active_trajectory()->duration());
 
     const pinned_waypoints good(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
     sess.extend(good.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, locked out
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged
+    const auto total_before = sess.remaining_total_duration();
 
-    // Locked out: this batch is recorded, not built. Its tail {2,1} duplicates the prior staged
-    // waypoint, so the eventual rebuild {1,1},{2,1},{2,1} carries a zero-length segment.
+    // The session is already staging, so this batch joins the staged motion. Its tail {2,1}
+    // duplicates the last staged waypoint, so the staged waypoints {1,1},{2,1},{2,1} carry a
+    // zero-length segment, and the extend throws. The C ABI maps this to an error return.
     const pinned_waypoints bad(xmatrix<>{{2.0, 1.0}, {2.0, 1.0}});
-    BOOST_REQUIRE_NO_THROW(sess.extend(bad.accumulator()));  // locked-out extend defers the build
+    BOOST_CHECK_THROW(sess.extend(bad.accumulator()), std::invalid_argument);
 
-    // Draining fires the rebase, whose build fails. It must surface as an exception (the C ABI
-    // maps this to an error return), not silently vanish.
-    BOOST_CHECK_THROW(sess.sample_next(4), std::invalid_argument);
-
-    // State is intact: the failed rebase installed no new trajectory (rebase_ mutates only after
-    // the throwing build). And the batch is retained, not dropped, so a subsequent pull
-    // re-attempts and reports the same error again. That is correct: a bad batch is a persistent,
-    // honestly reported failure, never a silently dropped one.
+    // The staged motion is as it was before the bad batch.
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
-    BOOST_CHECK_THROW(sess.sample_next(1), std::invalid_argument);
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), total_before.count());
+
+    // A corrected batch, joined at the same seam, is accepted, and draining delivers it.
+    const pinned_waypoints corrected(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
+    const auto result = sess.extend(corrected.accumulator());
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
+
+    const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_REQUIRE(!drained.empty());
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+    const xvector<> final_waypoint{2.0, 2.0};
+    BOOST_CHECK(configs_match(drained.back().configuration, final_waypoint, 1e-3));
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // stage_and_rebase
@@ -691,7 +740,7 @@ BOOST_AUTO_TEST_SUITE_END()  // stage_and_rebase
 BOOST_AUTO_TEST_SUITE(multi_extend)
 
 BOOST_AUTO_TEST_CASE(repeated_admissible_extends_compose_into_long_trajectory) {
-    // Three extends in a row, each issued while the watermark is at zero (so each pivots).
+    // Three extends in a row, each issued before anything has been sampled, so each pivots.
     // The resulting sample stream should agree with a direct trajectory built over the
     // fully merged waypoint set.
     auto sess = fresh_session();
@@ -734,7 +783,7 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
     sess.extend(initial.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
-    // Sample one tick, then extend (a pivot).
+    // After one sample the branch is still ahead, so this extend pivots.
     sess.sample_next(1);
     const pinned_waypoints pivot_batch(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
     sess.extend(pivot_batch.accumulator());
@@ -747,7 +796,6 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
     sess.extend(stage_batch.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);  // staged, not pivoted
 
-    // Sample further to trigger the rebase.
     sess.sample_next(1);
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 3U);
     BOOST_CHECK(sess.active_trajectory() != nullptr);
@@ -755,46 +803,50 @@ BOOST_AUTO_TEST_CASE(mixed_pivot_and_stage_eventually_drains_all_input) {
 }
 
 BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
-    // While locked out, several extends accumulate into staged_batches_ and a single rebase
-    // folds them all into one rebuilt chain. Every other rebase test stages exactly one batch,
-    // which leaves the multi-element accumulation path unexercised (stack_anchor_and_staged_
-    // over more than one block, and the locked-out append firing repeatedly). It also backs the
-    // reasoning that more input arriving before a drain keeps us on the normal, non-short rebase
-    // path, which only holds if multiple staged batches merge correctly.
+    // While the session is staging, several extends accumulate into the staged motion, and a
+    // single rebase makes it active. Every other rebase test stages exactly one batch, which
+    // leaves accumulation over several batches unexercised. It also backs the reasoning that
+    // more input arriving before a drain keeps the rebase on its normal path rather than the
+    // one for staged motion shorter than a sample period, which only holds if multiple staged
+    // batches merge correctly.
     auto sess = fresh_session();
 
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
     const auto initial_duration = sess.active_trajectory()->duration();
 
-    // Drain to the terminal so the next extend stages (branch behind the watermark), locking out.
+    // Drain to the terminal, so that the next extend's branch has already been sampled and the
+    // session starts staging.
     sess.sample_at_least(initial_duration);
 
     const pinned_waypoints batch_a(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     const auto first_stage = sess.extend(batch_a.accumulator());
-    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged, locked out
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // staged
     BOOST_CHECK(first_stage.kind == streaming::session::extend_result::kinds::k_staged_branch_sampled);
 
-    // Second extend arrives while locked out: it accumulates onto staging rather than rebasing.
+    // The second extend arrives while the session is staging, so it joins the staged batch
+    // rather than causing a rebase.
     const pinned_waypoints batch_b(xmatrix<>{{2.0, 2.0}, {3.0, 2.0}});
     const auto second_stage = sess.extend(batch_b.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);  // still just accumulated
 
-    // The second call skips the candidate build entirely, so it has nothing to compare and
-    // reports neither time. That absence is the point: a caller cannot read a stale slack from
-    // the previous call and conclude anything about this one.
+    // The second call joins the staged motion without deciding anything, so there is no slack,
+    // and the growth is what batch_b added to the staged motion's duration.
     BOOST_CHECK(second_stage.kind == streaming::session::extend_result::kinds::k_staged_again);
     BOOST_CHECK(!second_stage.branch_slack.has_value());
-    BOOST_CHECK(!second_stage.delta_active_duration.has_value());
+    const auto staged_after_a = reference_trajectory(batch_a.data()).duration();
+    const auto staged_after_b = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {3.0, 2.0}}).duration();
+    BOOST_CHECK_EQUAL(second_stage.delta_total_duration.count(), (staged_after_b - staged_after_a).count());
 
-    // Draining fires a single rebase that folds both staged batches into one new chain.
+    // Draining fires a single rebase that makes the motion from both staged batches active.
     const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
     BOOST_REQUIRE(!drained.empty());
     BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);  // one rebase, not one-per-batch
     BOOST_CHECK_EQUAL(sess.active_epoch().count(), initial_duration.count());
 
-    // Both batches folded in: the terminal reaches batch_b's last waypoint {3,2} at rest. Had
-    // accumulation dropped or misassembled batch_b, the terminal would be batch_a's last, {2,2}.
+    // Both batches were taken in, since the terminal reaches batch_b's last waypoint {3,2} at
+    // rest. Had accumulation dropped or misassembled batch_b, the terminal would be batch_a's
+    // last, {2,2}.
     const auto& terminal = drained.back();
     const xvector<> final_waypoint{3.0, 2.0};
     BOOST_CHECK(configs_match(terminal.configuration, final_waypoint, 1e-3));
@@ -816,11 +868,262 @@ BOOST_AUTO_TEST_CASE(multi_batch_staging_accumulates_into_single_rebase) {
     // reusing it as-is would silently skip every post-rebase sample and pass without checking
     // anything. The full check would compare reference.sample(sample.time - epoch) through a
     // small epoch-shifted variant of that helper. This minimal test covers the property that
-    // matters: both batches fold into one rebase, and the terminal reaches the last staged
-    // waypoint at rest.
+    // matters: both batches become active at one rebase, and the terminal reaches the last
+    // staged waypoint at rest.
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // multi_extend
+
+BOOST_AUTO_TEST_SUITE(start_staging)
+
+BOOST_AUTO_TEST_CASE(start_staging_before_first_extend_has_no_effect) {
+    // There is nothing to stage behind yet. If the session remembered the request, it would
+    // stage the second batch, so check that the second batch pivots.
+    auto sess = fresh_session();
+    sess.start_staging();
+
+    const pinned_waypoints initial(three_waypoints());
+    const auto first = sess.extend(initial.accumulator());
+    BOOST_CHECK(first.kind == streaming::session::extend_result::kinds::k_first_build);
+
+    sess.sample_next(1);
+    const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    const auto second = sess.extend(extension.accumulator());
+    BOOST_CHECK(second.kind == streaming::session::extend_result::kinds::k_pivot);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+}
+
+BOOST_AUTO_TEST_CASE(extend_after_start_staging_stages_without_comparing) {
+    // After one sample the branch for this extension is still well ahead, so without the
+    // request the extend would pivot, as the previous case shows. With it, the batch stages.
+    // Staging decides nothing, so there is no slack, and with no staged motion before it the
+    // growth is the whole of the staged motion's duration.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(1);
+
+    sess.start_staging();
+    const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    const auto result = sess.extend(extension.accumulator());
+
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
+    BOOST_CHECK(!result.branch_slack.has_value());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(extension.data()).duration().count());
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(rebase_after_start_staging_restarts_the_chain_and_pivoting_resumes) {
+    // The point of starting to stage is that the rebase leaves behind every waypoint before
+    // the end of the active trajectory, so later pivots work over a short chain. Check that by
+    // comparing durations against trajectories built directly from the short chains.
+    // Construction is deterministic, so equal inputs give bit-equal durations, and a chain
+    // that still carried the original waypoints would come out longer.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+
+    sess.start_staging();
+    const pinned_waypoints staged(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(staged.accumulator());
+
+    // Sampling through the end of the active trajectory rebases onto the staged motion.
+    sess.sample_at_least(initial_duration);
+    sess.sample_next(1);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_CHECK_EQUAL(sess.active_epoch().count(), initial_duration.count());
+    BOOST_CHECK_EQUAL(sess.active_trajectory()->duration().count(), reference_trajectory(staged.data()).duration().count());
+
+    // Staging ended with the rebase, so the next extend compares and pivots.
+    const pinned_waypoints extension(xmatrix<>{{2.0, 2.0}, {3.0, 2.0}});
+    const auto result = sess.extend(extension.accumulator());
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_pivot);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 3U);
+
+    const xmatrix<> short_chain{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {3.0, 2.0}};
+    BOOST_CHECK_EQUAL(sess.active_trajectory()->duration().count(), reference_trajectory(short_chain).duration().count());
+}
+
+BOOST_AUTO_TEST_CASE(start_staging_holds_after_the_active_drains) {
+    // Draining the active trajectory with nothing staged does not rebase, so staging must
+    // continue. The next extend therefore reports a stage without a comparison, rather than
+    // being compared and found to branch in time that has already been sampled.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(1);
+
+    sess.start_staging();
+    sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_REQUIRE(sess.sample_next(1).empty());
+
+    const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    const auto result = sess.extend(extension.accumulator());
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 1U);
+
+    sess.sample_next(1);
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+}
+
+BOOST_AUTO_TEST_CASE(failed_first_batch_after_start_staging_leaves_nothing_staged) {
+    // The first batch after start_staging() starts the staged motion from the active
+    // trajectory's last waypoint. If that motion cannot be built, the extend throws and nothing
+    // is staged, so a corrected batch starts the staged motion afresh. Duplicate consecutive
+    // waypoints yield a zero-length linear segment, which path::create rejects once linear
+    // coalescing is disabled.
+    path::options popt = default_path_options();
+    popt.set_max_linear_deviation(0.0);
+    streaming::session sess{popt, default_trajectory_options(), default_sample_rate()};
+
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(1);
+    sess.start_staging();
+
+    const pinned_waypoints bad(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 1.0}});
+    BOOST_CHECK_THROW(sess.extend(bad.accumulator()), std::invalid_argument);
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
+
+    // Still the first batch to be staged, so the growth is the whole of the staged duration.
+    const pinned_waypoints corrected(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    const auto result = sess.extend(corrected.accumulator());
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
+    BOOST_CHECK(!result.branch_slack.has_value());
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), reference_trajectory(corrected.data()).duration().count());
+
+    const auto drained = sess.sample_at_least(trajectory::seconds{1000.0});
+    BOOST_REQUIRE(!drained.empty());
+    BOOST_CHECK_EQUAL(sess.trajectory_generation_count(), 2U);
+    const xvector<> final_waypoint{2.0, 2.0};
+    BOOST_CHECK(configs_match(drained.back().configuration, final_waypoint, 1e-3));
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // start_staging
+
+BOOST_AUTO_TEST_SUITE(staged_motion)
+
+BOOST_AUTO_TEST_CASE(staged_extend_reports_growth_but_no_slack) {
+    // An extend that joins staged motion decides nothing, since every batch is taken in while
+    // staging, so there is no deadline and no slack. The growth is what the batch added to the
+    // staged motion's duration.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    sess.sample_next(1);
+    sess.start_staging();
+
+    const pinned_waypoints first(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
+    sess.extend(first.accumulator());
+
+    const pinned_waypoints second(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
+    const auto result = sess.extend(second.accumulator());
+    BOOST_CHECK(result.kind == streaming::session::extend_result::kinds::k_staged_again);
+    BOOST_CHECK(!result.branch_slack.has_value());
+
+    const auto before = reference_trajectory(first.data()).duration();
+    const auto after = reference_trajectory(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}}).duration();
+    BOOST_CHECK_EQUAL(result.delta_total_duration.count(), (after - before).count());
+}
+
+BOOST_AUTO_TEST_CASE(staged_motion_built_over_several_extends_matches_a_direct_build) {
+    // Staged motion grows batch by batch, and once it becomes active it must be the trajectory
+    // a direct build over the same waypoints produces. Construction is deterministic, so equal
+    // waypoints give bit-equal durations.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+    sess.start_staging();
+
+    const pinned_waypoints a(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
+    const pinned_waypoints b(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
+    const pinned_waypoints c(xmatrix<>{{2.0, 2.0}, {3.0, 2.0}});
+    sess.extend(a.accumulator());
+    sess.extend(b.accumulator());
+    sess.extend(c.accumulator());
+
+    // The two remainders are differences of global times summed in different orders, so they
+    // agree with the staged duration only to within rounding.
+    const xmatrix<> staged{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}, {3.0, 2.0}};
+    const auto staged_duration = reference_trajectory(staged).duration();
+    BOOST_CHECK_SMALL((sess.remaining_total_duration() - sess.remaining_active_duration() - staged_duration).count(), 1e-12);
+
+    // Sampling through the active trajectory's end makes the staged motion active.
+    sess.sample_at_least(initial_duration);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_CHECK_EQUAL(sess.active_trajectory()->duration().count(), staged_duration.count());
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // staged_motion
+
+BOOST_AUTO_TEST_SUITE(seam)
+
+BOOST_AUTO_TEST_CASE(staged_motion_supplies_the_sample_at_the_seam) {
+    // When motion is staged before the active trajectory's terminal goes out, the sample at the
+    // seam comes from the staged motion's trajectory. It sits at the same instant and pose as
+    // the terminal would have, with zero velocity, but carries the acceleration the new
+    // trajectory starts with rather than the zero acceleration the old one ends with.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+
+    sess.start_staging();
+    const pinned_waypoints staged(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(staged.accumulator());
+
+    // The first sample to reach the old trajectory's duration is the one at the seam.
+    const auto samples = sess.sample_at_least(initial_duration);
+    BOOST_REQUIRE(!samples.empty());
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    const auto& seam = samples.back();
+    BOOST_REQUIRE_EQUAL(seam.time.count(), initial_duration.count());
+
+    const auto expected = reference_trajectory(staged.data()).sample(trajectory::seconds{0.0});
+    BOOST_CHECK(configs_match(seam.configuration, expected.configuration));
+    BOOST_CHECK(configs_match(seam.velocity, expected.velocity));
+    BOOST_CHECK(configs_match(seam.acceleration, expected.acceleration));
+
+    double peak_acceleration = 0.0;
+    for (std::size_t i = 0; i < seam.acceleration.shape(0); ++i) {
+        BOOST_CHECK_EQUAL(seam.velocity(i), 0.0);
+        peak_acceleration = std::max(peak_acceleration, std::abs(seam.acceleration(i)));
+    }
+    BOOST_CHECK_GT(peak_acceleration, 0.0);
+
+    // Every sample before the seam came from the old trajectory, and the next one moves on into
+    // the new trajectory rather than repeating the seam's time.
+    for (std::size_t i = 0; i + 1 < samples.size(); ++i) {
+        BOOST_CHECK_LT(samples[i].time.count(), seam.time.count());
+    }
+    const auto after = sess.sample_next(1);
+    BOOST_REQUIRE_EQUAL(after.size(), 1U);
+    BOOST_CHECK_GT(after.front().time.count(), seam.time.count());
+
+    // The seam sample is the new trajectory's own first sample, so it respects the velocity and
+    // acceleration limits by construction. Checking it and its neighbors on either side against
+    // those limits states that intent, and would catch a seam that stitched in a value belonging
+    // to neither trajectory. The tolerance allows for the last few bits of rounding in a sample
+    // taken at the limit.
+    BOOST_REQUIRE_GE(samples.size(), 2U);
+    const auto limits = default_trajectory_options();
+    const auto& max_velocity = limits.max_velocity.get();
+    const auto& max_acceleration = limits.max_acceleration.get();
+    constexpr double k_limit_tolerance = 1e-9;
+    for (const auto* s : {&samples[samples.size() - 2], &seam, &after.front()}) {
+        for (std::size_t i = 0; i < s->velocity.shape(0); ++i) {
+            BOOST_CHECK_LE(std::abs(s->velocity(i)), max_velocity(i) + k_limit_tolerance);
+            BOOST_CHECK_LE(std::abs(s->acceleration(i)), max_acceleration(i) + k_limit_tolerance);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_SUITE_END()  // seam
 
 BOOST_AUTO_TEST_SUITE(end_of_stream)
 
@@ -833,15 +1136,15 @@ BOOST_AUTO_TEST_CASE(sample_next_after_exhaustion_returns_empty) {
     BOOST_REQUIRE(active != nullptr);
     sess.sample_at_least(active->duration() * 2.0);  // sample well past terminal
 
-    // No staging exists, so further pulls drain to empty.
+    // Nothing is staged, so further pulls return nothing.
     const auto samples = sess.sample_next(5);
     BOOST_CHECK(samples.empty());
 }
 
 BOOST_AUTO_TEST_CASE(extend_after_exhaustion_eventually_starts_new_chain) {
-    // When the active is exhausted and no staging exists, an arriving extend stages.
-    // The next sample then triggers a rebase from the terminal pose, producing a new
-    // active trajectory and advancing the epoch.
+    // When the active trajectory is exhausted and nothing is staged, an arriving extend
+    // stages. The next sample then triggers a rebase from the terminal pose, which makes a new
+    // trajectory active and advances the epoch.
     auto sess = fresh_session();
     const pinned_waypoints initial(three_waypoints());
     sess.extend(initial.accumulator());
@@ -854,7 +1157,7 @@ BOOST_AUTO_TEST_CASE(extend_after_exhaustion_eventually_starts_new_chain) {
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
 
-    // Extend on an exhausted session: stages, no new active built yet.
+    // An extend on an exhausted session stages, so no new trajectory is active yet.
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
 
     sess.sample_next(1);
@@ -903,7 +1206,7 @@ BOOST_AUTO_TEST_CASE(final_emitted_sample_after_rebase_lies_at_rebased_terminal_
     const auto initial_duration = sess.active_trajectory()->duration();
     sess.sample_at_least(initial_duration);  // drain the initial chain through its terminal
 
-    // Stage an extension by extending while the watermark sits at the terminal.
+    // Extending after sampling to the terminal stages the extension.
     const pinned_waypoints extension(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
     sess.extend(extension.accumulator());
     BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 1U);
@@ -967,6 +1270,73 @@ BOOST_AUTO_TEST_CASE(remaining_active_duration_is_measured_in_global_time) {
     sess.sample_at_least(trajectory::seconds{1000.0});
     BOOST_CHECK_GE(sess.remaining_active_duration().count(), 0.0);
     BOOST_CHECK_SMALL(sess.remaining_active_duration().count(), 1e-9);
+}
+
+BOOST_AUTO_TEST_CASE(remaining_total_duration_is_zero_without_a_trajectory) {
+    auto sess = fresh_session();
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(remaining_total_duration_counts_staged_motion) {
+    // With nothing staged the total is the active remainder. Staged motion adds its whole
+    // duration, since none of it has been sampled, and once it becomes active the total is
+    // the active remainder again. The comparisons allow for rounding, because the remainders
+    // are differences of global times summed in different orders.
+    auto sess = fresh_session();
+    const pinned_waypoints initial(three_waypoints());
+    sess.extend(initial.accumulator());
+    const auto initial_duration = sess.active_trajectory()->duration();
+    sess.sample_next(1);
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
+
+    sess.start_staging();
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
+
+    const pinned_waypoints staged(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}, {2.0, 2.0}});
+    sess.extend(staged.accumulator());
+    const auto staged_duration = reference_trajectory(staged.data()).duration();
+    BOOST_CHECK_SMALL((sess.remaining_total_duration() - sess.remaining_active_duration() - staged_duration).count(), 1e-12);
+
+    sess.sample_at_least(initial_duration);
+    BOOST_REQUIRE_EQUAL(sess.trajectory_generation_count(), 2U);
+    BOOST_CHECK_EQUAL(sess.remaining_total_duration().count(), sess.remaining_active_duration().count());
+}
+
+BOOST_AUTO_TEST_CASE(delta_total_duration_is_the_change_in_remaining_total_duration) {
+    // Whatever the kind, the reported delta is how much the extend changed the motion left to
+    // sample. extend() never moves the current time, so the change in remaining_total_duration()
+    // across the call is exactly what the call added. The comparison allows for rounding,
+    // because the remainder is a difference of global times summed in different orders.
+    auto sess = fresh_session();
+    const auto check_delta = [&](const pinned_waypoints& batch, streaming::session::extend_result::kinds expected_kind) {
+        const auto before = sess.remaining_total_duration();
+        const auto result = sess.extend(batch.accumulator());
+        BOOST_CHECK(result.kind == expected_kind);
+        BOOST_CHECK_SMALL((sess.remaining_total_duration() - before - result.delta_total_duration).count(), 1e-12);
+    };
+    using kinds = streaming::session::extend_result::kinds;
+
+    const pinned_waypoints initial(three_waypoints());
+    check_delta(initial, kinds::k_first_build);
+
+    sess.sample_next(1);
+    const pinned_waypoints pivot(xmatrix<>{{1.0, 1.0}, {2.0, 1.0}});
+    check_delta(pivot, kinds::k_pivot);
+
+    const pinned_waypoints seam_only(xmatrix<>{{2.0, 1.0}});
+    check_delta(seam_only, kinds::k_noop);
+
+    // Draining the active trajectory puts the next branch in the sampled past, so the next
+    // batch starts staging, and the one after joins it.
+    sess.sample_at_least(trajectory::seconds{1000.0});
+    const pinned_waypoints first_stage(xmatrix<>{{2.0, 1.0}, {2.0, 2.0}});
+    check_delta(first_stage, kinds::k_staged_branch_sampled);
+
+    const pinned_waypoints second_stage(xmatrix<>{{2.0, 2.0}, {3.0, 2.0}});
+    check_delta(second_stage, kinds::k_staged_again);
+
+    const pinned_waypoints staged_seam_only(xmatrix<>{{3.0, 2.0}});
+    check_delta(staged_seam_only, kinds::k_noop);
 }
 
 BOOST_AUTO_TEST_SUITE_END()  // remaining_duration

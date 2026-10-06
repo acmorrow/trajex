@@ -71,4 +71,8 @@ std::optional<struct trajectory::sample> uniform_sampler::next(trajectory::curso
     return cursor.sample();
 }
 
+std::size_t uniform_sampler::remaining() const noexcept {
+    return num_samples_ - next_sample_;
+}
+
 }  // namespace viam::trajex::totg

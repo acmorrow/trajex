@@ -1,10 +1,14 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
+#include <cstddef>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include <viam/trajex/jacobian/jacobian.hpp>
 #include <viam/trajex/totg/path.hpp>
@@ -36,6 +40,19 @@ template <typename S, typename Cursor, typename Sample>
 concept sampler = requires(S s, Cursor& c) {
     { s.advance(c) } -> std::same_as<bool>;
     { s.next(c) } -> std::convertible_to<std::optional<Sample>>;
+};
+
+///
+/// Sampler strategy concept for samplers that know how many samples they have left.
+///
+/// `remaining` reports how many samples the sampler has yet to produce. That lets a caller see
+/// that the next sample will be the last before taking it, which a single-pass range alone only
+/// reveals by stepping past the end. A sampler whose sample count is not known ahead of time,
+/// such as an adaptive one, can model `sampler` without modeling this.
+///
+template <typename S, typename Cursor, typename Sample>
+concept sized_sampler = sampler<S, Cursor, Sample> && requires(const S& s) {
+    { s.remaining() } -> std::same_as<std::size_t>;
 };
 
 }  // namespace trajectory_details
@@ -843,6 +860,37 @@ class trajectory::sampled<S>::iterator {
     /// @return True if iterators are equal
     ///
     bool operator==(const iterator& other) const noexcept;
+
+    ///
+    /// Gets the number of samples from this iterator to the end, counting the current one.
+    ///
+    /// Available only when the sampler is a `sized_sampler`. With it, the iterator models
+    /// `std::sized_sentinel_for<std::default_sentinel_t, iterator>`, as `std::counted_iterator`
+    /// does, so a caller can tell how many samples are left without stepping past the end.
+    ///
+    /// @param it Iterator to measure from
+    /// @return Samples left, including the one `it` refers to
+    ///
+    friend difference_type operator-(std::default_sentinel_t, const iterator& it) noexcept
+        requires trajectory_details::sized_sampler<S, cursor, struct trajectory::sample>
+    {
+        if (!it.current_.has_value()) {
+            return 0;
+        }
+        return static_cast<difference_type>(it.sampler_->remaining()) + 1;
+    }
+
+    ///
+    /// Gets the negated number of samples from this iterator to the end.
+    ///
+    /// @param it Iterator to measure from
+    /// @return Negation of `std::default_sentinel - it`
+    ///
+    friend difference_type operator-(const iterator& it, std::default_sentinel_t) noexcept
+        requires trajectory_details::sized_sampler<S, cursor, struct trajectory::sample>
+    {
+        return -(std::default_sentinel - it);
+    }
 
    private:
     friend class sampled;

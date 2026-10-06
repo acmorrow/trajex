@@ -187,13 +187,12 @@ func TestSessionExtendReporting(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendFirstBuild)
 	test.That(t, res.BranchSlack, test.ShouldBeNil)
-	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
-	test.That(t, *res.DeltaActiveDuration, test.ShouldEqual, sess.ActiveDuration())
+	test.That(t, res.DeltaTotalDuration, test.ShouldEqual, sess.ActiveDuration())
 
 	test.That(t, sess.RemainingActiveDuration(), test.ShouldEqual, sess.ActiveDuration())
 
-	// One sample of watermark leaves the branch well ahead, so the next extend pivots and
-	// both times come back populated.
+	// After one sample the branch is still well ahead, so the next extend pivots and both
+	// times come back populated.
 	out, err := trajex.NewTensorMap()
 	test.That(t, err, test.ShouldBeNil)
 	defer out.Close()
@@ -211,7 +210,52 @@ func TestSessionExtendReporting(t *testing.T) {
 	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendPivot)
 	test.That(t, res.BranchSlack, test.ShouldNotBeNil)
 	test.That(t, *res.BranchSlack, test.ShouldBeGreaterThan, time.Duration(0))
-	test.That(t, res.DeltaActiveDuration, test.ShouldNotBeNil)
+}
+
+// TestSessionStartStaging checks that StartStaging reaches the C++ session. The staging
+// behavior itself is covered by the C++ suite; here it is enough that an extend which would
+// otherwise pivot comes back staged.
+func TestSessionStartStaging(t *testing.T) {
+	opts := buildOptions(t)
+	defer opts.Close()
+	sess, err := streaming.New(opts)
+	test.That(t, err, test.ShouldBeNil)
+	defer sess.Close()
+
+	first := buildBatch(t, []float64{
+		0.0, 0.0,
+		1.0, 0.0,
+		1.0, 1.0,
+	})
+	defer first.Close()
+	_, err = sess.Extend(context.Background(), first)
+	test.That(t, err, test.ShouldBeNil)
+
+	// After one sample the branch is still well ahead, which is what lets
+	// TestSessionExtendReporting pivot at this point.
+	out, err := trajex.NewTensorMap()
+	test.That(t, err, test.ShouldBeNil)
+	defer out.Close()
+	test.That(t, sess.SampleNext(context.Background(), 1, out), test.ShouldBeNil)
+
+	sess.StartStaging()
+
+	second := buildBatch(t, []float64{
+		1.0, 1.0,
+		2.0, 1.0,
+		2.0, 2.0,
+	})
+	defer second.Close()
+	res, err := sess.Extend(context.Background(), second)
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, res.Kind, test.ShouldEqual, streaming.ExtendStagedAgain)
+	test.That(t, res.BranchSlack, test.ShouldBeNil)
+	test.That(t, sess.GenerationCount(), test.ShouldEqual, int64(1))
+
+	// The staged motion has not been sampled, so the total remaining exceeds what is left of
+	// the active trajectory by about its whole duration, which the extend reported as growth.
+	staged := sess.RemainingTotalDuration() - sess.RemainingActiveDuration()
+	test.That(t, staged.Seconds(), test.ShouldAlmostEqual, res.DeltaTotalDuration.Seconds(), 1e-6)
 }
 
 func TestSessionCloseIdempotent(t *testing.T) {
