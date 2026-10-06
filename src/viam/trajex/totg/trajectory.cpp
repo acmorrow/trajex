@@ -57,7 +57,9 @@ struct switching_point_cache {
 };
 
 // Joint velocity limit curve (Kunz & Stilman Eq. 36): min_i q_dot_max(i) / |q'(i)|.
-[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xvector<>& q_prime, const xvector<>& q_dot_max, class epsilon epsilon) {
+[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xvector<>& q_prime,
+                                                        const xvector<>& q_dot_max,
+                                                        class epsilon epsilon) noexcept {
     arc_velocity s_dot_max_vel{std::numeric_limits<double>::infinity()};
     for (size_t i = 0; i < q_prime.size(); ++i) {
         if (std::abs(q_prime(i)) < epsilon) {
@@ -109,7 +111,7 @@ arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                                                   const xvector<>& q_double_prime,
                                                                   const xvector<>& q_dot_max,
                                                                   const xvector<>& q_ddot_max,
-                                                                  class epsilon epsilon) {
+                                                                  class epsilon epsilon) noexcept {
     // Compute the path velocity limit imposed by joint acceleration constraints (equation 31).
     // This is the acceleration limit curve in the phase plane. The derivation in the paper
     // converts joint acceleration bounds into constraints on path velocity by considering
@@ -248,8 +250,11 @@ template <cursor_like C>
 // bounds are well-defined and continuous above the limit curve, so this is safe to call at any
 // phase plane position. Used by the backward integration bisection solve, where evaluation above
 // the limit curve is expected during bracket probing.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(
-    const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
+[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(const xvector<>& q_prime,
+                                                                                    const xvector<>& q_double_prime,
+                                                                                    arc_velocity s_dot,
+                                                                                    const xvector<>& q_ddot_max,
+                                                                                    class epsilon epsilon) noexcept {
     arc_acceleration s_ddot_min{-std::numeric_limits<double>::infinity()};
     arc_acceleration s_ddot_max{std::numeric_limits<double>::infinity()};
 
@@ -283,7 +288,7 @@ template <cursor_like C>
 // Computes the feasible range of path acceleration (s_ddot) given current path velocity (s_dot)
 // and joint acceleration limits. Throws if the bounds are infeasible (above the limit curve).
 // See Kunz & Stilman equations 22-23.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds(
+trajectory::acceleration_bounds compute_acceleration_bounds(
     const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
     auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds_unchecked(q_prime, q_double_prime, s_dot, q_ddot_max, epsilon);
 
@@ -304,10 +309,10 @@ template <cursor_like C>
 // This is d/ds s_dot_max_vel(s), which tells us the slope of the velocity limit curve.
 // Used in Algorithm Step 3 to determine if we can leave the curve or must search for switching points.
 // See Kunz & Stilman equation 37.
-[[gnu::pure]] auto compute_velocity_limit_derivative(const xvector<>& q_prime,
-                                                     const xvector<>& q_double_prime,
-                                                     const xvector<>& q_dot_max,
-                                                     class epsilon epsilon) {
+auto compute_velocity_limit_derivative(const xvector<>& q_prime,
+                                       const xvector<>& q_double_prime,
+                                       const xvector<>& q_dot_max,
+                                       class epsilon epsilon) {
     // Find which joint is the limiting constraint (has minimum q_dot_max / |q'|)
     double min_limit = std::numeric_limits<double>::infinity();
     size_t limiting_joint = 0;
@@ -429,7 +434,7 @@ struct eq40_result {
 // Given current position, velocity, and applied acceleration, computes the next state.
 // Uses constant acceleration kinematic equations: v_new = v + a*dt, s_new = s + v*dt + 0.5*a*dt^2.
 // This is direction-agnostic - caller determines whether dt is positive (forward) or negative (backward).
-[[gnu::const]] trajectory::phase_point euler_step(
+trajectory::phase_point euler_step(
     arc_length s, arc_velocity s_dot, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
     const auto s_dot_new = s_dot + (s_ddot * dt);
     const auto s_new = s + (s_dot * dt) + (0.5 * s_ddot * dt * dt);
@@ -443,7 +448,7 @@ struct eq40_result {
     return {s_new, s_dot_new};
 }
 
-[[gnu::const]] auto euler_step(trajectory::phase_point where, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
+auto euler_step(trajectory::phase_point where, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
     return euler_step(where.s, where.s_dot, s_ddot, dt, epsilon);
 }
 
