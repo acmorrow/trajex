@@ -2781,6 +2781,49 @@ BOOST_AUTO_TEST_CASE(failed_trajectory_c89a6776_4c48331e_trajectory_generation, 
         std::nullopt);
 }
 
+BOOST_AUTO_TEST_CASE(orbsanding_1d6726c5_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "orbsanding-1d6726c5d9b8d3af076d8b0979e818c1_plan001_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan002_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan002_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan003_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan003_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(failed_trajectory_2f698337_eae1c945_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "njsanding-viam_capture_tag=2f698337-4b93-4e05-a81a-9e0906e5340c_eae1c945-b52b-4043-90c8-ca8234255b51_arm.trajex-totg-replay.json",
+        std::nullopt,
+        std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(failed_trajectory_79603105_19c5a723_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "njsanding-viam_capture_tag=79603105-8826-492c-a189-2d754aa2739c_19c5a723-909a-45c8-afd4-46f025edff81_arm.trajex-totg-replay.json",
+        std::nullopt,
+        std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(failed_trajectory_9a116016_5a3bd423_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "njsanding-viam_capture_tag=9a116016-eef3-4042-84c8-807d7b14f7e6_5a3bd423-ea97-425b-91b3-b866e93859de_arm.trajex-totg-replay.json",
+        std::nullopt,
+        std::nullopt);
+}
+
+BOOST_AUTO_TEST_CASE(failed_trajectory_9a116016_85719301_trajectory_generation, *boost::unit_test::disabled()) {
+    generate_trajectory_from_replay_file(
+        "njsanding-viam_capture_tag=9a116016-eef3-4042-84c8-807d7b14f7e6_85719301-2690-4824-8cf7-b436353c5034_arm.trajex-totg-replay.json",
+        std::nullopt,
+        std::nullopt);
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // replay_regression_tests
 
 BOOST_AUTO_TEST_SUITE(online_extension_verification)
