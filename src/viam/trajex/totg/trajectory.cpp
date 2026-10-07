@@ -57,7 +57,9 @@ struct switching_point_cache {
 };
 
 // Joint velocity limit curve (Kunz & Stilman Eq. 36): min_i q_dot_max(i) / |q'(i)|.
-[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xvector<>& q_prime, const xvector<>& q_dot_max, class epsilon epsilon) {
+[[gnu::pure]] arc_velocity compute_joint_velocity_limit(const xvector<>& q_prime,
+                                                        const xvector<>& q_dot_max,
+                                                        class epsilon epsilon) noexcept {
     arc_velocity s_dot_max_vel{std::numeric_limits<double>::infinity()};
     for (size_t i = 0; i < q_prime.size(); ++i) {
         if (std::abs(q_prime(i)) < epsilon) {
@@ -109,7 +111,7 @@ arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                                                   const xvector<>& q_double_prime,
                                                                   const xvector<>& q_dot_max,
                                                                   const xvector<>& q_ddot_max,
-                                                                  class epsilon epsilon) {
+                                                                  class epsilon epsilon) noexcept {
     // Compute the path velocity limit imposed by joint acceleration constraints (equation 31).
     // This is the acceleration limit curve in the phase plane. The derivation in the paper
     // converts joint acceleration bounds into constraints on path velocity by considering
@@ -248,8 +250,11 @@ template <cursor_like C>
 // bounds are well-defined and continuous above the limit curve, so this is safe to call at any
 // phase plane position. Used by the backward integration bisection solve, where evaluation above
 // the limit curve is expected during bracket probing.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(
-    const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
+[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds_unchecked(const xvector<>& q_prime,
+                                                                                    const xvector<>& q_double_prime,
+                                                                                    arc_velocity s_dot,
+                                                                                    const xvector<>& q_ddot_max,
+                                                                                    class epsilon epsilon) noexcept {
     arc_acceleration s_ddot_min{-std::numeric_limits<double>::infinity()};
     arc_acceleration s_ddot_max{std::numeric_limits<double>::infinity()};
 
@@ -283,7 +288,7 @@ template <cursor_like C>
 // Computes the feasible range of path acceleration (s_ddot) given current path velocity (s_dot)
 // and joint acceleration limits. Throws if the bounds are infeasible (above the limit curve).
 // See Kunz & Stilman equations 22-23.
-[[gnu::pure]] trajectory::acceleration_bounds compute_acceleration_bounds(
+trajectory::acceleration_bounds compute_acceleration_bounds(
     const xvector<>& q_prime, const xvector<>& q_double_prime, arc_velocity s_dot, const xvector<>& q_ddot_max, class epsilon epsilon) {
     auto [s_ddot_min, s_ddot_max] = compute_acceleration_bounds_unchecked(q_prime, q_double_prime, s_dot, q_ddot_max, epsilon);
 
@@ -304,10 +309,10 @@ template <cursor_like C>
 // This is d/ds s_dot_max_vel(s), which tells us the slope of the velocity limit curve.
 // Used in Algorithm Step 3 to determine if we can leave the curve or must search for switching points.
 // See Kunz & Stilman equation 37.
-[[gnu::pure]] auto compute_velocity_limit_derivative(const xvector<>& q_prime,
-                                                     const xvector<>& q_double_prime,
-                                                     const xvector<>& q_dot_max,
-                                                     class epsilon epsilon) {
+auto compute_velocity_limit_derivative(const xvector<>& q_prime,
+                                       const xvector<>& q_double_prime,
+                                       const xvector<>& q_dot_max,
+                                       class epsilon epsilon) {
     // Find which joint is the limiting constraint (has minimum q_dot_max / |q'|)
     double min_limit = std::numeric_limits<double>::infinity();
     size_t limiting_joint = 0;
@@ -429,7 +434,7 @@ struct eq40_result {
 // Given current position, velocity, and applied acceleration, computes the next state.
 // Uses constant acceleration kinematic equations: v_new = v + a*dt, s_new = s + v*dt + 0.5*a*dt^2.
 // This is direction-agnostic - caller determines whether dt is positive (forward) or negative (backward).
-[[gnu::const]] trajectory::phase_point euler_step(
+trajectory::phase_point euler_step(
     arc_length s, arc_velocity s_dot, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
     const auto s_dot_new = s_dot + (s_ddot * dt);
     const auto s_new = s + (s_dot * dt) + (0.5 * s_ddot * dt * dt);
@@ -443,7 +448,7 @@ struct eq40_result {
     return {s_new, s_dot_new};
 }
 
-[[gnu::const]] auto euler_step(trajectory::phase_point where, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
+auto euler_step(trajectory::phase_point where, arc_acceleration s_ddot, trajectory::seconds dt, class epsilon epsilon) {
     return euler_step(where.s, where.s_dot, s_ddot, dt, epsilon);
 }
 
@@ -1592,20 +1597,36 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             .breach = breach_point, .s_dot_max_acc = breach_s_dot_max_acc, .s_dot_max_vel = breach_s_dot_max_vel};
                     }
 
-                    // Determine which limit was violated and classify as source or sink.
-                    // If acceleration limit violated at all, it takes precedence - these curves can
-                    // cross and we may violate both simultaneously.
+                    // Determine which limit was violated and classify as source or sink. These curves
+                    // can cross and we may violate both simultaneously. If the acceleration limit was
+                    // violated it is classified first, and a sink there is a sink. If it is a source but
+                    // the velocity limit was violated too, the velocity curve logic below decides.
                     //
-                    // We analyze the trajectory at next_point (the last feasible point) to determine
-                    // if it's heading into or away from the infeasible region.
+                    // Either way, the violated curve is classified at next_point.s, and on the curve
+                    // rather than at next_point.s_dot. Bisection leaves next_point in bounds and
+                    // breach_point out of bounds, less than epsilon apart. A breach_point on the
+                    // segment end resolves to the start of the next segment and returns above, so
+                    // here both lie inside the current segment. The curve need not be differentiable
+                    // between them even so: a Case 2 extremum, or a change in which joint (or pair of
+                    // joints, for the acceleration curve) is binding, can fall in that interval, so
+                    // only next_point reliably describes the curve we hit. Source and sink are
+                    // properties of the curve itself: off the curve, the acceleration bounds differ
+                    // from their values on it by an amount that scales with q''/q', which is
+                    // unbounded on tight blends. The bounds are computed unchecked because on the
+                    // curve they meet, and rounding may cross them.
+                    //
+                    // When the classification is numerical overshoot, we commit breach_point, clamped
+                    // to the curve, as our next position. Committing next_point instead could leave
+                    // delta_s at zero and spin the loop.
 
                     if (breach_point.s_dot >= breach_s_dot_max_acc) {
                         // Check whether trajectory naturally escapes or drives deeper into infeasible region.
 
-                        // Compute phase slope at next_point (feasible) using already-available data.
-                        const auto [next_s_ddot_min, next_s_ddot_max] = compute_acceleration_bounds(
-                            next_q_prime, next_q_double_prime, next_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
-                        const auto next_phase_slope = next_s_ddot_max / next_point.s_dot;
+                        // On the acceleration limit curve the feasible range of s_ddot collapses to a single
+                        // value, which fixes the phase slope of any trajectory riding it.
+                        const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
+                            next_q_prime, next_q_double_prime, next_s_dot_max_acc, traj.options_.max_acceleration, traj.options_.epsilon);
+                        const auto next_phase_slope = on_curve_bounds.s_ddot_max / next_s_dot_max_acc;
 
                         // Compute acceleration curve slope by looking at next_point and a point before it.
                         const auto before_next = next_point.s - arc_length{traj.options_.epsilon};
@@ -1634,32 +1655,34 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         // The trajectory naturally escapes back to the feasible region. This was
-                        // numerical overshoot from a source point. Commit the breach as our next
-                        // position and clamp s_dot to the acceleration limit, mirroring the
-                        // velocity-case escape patterns below. Without committing here the outer
-                        // integrator's delta_s would be zero (since the bisection collapsed
-                        // next_point onto current_point) and the loop would spin indefinitely.
-                        next_point = breach_point;
-                        next_point.s_dot = breach_s_dot_max_acc;
-                        return std::nullopt;
+                        // numerical overshoot from a source point. If the velocity limit was not also
+                        // violated, commit the breach as our next position and clamp s_dot to the
+                        // acceleration limit, mirroring the velocity-case escape patterns below. Without
+                        // committing here the outer integrator's delta_s would be zero (since the
+                        // bisection collapsed next_point onto current_point) and the loop would spin
+                        // indefinitely. If the velocity limit was violated too, escaping here could commit
+                        // a point above the velocity curve, so fall through and let it decide.
+                        if (breach_point.s_dot <= breach_s_dot_max_vel) {
+                            next_point = breach_point;
+                            next_point.s_dot = breach_s_dot_max_acc;
+                            return std::nullopt;
+                        }
                     }
 
-                    // We hit the velocity curve only. Check if we are trapped, can escape, or can follow.
-                    //
-                    // TODO: We might be able to avoid recomputing these since we could track them in the bisection loop
-                    // like we do for next.
-                    cache.path_cursor.seek(breach_point.s);
-                    const auto& breach_q_prime = cache.path_cursor.tangent_ref();
-                    const auto& breach_q_double_prime = cache.path_cursor.curvature_ref();
+                    // We hit the velocity curve, possibly along with an acceleration curve judged a source
+                    // above. Check if we are trapped, can escape, or can follow. Commits clamp to the lower
+                    // of the two curves, which is the velocity curve unless both were violated.
+                    const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
+                        next_q_prime, next_q_double_prime, next_s_dot_max_vel, traj.options_.max_acceleration, traj.options_.epsilon);
+                    const auto min_phase_slope = on_curve_bounds.s_ddot_min / next_s_dot_max_vel;
 
-                    const auto [breach_s_ddot_min, breach_s_ddot_max] = compute_acceleration_bounds(
-                        breach_q_prime, breach_q_double_prime, breach_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
-                    const auto min_phase_slope = breach_s_ddot_min / breach_point.s_dot;
-                    const auto max_phase_slope = breach_s_ddot_max / breach_point.s_dot;
-                    const auto breach_limits =
-                        compute_velocity_limits_and_components(breach_q_prime, breach_q_double_prime, cache.path_cursor, traj.options_);
+                    // We need to seek to next because the `compute` calls here take the cursor, which must hold
+                    // the position associated with the q_prime and q_double_prime arguments.
+                    cache.path_cursor.seek(next_point.s);
+                    const auto next_limits =
+                        compute_velocity_limits_and_components(next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_);
                     const auto vel_curve_slope = compute_velocity_limit_derivative_with_tcp(
-                        breach_q_prime, breach_q_double_prime, cache.path_cursor, traj.options_, breach_limits.joint, breach_limits.tcp);
+                        next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_, next_limits.joint, next_limits.tcp);
 
                     if (min_phase_slope > vel_curve_slope) {
                         // The velocity curve drops faster than we can follow while respecting the
@@ -1668,22 +1691,16 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             .breach = breach_point, .s_dot_max_acc = breach_s_dot_max_acc, .s_dot_max_vel = breach_s_dot_max_vel};
                     }
 
-                    if (max_phase_slope < vel_curve_slope) {
-                        // The velocity curve rises faster than we can accelerate, so the trajectory
-                        // naturally falls away from the limit. This was numerical overshoot. Accept
-                        // the breach point as valid since we'll naturally escape from it, but clamp
-                        // velocity to avoid starting in a forbidden region.
-                        next_point = breach_point;
-                        next_point.s_dot = breach_s_dot_max_vel;
-                        return std::nullopt;
-                    }
+                    // Not trapped, so this was numerical overshoot, and we either escape or follow. If the
+                    // velocity curve rises faster than we can accelerate, the trajectory falls away from it;
+                    // otherwise its slope is within our acceleration authority and we can follow it. Either way,
+                    // accept the breach point clamped to the lower of the two curves, which avoids starting in a
+                    // forbidden region. If that is the velocity curve, the next iteration detects "at velocity
+                    // limit" and chooses between tangent and maximum acceleration itself, avoiding repeated
+                    // bisection.
 
-                    // The curve slope is within our acceleration authority, so we can follow it
-                    // tangentially. Accept the breach point as our next position and clamp velocity
-                    // to the limit so the next iteration detects "at velocity limit" and uses tangent
-                    // acceleration rather than max acceleration, avoiding repeated bisection.
                     next_point = breach_point;
-                    next_point.s_dot = breach_s_dot_max_vel;
+                    next_point.s_dot = std::min(breach_s_dot_max_acc, breach_s_dot_max_vel);
                     return std::nullopt;
                 }();
 
