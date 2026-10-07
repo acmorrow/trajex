@@ -324,7 +324,9 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
 
     struct blend_geometry {
         segment::circular circular_seg;
-        double trim_distance;  // Distance trimmed from both segments
+        double trim_distance;      // Distance trimmed from both segments
+        bool takes_half_incoming;  // trim_distance is exactly half of the incoming segment
+        bool takes_half_outgoing;  // trim_distance is exactly half of the outgoing segment
     };
 
     // Try to create a circular blend arc at a corner following the algorithm from
@@ -438,7 +440,13 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
         const auto x_vec = x_vec_raw - (xt::sum(x_vec_raw * y_unit)() * y_unit);
         const auto x_unit = x_vec / xt::norm_l2(x_vec)();
 
-        return blend_geometry{.circular_seg = segment::circular{center, x_unit, y_unit, radius, angle}, .trim_distance = trim_distance};
+        // Report which halves the trim took, by the same expressions that capped it. Halving is exact,
+        // so these are equalities between identically computed values, not tolerances. The construction
+        // loop uses them to recognize a segment that two blends consume completely.
+        return blend_geometry{.circular_seg = segment::circular{center, x_unit, y_unit, radius, angle},
+                              .trim_distance = trim_distance,
+                              .takes_half_incoming = (trim_distance == incoming_norm / 2.0),
+                              .takes_half_outgoing = (trim_distance == outgoing_norm / 2.0)};
     };
 
     // Run colinearization as a single pass before constructing circular blends.
@@ -547,6 +555,10 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
     // waypoints rather than one of the original waypoints in the accumulator.
     xvector<> current_position = *segment_start;
 
+    // Whether the blend at segment_start took exactly half of the segment from segment_start to
+    // the current locus. False when segment_start is a hard waypoint rather than a blend.
+    bool previous_blend_takes_half_of_segment = false;
+
     for (auto locus = std::next(waypoints_range.begin()); locus != waypoints_range.end(); ++locus) {
         auto next = std::next(locus);
 
@@ -572,11 +584,17 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             // `Divergent Behavior 5`: When adjacent blends fully consume the connecting segment,
             // the two circular arcs are emitted adjacent (C-C). The paper assumes L-C-L topology.
             //
-            // Compute the incoming linear segment length as a scalar subtraction to avoid
+            // Every trim is capped at half of each adjacent segment, so the only way two trims can
+            // add up to the whole segment is for each to take exactly half of it. Both blends report
+            // that from the comparison that set their trims, so we know the segment is gone without
+            // measuring what remains. The measurement cannot be trusted to say so: the distance left
+            // after the previous blend is rebuilt from its exit point, and subtracting this trim from
+            // it can leave a residue of a few ULPs rather than zero, enough to survive the guard below
+            // and emit a sliver that the integrator then has to stand on.
+            const bool segment_fully_consumed = previous_blend_takes_half_of_segment && blend.takes_half_incoming;
+
+            // Otherwise, compute the incoming linear segment length as a scalar subtraction to avoid
             // catastrophic cancellation from reconstructing two nearly-equal endpoint positions.
-            // When adjacent blends fully consume a connecting segment (C-C), this should be
-            // exactly zero. It can come out slightly positive due to FP rounding in the outgoing
-            // segment norm, and such a segment is a rounding artifact rather than geometry.
             //
             // A segment is only worth emitting if there is somewhere to be inside it. Positions
             // are addressed in the path's own arc length, so that means a representable value
@@ -588,7 +606,8 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             const auto incoming_length = dist_to_locus - blend.trim_distance;
             const auto span_start = static_cast<double>(cumulative_length);
             const auto span_end = span_start + incoming_length;
-            if ((span_end > span_start) && (std::nextafter(span_start, span_end) <= std::nextafter(span_end, span_start))) {
+            if (!segment_fully_consumed && (span_end > span_start) &&
+                (std::nextafter(span_start, span_end) <= std::nextafter(span_end, span_start))) {
                 segment::linear incoming_segment{current_position, incoming_unit, arc_length{incoming_length}};
                 segments.push_back({.seg = segment{std::move(incoming_segment)}, .start = cumulative_length});
                 cumulative_length += arc_length{incoming_length};
@@ -608,6 +627,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
             // is between locus and next, we use locus as the reference point for determining if
             // future waypoints can be coalesced.
             segment_start = locus;
+            previous_blend_takes_half_of_segment = blend.takes_half_outgoing;
         } else {
             // No blend: emit linear from current_position to locus.
             segment::linear linear_data{current_position, *locus};
@@ -617,6 +637,7 @@ path path::create(const waypoint_accumulator& waypoints, const options& opts) {
 
             xt::noalias(current_position) = *locus;
             segment_start = locus;
+            previous_blend_takes_half_of_segment = false;
         }
     }
 

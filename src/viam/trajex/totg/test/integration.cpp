@@ -2787,9 +2787,13 @@ BOOST_AUTO_TEST_CASE(failed_trajectory_c89a6776_4c48331e_trajectory_generation) 
         k_local_joint_kinematics_tolerance_override);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_1d6726c5_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-1d6726c5d9b8d3af076d8b0979e818c1_plan001_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_1d6726c5_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 7.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 24.0;
+    generate_trajectory_from_replay_file("orbsanding-1d6726c5d9b8d3af076d8b0979e818c1_plan001_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan002_trajectory_generation, *boost::unit_test::disabled()) {

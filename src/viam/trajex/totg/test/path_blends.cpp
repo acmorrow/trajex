@@ -679,4 +679,21 @@ BOOST_AUTO_TEST_CASE(z_staircase_adjacent_blends_emit_lccl) {
     BOOST_CHECK_EQUAL(path_type_sequence(p), "LCCL");
 }
 
+// The same topology as the Z-staircase, but on waypoints where the rounding does not work
+// out. Both blends take exactly half of the short middle leg, so nothing of it remains, yet
+// subtracting the second trim from the distance left after the first blend comes out two ULPs
+// long, which the representability guard keeps. Field waypoints from orbsanding_1d6726c5,
+// where that sliver became the start of an infeasible switching point.
+BOOST_AUTO_TEST_CASE(blends_taking_half_of_the_same_leg_emit_adjacent_arcs) {
+    using namespace viam::trajex::totg;
+    const xmatrix<> waypoints = {
+        {4.035506923596518, -0.6872436019104348, -1.1330972471743401, 3.1511543100874206, 0.44919960780984386, -0.010755407914024963},
+        {4.038372872954921, -0.6849832425285033, -1.1291366551604054, 3.1510064128249624, 0.44741562156588255, -0.010581739767723697},
+        {4.038593051686501, -0.6848457368400501, -1.1288382298157824, 3.1509948730460766, 0.44724917122787927, -0.010571710262542519},
+        {4.043258608017244, -0.6822986225264079, -1.124314005536449, 3.142798195912856, 0.4445389556470222, -0.0013979901641557936},
+    };
+    const path p = path::create(waypoints, path::options{}.set_max_blend_deviation(0.008726646259971648));
+    BOOST_CHECK_EQUAL(path_type_sequence(p), "LCCL");
+}
+
 BOOST_AUTO_TEST_SUITE_END()  // extremal_path_construction_tests
