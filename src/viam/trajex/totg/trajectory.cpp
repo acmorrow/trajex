@@ -1600,7 +1600,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // Determine which limit was violated and classify as source or sink. These curves
                     // can cross and we may violate both simultaneously. If the acceleration limit was
                     // violated it is classified first, and a sink there is a sink. If it is a source but
-                    // the velocity limit was violated too, the velocity curve decides (RSDK-14110).
+                    // the velocity limit was violated too, the velocity curve logic below decides.
                     //
                     // Either way, the violated curve is classified at next_point.s, and on the curve
                     // rather than at next_point.s_dot. Bisection leaves next_point in bounds and
@@ -1672,11 +1672,13 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // We hit the velocity curve, possibly along with an acceleration curve judged a source
                     // above. Check if we are trapped, can escape, or can follow. Commits clamp to the lower
                     // of the two curves, which is the velocity curve unless both were violated.
-                    cache.path_cursor.seek(next_point.s);
                     const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
                         next_q_prime, next_q_double_prime, next_s_dot_max_vel, traj.options_.max_acceleration, traj.options_.epsilon);
                     const auto min_phase_slope = on_curve_bounds.s_ddot_min / next_s_dot_max_vel;
-                    const auto max_phase_slope = on_curve_bounds.s_ddot_max / next_s_dot_max_vel;
+
+                    // We need to seek to next because the `compute` calls here take the cursor, which must hold
+                    // the position associated with the q_prime and q_double_prime arguments.
+                    cache.path_cursor.seek(next_point.s);
                     const auto next_limits =
                         compute_velocity_limits_and_components(next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_);
                     const auto vel_curve_slope = compute_velocity_limit_derivative_with_tcp(
@@ -1689,20 +1691,14 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             .breach = breach_point, .s_dot_max_acc = breach_s_dot_max_acc, .s_dot_max_vel = breach_s_dot_max_vel};
                     }
 
-                    if (max_phase_slope < vel_curve_slope) {
-                        // The velocity curve rises faster than we can accelerate, so the trajectory
-                        // naturally falls away from the limit. This was numerical overshoot. Accept
-                        // the breach point as valid since we'll naturally escape from it, but clamp
-                        // velocity to avoid starting in a forbidden region.
-                        next_point = breach_point;
-                        next_point.s_dot = std::min(breach_s_dot_max_acc, breach_s_dot_max_vel);
-                        return std::nullopt;
-                    }
+                    // Not trapped, so this was numerical overshoot, and we either escape or follow. If the
+                    // velocity curve rises faster than we can accelerate, the trajectory falls away from it;
+                    // otherwise its slope is within our acceleration authority and we can follow it. Either way,
+                    // accept the breach point clamped to the lower of the two curves, which avoids starting in a
+                    // forbidden region. If that is the velocity curve, the next iteration detects "at velocity
+                    // limit" and chooses between tangent and maximum acceleration itself, avoiding repeated
+                    // bisection.
 
-                    // The curve slope is within our acceleration authority, so we can follow it
-                    // tangentially. Accept the breach point as our next position and clamp velocity
-                    // to the limit so the next iteration detects "at velocity limit" and uses tangent
-                    // acceleration rather than max acceleration, avoiding repeated bisection.
                     next_point = breach_point;
                     next_point.s_dot = std::min(breach_s_dot_max_acc, breach_s_dot_max_vel);
                     return std::nullopt;
