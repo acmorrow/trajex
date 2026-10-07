@@ -1597,9 +1597,10 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                             .breach = breach_point, .s_dot_max_acc = breach_s_dot_max_acc, .s_dot_max_vel = breach_s_dot_max_vel};
                     }
 
-                    // Determine which limit was violated and classify as source or sink.
-                    // If acceleration limit violated at all, it takes precedence - these curves can
-                    // cross and we may violate both simultaneously.
+                    // Determine which limit was violated and classify as source or sink. These curves
+                    // can cross and we may violate both simultaneously. If the acceleration limit was
+                    // violated it is classified first, and a sink there is a sink. If it is a source but
+                    // the velocity limit was violated too, the velocity curve decides (RSDK-14110).
                     //
                     // Either way, the violated curve is classified at next_point.s, and on the curve
                     // rather than at next_point.s_dot. Bisection leaves next_point in bounds and
@@ -1654,17 +1655,23 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         }
 
                         // The trajectory naturally escapes back to the feasible region. This was
-                        // numerical overshoot from a source point. Commit the breach as our next
-                        // position and clamp s_dot to the acceleration limit, mirroring the
-                        // velocity-case escape patterns below. Without committing here the outer
-                        // integrator's delta_s would be zero (since the bisection collapsed
-                        // next_point onto current_point) and the loop would spin indefinitely.
-                        next_point = breach_point;
-                        next_point.s_dot = breach_s_dot_max_acc;
-                        return std::nullopt;
+                        // numerical overshoot from a source point. If the velocity limit was not also
+                        // violated, commit the breach as our next position and clamp s_dot to the
+                        // acceleration limit, mirroring the velocity-case escape patterns below. Without
+                        // committing here the outer integrator's delta_s would be zero (since the
+                        // bisection collapsed next_point onto current_point) and the loop would spin
+                        // indefinitely. If the velocity limit was violated too, escaping here could commit
+                        // a point above the velocity curve, so fall through and let it decide.
+                        if (breach_point.s_dot <= breach_s_dot_max_vel) {
+                            next_point = breach_point;
+                            next_point.s_dot = breach_s_dot_max_acc;
+                            return std::nullopt;
+                        }
                     }
 
-                    // We hit the velocity curve only. Check if we are trapped, can escape, or can follow.
+                    // We hit the velocity curve, possibly along with an acceleration curve judged a source
+                    // above. Check if we are trapped, can escape, or can follow. Commits clamp to the lower
+                    // of the two curves, which is the velocity curve unless both were violated.
                     cache.path_cursor.seek(next_point.s);
                     const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
                         next_q_prime, next_q_double_prime, next_s_dot_max_vel, traj.options_.max_acceleration, traj.options_.epsilon);
@@ -1688,7 +1695,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                         // the breach point as valid since we'll naturally escape from it, but clamp
                         // velocity to avoid starting in a forbidden region.
                         next_point = breach_point;
-                        next_point.s_dot = breach_s_dot_max_vel;
+                        next_point.s_dot = std::min(breach_s_dot_max_acc, breach_s_dot_max_vel);
                         return std::nullopt;
                     }
 
@@ -1697,7 +1704,7 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // to the limit so the next iteration detects "at velocity limit" and uses tangent
                     // acceleration rather than max acceleration, avoiding repeated bisection.
                     next_point = breach_point;
-                    next_point.s_dot = breach_s_dot_max_vel;
+                    next_point.s_dot = std::min(breach_s_dot_max_acc, breach_s_dot_max_vel);
                     return std::nullopt;
                 }();
 
