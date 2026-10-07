@@ -1601,16 +1601,31 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     // If acceleration limit violated at all, it takes precedence - these curves can
                     // cross and we may violate both simultaneously.
                     //
-                    // We analyze the trajectory at next_point (the last feasible point) to determine
-                    // if it's heading into or away from the infeasible region.
+                    // Either way, the violated curve is classified at next_point.s, and on the curve
+                    // rather than at next_point.s_dot. Bisection leaves next_point in bounds and
+                    // breach_point out of bounds, less than epsilon apart. A breach_point on the
+                    // segment end resolves to the start of the next segment and returns above, so
+                    // here both lie inside the current segment. The curve need not be differentiable
+                    // between them even so: a Case 2 extremum, or a change in which joint (or pair of
+                    // joints, for the acceleration curve) is binding, can fall in that interval, so
+                    // only next_point reliably describes the curve we hit. Source and sink are
+                    // properties of the curve itself: off the curve, the acceleration bounds differ
+                    // from their values on it by an amount that scales with q''/q', which is
+                    // unbounded on tight blends. The bounds are computed unchecked because on the
+                    // curve they meet, and rounding may cross them.
+                    //
+                    // When the classification is numerical overshoot, we commit breach_point, clamped
+                    // to the curve, as our next position. Committing next_point instead could leave
+                    // delta_s at zero and spin the loop.
 
                     if (breach_point.s_dot >= breach_s_dot_max_acc) {
                         // Check whether trajectory naturally escapes or drives deeper into infeasible region.
 
-                        // Compute phase slope at next_point (feasible) using already-available data.
-                        const auto [next_s_ddot_min, next_s_ddot_max] = compute_acceleration_bounds(
-                            next_q_prime, next_q_double_prime, next_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
-                        const auto next_phase_slope = next_s_ddot_max / next_point.s_dot;
+                        // On the acceleration limit curve the feasible range of s_ddot collapses to a single
+                        // value, which fixes the phase slope of any trajectory riding it.
+                        const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
+                            next_q_prime, next_q_double_prime, next_s_dot_max_acc, traj.options_.max_acceleration, traj.options_.epsilon);
+                        const auto next_phase_slope = on_curve_bounds.s_ddot_max / next_s_dot_max_acc;
 
                         // Compute acceleration curve slope by looking at next_point and a point before it.
                         const auto before_next = next_point.s - arc_length{traj.options_.epsilon};
@@ -1650,21 +1665,15 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                     }
 
                     // We hit the velocity curve only. Check if we are trapped, can escape, or can follow.
-                    //
-                    // TODO: We might be able to avoid recomputing these since we could track them in the bisection loop
-                    // like we do for next.
-                    cache.path_cursor.seek(breach_point.s);
-                    const auto& breach_q_prime = cache.path_cursor.tangent_ref();
-                    const auto& breach_q_double_prime = cache.path_cursor.curvature_ref();
-
-                    const auto [breach_s_ddot_min, breach_s_ddot_max] = compute_acceleration_bounds(
-                        breach_q_prime, breach_q_double_prime, breach_point.s_dot, traj.options_.max_acceleration, traj.options_.epsilon);
-                    const auto min_phase_slope = breach_s_ddot_min / breach_point.s_dot;
-                    const auto max_phase_slope = breach_s_ddot_max / breach_point.s_dot;
-                    const auto breach_limits =
-                        compute_velocity_limits_and_components(breach_q_prime, breach_q_double_prime, cache.path_cursor, traj.options_);
+                    cache.path_cursor.seek(next_point.s);
+                    const auto on_curve_bounds = compute_acceleration_bounds_unchecked(
+                        next_q_prime, next_q_double_prime, next_s_dot_max_vel, traj.options_.max_acceleration, traj.options_.epsilon);
+                    const auto min_phase_slope = on_curve_bounds.s_ddot_min / next_s_dot_max_vel;
+                    const auto max_phase_slope = on_curve_bounds.s_ddot_max / next_s_dot_max_vel;
+                    const auto next_limits =
+                        compute_velocity_limits_and_components(next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_);
                     const auto vel_curve_slope = compute_velocity_limit_derivative_with_tcp(
-                        breach_q_prime, breach_q_double_prime, cache.path_cursor, traj.options_, breach_limits.joint, breach_limits.tcp);
+                        next_q_prime, next_q_double_prime, cache.path_cursor, traj.options_, next_limits.joint, next_limits.tcp);
 
                     if (min_phase_slope > vel_curve_slope) {
                         // The velocity curve drops faster than we can follow while respecting the
