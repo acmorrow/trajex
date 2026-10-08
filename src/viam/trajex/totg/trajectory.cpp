@@ -1707,30 +1707,29 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
                 const auto delta_s = next_point.s - current_point.s;
                 const auto delta_s_dot = next_point.s_dot - current_point.s_dot;
 
-                // When bisection converges to the same arc length, we're at a segment boundary.
-                // The cursor has already advanced to the next segment during seek operations.
+                // No progress means either a limit too close for bisection to resolve, typically the curve
+                // stepping down at a boundary just ahead, or a stall that would repeat forever.
                 if (delta_s == arc_length{0.0}) {
-                    if (first_forward_observer != nullptr) {
-                        throw std::runtime_error{"Cannot advance from initial forward position"};
+                    if (!limit_hit_event) [[unlikely]] {
+                        throw std::runtime_error{"TOTG algorithm error: forward integration made no progress without hitting a limit"};
                     }
 
-                    if (limit_hit_event) {
-                        // Stuck due to limit in new segment - record position for intersection detection.
-                        traj.integration_points_.push_back({.time = current_time,
-                                                            .s = current_point.s,
-                                                            .s_dot = current_point.s_dot,
-                                                            .s_ddot = arc_acceleration{std::numeric_limits<double>::quiet_NaN()}});
+                    traj.integration_points_.push_back({.time = current_time,
+                                                        .s = current_point.s,
+                                                        .s_dot = current_point.s_dot,
+                                                        .s_ddot = arc_acceleration{std::numeric_limits<double>::quiet_NaN()}});
 
-                        if (traj.options_.observer) {
-                            traj.options_.observer->on_hit_limit_curve(traj, *limit_hit_event);
-                        }
-
-                        cache.path_cursor.seek(current_point.s);
-                        return find_switching_point(&cache.switching_points, cache.path_cursor.plain(), traj.options_);
+                    // On a first step, the observer is owed the forward start before the limit hit.
+                    if (auto* const observer = std::exchange(first_forward_observer, nullptr)) {
+                        observer->on_started_forward_integration(traj, {.start = {current_point.s, current_point.s_dot}});
                     }
 
-                    // Crossed segment boundary without hitting limit - try again with new segment geometry.
-                    continue;
+                    if (traj.options_.observer) {
+                        traj.options_.observer->on_hit_limit_curve(traj, *limit_hit_event);
+                    }
+
+                    cache.path_cursor.seek(current_point.s);
+                    return find_switching_point(&cache.switching_points, cache.path_cursor.plain(), traj.options_);
                 }
 
                 const auto s_dot_average = midpoint(current_point.s_dot, next_point.s_dot);
@@ -2213,10 +2212,24 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
             }
         };
 
+        constexpr auto ensure_progress = [](const auto& integrate) {
+            return [&integrate](const switching_point& from) {
+                auto to = integrate(from);
+                if (to.point.s <= from.point.s) [[unlikely]] {
+                    std::ostringstream oss;
+                    oss << "TOTG algorithm error: forward integration made no progress between switching points. "
+                        << "From: s=" << from.point.s << " s_dot=" << from.point.s_dot << ". "
+                        << "To: s=" << to.point.s << " s_dot=" << to.point.s_dot;
+                    throw std::runtime_error{oss.str()};
+                }
+                return to;
+            };
+        };
+
         try {
             switching_point sp = {.point = {arc_length{0}, arc_velocity{0}}, .kind = switching_point_kind::k_path_begin};
             while (sp.kind != switching_point_kind::k_path_end) {
-                sp = integrate_backwards_from(integrate_forward_from(sp));
+                sp = integrate_backwards_from(ensure_progress(integrate_forward_from)(sp));
             }
         } catch (...) {
             // On any exception, notify any observer with the invalid trajectory before traj is destroyed.

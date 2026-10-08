@@ -2621,13 +2621,13 @@ BOOST_AUTO_TEST_CASE(lab_sander_05072026_backward_integration_exceeded_limit_cur
 // The underlying motion stays feasible (s and s_dot are continuous, and the next step restamps the
 // same point with a valid acceleration), so every integration point's s_ddot must lie within its
 // feasible [s_ddot_min, s_ddot_max] band. The phase-plane acceleration-bound check inside
-// validate_trajectory_invariants guards this: the replayed gp12 move stamps twenty points whose
-// s_ddot exceeds the band by two or more orders of magnitude, far beyond the tolerance below,
-// which is sized only for the baseline band overshoot shared with the other replay scenarios.
-// Disabled for now: the artifact is still present, so the phase-plane check fails on this replay.
-BOOST_AUTO_TEST_CASE(gp12_forward_step_sddot_within_acceleration_bounds, *boost::unit_test::disabled()) {
+// validate_trajectory_invariants guards this: the replayed gp12 move stamped twenty points whose
+// s_ddot exceeded the band by two or more orders of magnitude, far beyond the tolerance below.
+// The noise-floor steps came from ULP-scale linear segments between blends, which path construction
+// no longer emits.
+BOOST_AUTO_TEST_CASE(gp12_forward_step_sddot_within_acceleration_bounds) {
     // TODO(RSDK-13890): Reduce these tolerances
-    constexpr auto k_local_trajectory_invariants_tolerance_override = 60.0;
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 1.0;
     constexpr auto k_local_joint_kinematics_tolerance_override = 9.0;
     generate_trajectory_from_replay_file("gp12_forward_step_sddot_exceeds_bounds-20260624.trajex-totg-replay.json",
                                          k_local_trajectory_invariants_tolerance_override,
@@ -2688,15 +2688,12 @@ BOOST_AUTO_TEST_CASE(gp12_tcp_terminal_acceleration_sentinel_sample) {
     BOOST_CHECK_NO_THROW(static_cast<void>(traj.create_cursor().seek(traj.duration()).sample()));
 }
 
-// Every integration point's s_ddot must lie within its feasible [s_ddot_min, s_ddot_max] band. This
-// gp12 move (1.2 m/s TCP cap) contains ghost segments: linear segments exactly one ULP long. Stepping
-// across one gives a dt on the order of 1e-16, so the finite difference s_ddot = delta_s_dot / dt
-// divides rounding residue by a noise-floor dt and stamps an acceleration in the thousands. s and
-// s_dot stay continuous, so only the stamped acceleration is wrong.
-//
-// TODO(RSDK-13890): Disabled for now: the ghost segments are still present, so this replay still
-// fails.
-BOOST_AUTO_TEST_CASE(gp12_forward_truncated_step_sddot_within_bounds, *boost::unit_test::disabled()) {
+// Every integration point's s_ddot must lie within its feasible [s_ddot_min, s_ddot_max] band. Path
+// construction for this gp12 move (1.2 m/s TCP cap) used to emit linear segments exactly one ULP long
+// between blends. Stepping across one gave a dt on the order of 1e-16, so the finite difference
+// s_ddot = delta_s_dot / dt divided rounding residue by a noise-floor dt and stamped an acceleration
+// in the thousands. s and s_dot stayed continuous, so only the stamped acceleration was wrong.
+BOOST_AUTO_TEST_CASE(gp12_forward_truncated_step_sddot_within_bounds) {
     auto planner = viam::trajex::totg::replay_planner::create(std::filesystem::path(VIAM_TRAJEX_TEST_DATA_DIR) /
                                                               "gp12_forward_truncated_step_sddot_spike-20260623.trajex-totg-replay.json");
     auto outcome = planner.execute([](const auto&, auto tx, const auto&) { return tx; });
@@ -2750,9 +2747,13 @@ BOOST_AUTO_TEST_CASE(orbsanding_462bf0f9_trajectory_generation, *boost::unit_tes
         "orbsanding-462bf0f94d9ebb7ccc71c6d8cd621533_plan002_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_9b8bc795_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-9b8bc79585b192039f38325713fb7a12_plan001_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_9b8bc795_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 213.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 50.0;
+    generate_trajectory_from_replay_file("orbsanding-9b8bc79585b192039f38325713fb7a12_plan001_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(orbsanding_a40fcf17_trajectory_generation, *boost::unit_test::disabled()) {
