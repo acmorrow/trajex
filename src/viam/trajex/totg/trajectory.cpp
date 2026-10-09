@@ -405,26 +405,27 @@ struct eq40_result {
 // Try to evaluate Eq. 40 delta:
 //   Delta(s) = s_ddot_min(s, s_dot_max_vel(s)) / s_dot_max_vel(s) - d/ds s_dot_max_vel(s)
 // Returns std::nullopt when Eq. 40 is not evaluable at this geometry (degenerate
-// velocity limit, acceleration limit below velocity limit, singular derivative,
-// or infeasible acceleration bounds).
+// velocity limit or singular derivative).
+//
+// Delta is evaluated even where the acceleration limit curve lies below the velocity limit curve,
+// so the acceleration bounds are computed unchecked: above the acceleration curve they are inverted.
+// The trapped stretch that precedes a velocity escape can lie partly or wholly beneath the
+// acceleration curve, and treating it as a gap loses the positive side of the sign change. A
+// switching point found above the acceleration curve is unreachable and is rejected by the caller.
 [[nodiscard]] std::optional<eq40_result> try_compute_eq40_delta(const path::cursor& cursor, const trajectory::options& opt) {
     const auto q_prime = cursor.tangent();
     const auto q_double_prime = cursor.curvature();
 
     const auto vl = compute_velocity_limits_and_components(q_prime, q_double_prime, cursor, opt);
-    const auto s_dot_max_acc = vl.s_dot_max_acc;
     const auto s_dot_max_vel = vl.s_dot_max_vel;
 
     if (s_dot_max_vel == arc_velocity{0.0}) {
         return std::nullopt;
     }
 
-    if (s_dot_max_acc < s_dot_max_vel) {
-        return std::nullopt;
-    }
-
     const auto curve_slope = compute_velocity_limit_derivative_with_tcp(q_prime, q_double_prime, cursor, opt, vl.joint, vl.tcp);
-    const auto accel_bounds = compute_acceleration_bounds(q_prime, q_double_prime, s_dot_max_vel, opt.max_acceleration, opt.epsilon);
+    const auto accel_bounds =
+        compute_acceleration_bounds_unchecked(q_prime, q_double_prime, s_dot_max_vel, opt.max_acceleration, opt.epsilon);
 
     const auto trajectory_slope = accel_bounds.s_ddot_min / s_dot_max_vel;
     return eq40_result{.delta = trajectory_slope - curve_slope, .s_dot_max_vel = s_dot_max_vel};
@@ -1134,6 +1135,15 @@ std::optional<switching_point> refine_continuous_velocity_switching_point(path::
 std::optional<switching_point> find_continuous_velocity_switching_point(path::cursor cursor,
                                                                         arc_length max_search_hint,
                                                                         const trajectory::options& opt) {
+    // Delta is evaluated on the velocity curve even where the acceleration curve lies beneath it (see
+    // `try_compute_eq40_delta`), so a refined switching point may be one the trajectory cannot reach.
+    const auto below_acceleration_curve = [&](const switching_point& sp) {
+        auto at = cursor;
+        at.seek(sp.point.s);
+        const auto vl = compute_velocity_limits_and_components(at.tangent(), at.curvature(), at, opt);
+        return opt.epsilon.wrap(sp.point.s_dot) <= opt.epsilon.wrap(vl.s_dot_max_acc);
+    };
+
     auto search_position = cursor.position();
     while (search_position <= max_search_hint && search_position < cursor.path().length()) {
         const auto coarse_bracket = find_eq40_escape_bracket(cursor, search_position, max_search_hint, opt);
@@ -1142,7 +1152,7 @@ std::optional<switching_point> find_continuous_velocity_switching_point(path::cu
         }
 
         const auto refined = refine_continuous_velocity_switching_point(cursor, *coarse_bracket, opt);
-        if (refined.has_value()) {
+        if (refined.has_value() && below_acceleration_curve(*refined)) {
             return refined;
         }
 

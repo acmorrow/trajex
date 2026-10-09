@@ -2760,9 +2760,13 @@ BOOST_AUTO_TEST_CASE(orbsanding_9b8bc795_trajectory_generation) {
                                          k_local_joint_kinematics_tolerance_override);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_a40fcf17_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-a40fcf17e8a3bb17d6998a5cd028d736_plan001_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_a40fcf17_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 100.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 7.0;
+    generate_trajectory_from_replay_file("orbsanding-a40fcf17e8a3bb17d6998a5cd028d736_plan001_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(failed_trajectory_6a16b075_533248da_trajectory_generation, *boost::unit_test::disabled()) {
@@ -2801,9 +2805,13 @@ BOOST_AUTO_TEST_CASE(orbsanding_1d6726c5_trajectory_generation) {
                                          k_local_joint_kinematics_tolerance_override);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan002_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan002_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan002_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 2.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 20.0;
+    generate_trajectory_from_replay_file("orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan002_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan003_trajectory_generation) {
