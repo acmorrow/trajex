@@ -1004,14 +1004,13 @@ std::optional<eq40_escape_bracket> find_eq40_escape_bracket(path::cursor search_
         const auto current_segment = *search_cursor;
         const auto current_segment_end = current_segment.end();
         if (current_segment_end != previous_segment_end) {
-            // Adjacency is required as well: a step large enough to clear a whole segment leaves
-            // nothing meaningful to compare the tangents of.
-            const auto adjacent = (current_segment.start() == previous_segment_end);
-            const auto continuous = adjacent && [&] {
-                const auto dot = xt::sum(previous_segment.tangent(previous_segment_end) * current_segment.tangent(previous_segment_end))();
-                return opt.epsilon.wrap(dot) == opt.epsilon.wrap(1.0);
-            }();
-            if (!continuous) {
+            // This cannot fire. The step at the bottom of the loop either falls more than two
+            // epsilon short of the segment end, staying inside the segment, or is snapped exactly
+            // onto it; the hint clamp only shortens it. Seeking to a segment's end yields the
+            // segment that begins there, and the loop exits before evaluating the path's end.
+            assert(current_segment.start() == previous_segment_end);
+            const auto dot = xt::sum(previous_segment.tangent(previous_segment_end) * current_segment.tangent(previous_segment_end))();
+            if (opt.epsilon.wrap(dot) != opt.epsilon.wrap(1.0)) {
                 has_previous_delta = false;
             }
             previous_segment = current_segment;
@@ -1047,7 +1046,16 @@ std::optional<eq40_escape_bracket> find_eq40_escape_bracket(path::cursor search_
         // NOTE: The use of `opt.delta` here is definitely cheating: it is a duration,
         // not a distance. However, `opt.delta` is configurable and works as a practical
         // starting point for now.
-        const auto next_position = std::min(current_position + arc_length{opt.delta.count()}, max_search_hint);
+        //
+        // Clamp and quantize to the segment end exactly as forward integration does: a step that
+        // would reach or pass the end, or fall short of it by less than two epsilon, lands on it.
+        // Stopping at every boundary means no segment is ever stepped over, so a sign change across
+        // a short segment cannot hide inside a stride.
+        auto next_position = current_position + arc_length{opt.delta.count()};
+        if (const auto double_epsilon = opt.epsilon * 2.0; double_epsilon.wrap(next_position) >= double_epsilon.wrap(current_segment_end)) {
+            next_position = current_segment_end;
+        }
+        next_position = std::min(next_position, max_search_hint);
         if (next_position == current_position) {
             break;
         }

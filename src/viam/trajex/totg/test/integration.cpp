@@ -1822,7 +1822,7 @@ BOOST_AUTO_TEST_CASE(RSDK_13450_nonfirst_extremum_is_switching_point) {
 
     // TODO(RSDK-12981): Use a very relaxed tolerance in this test since empirically we require it;
     // the expectation is that fixing RSDK-12981 will remove the need for this.
-    fixture.validation_tolerance_percent *= 15;
+    fixture.validation_tolerance_percent *= 13;
 
     const xvector<> max_velocity = {100.0, 100.0, 100.0, 100.0, 100.0};
     const xvector<> max_acceleration = {6, 0.75, 2, 0.5, 4};
@@ -1862,7 +1862,7 @@ BOOST_DATA_TEST_CASE(spiral_rectangle_6dof, boost::unit_test::data::make(get_spi
 
     // NOTE: Using relaxed tolerance due to known acceleration bound violations
     // in some integration points for trajectories with reversals (likely RSDK-12981).
-    f.validation_tolerance_percent *= 10;
+    f.validation_tolerance_percent *= 8;
 
     f.set_waypoints_deg(get_spiral_rectangle_waypoints_deg())
         .set_max_velocity(profile.max_velocity)
@@ -2476,7 +2476,7 @@ xmatrix<> waypoints_joint2_moving() {
 trajectory run_zero_limit_success(const xmatrix<>& waypoints, const xvector<>& max_vel, const xvector<>& max_acc) {
     trajectory_test_fixture fix{3};
     // TODO(RSDK-12981): Tolerances, etc.
-    fix.validation_tolerance_percent *= 10;
+    fix.validation_tolerance_percent *= 9;
     fix.set_waypoints_rad(waypoints)
         .set_max_velocity(max_vel)
         .set_max_acceleration(max_acc)
@@ -2584,7 +2584,7 @@ BOOST_AUTO_TEST_SUITE(replay_regression_tests)
 
 BOOST_AUTO_TEST_CASE(gp12_backward_integration_exceeded_limit_curve) {
     // TODO(RSDK-13890): Reduce these tolerances
-    constexpr auto k_local_trajectory_invariants_tolerance_override = 220.0;
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 217.0;
     constexpr auto k_local_joint_kinematics_tolerance_override = 38.0;
     generate_trajectory_from_replay_file("gp12_backward_integration_exceeded-20260305.trajex-totg-replay.json",
                                          k_local_trajectory_invariants_tolerance_override,
@@ -2597,7 +2597,7 @@ BOOST_AUTO_TEST_CASE(gp12_backward_integration_exceeded_limit_curve) {
 // therefore skipped until that defect is fixed.
 BOOST_AUTO_TEST_CASE(gp12_splice_point_infeasible_acceleration) {
     // TODO(RSDK-13890): Reduce this tolerance
-    constexpr auto k_local_joint_kinematics_tolerance_override = 57.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 56.0;
     generate_trajectory_from_replay_file(
         "gp12_splice_point_infeasible-20260305.trajex-totg-replay.json", std::nullopt, k_local_joint_kinematics_tolerance_override);
 }
@@ -2608,7 +2608,7 @@ BOOST_AUTO_TEST_CASE(gp12_splice_point_infeasible_acceleration) {
 // therefore skipped until that defect is fixed.
 BOOST_AUTO_TEST_CASE(lab_sander_05072026_backward_integration_exceeded_limit_curve) {
     // TODO(RSDK-13890): Reduce this tolerance
-    constexpr auto k_local_joint_kinematics_tolerance_override = 77.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 76.0;
     generate_trajectory_from_replay_file("lab_sander_backward_integration_exceeded-20260507.trajex-totg-replay.json",
                                          std::nullopt,
                                          k_local_joint_kinematics_tolerance_override);
@@ -2641,8 +2641,8 @@ BOOST_AUTO_TEST_CASE(vik_182_forward_integration_acc_natural_escape_stall) {
     // returned nullopt without committing the breach. Tripwire for any future
     // change that resurrects that path.
     // TODO(RSDK-13890): Reduce these tolerances
-    constexpr auto k_local_trajectory_invariants_tolerance_override = 172.0;
-    constexpr auto k_local_joint_kinematics_tolerance_override = 89.0;
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 170.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 88.0;
     generate_trajectory_from_replay_file("VIK-182-stall.trajex-totg-replay.json",
                                          k_local_trajectory_invariants_tolerance_override,
                                          k_local_joint_kinematics_tolerance_override);
@@ -2735,16 +2735,20 @@ BOOST_AUTO_TEST_CASE(gp12_forward_truncated_step_sddot_within_bounds) {
 
 BOOST_AUTO_TEST_CASE(orbsanding_3df3ece3_trajectory_generation) {
     // TODO(RSDK-13890): Reduce these tolerances
-    constexpr auto k_local_trajectory_invariants_tolerance_override = 505.0;
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 100.0;
     constexpr auto k_local_joint_kinematics_tolerance_override = 16.0;
     generate_trajectory_from_replay_file("orbsanding-3df3ece3127a07f6554713f4449cc8b2_plan001_step002_work.trajex-totg-replay.json",
                                          k_local_trajectory_invariants_tolerance_override,
                                          k_local_joint_kinematics_tolerance_override);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_462bf0f9_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-462bf0f94d9ebb7ccc71c6d8cd621533_plan002_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_462bf0f9_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 5.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 21.0;
+    generate_trajectory_from_replay_file("orbsanding-462bf0f94d9ebb7ccc71c6d8cd621533_plan002_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(orbsanding_9b8bc795_trajectory_generation) {
@@ -2802,9 +2806,13 @@ BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan002_trajectory_generation, *boost::
         "orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan002_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
 }
 
-BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan003_trajectory_generation, *boost::unit_test::disabled()) {
-    generate_trajectory_from_replay_file(
-        "orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan003_step002_work.trajex-totg-replay.json", std::nullopt, std::nullopt);
+BOOST_AUTO_TEST_CASE(orbsanding_3c08d6c4_plan003_trajectory_generation) {
+    // TODO(RSDK-13890): Reduce these tolerances
+    constexpr auto k_local_trajectory_invariants_tolerance_override = 1.0;
+    constexpr auto k_local_joint_kinematics_tolerance_override = 10.0;
+    generate_trajectory_from_replay_file("orbsanding-3c08d6c43fb2f6f62fb2994307139311_plan003_step002_work.trajex-totg-replay.json",
+                                         k_local_trajectory_invariants_tolerance_override,
+                                         k_local_joint_kinematics_tolerance_override);
 }
 
 BOOST_AUTO_TEST_CASE(failed_trajectory_2f698337_eae1c945_trajectory_generation) {

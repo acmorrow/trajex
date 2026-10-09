@@ -4,10 +4,12 @@ Visualize trajectory generation from JSON output.
 
 Usage:
     python scripts/visualize_trajectory.py trajectory.json
+    trajex_replay_trajectory record.json | python scripts/visualize_trajectory.py --title record
 
 Double-click any plot to open it in a window of its own.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -398,21 +400,25 @@ def plot_arc_acceleration(data, ax):
 
 
 def main():
-    if len(sys.argv) >= 2:
-        filename = sys.argv[1]
-        title = os.path.basename(filename)
+    parser = argparse.ArgumentParser(description="Visualize trajectory generation from JSON output.")
+    parser.add_argument("filename", nargs="?", help="trajectory JSON file (reads stdin when omitted)")
+    parser.add_argument("--title", help="window title, e.g. to identify the record when the JSON arrives on stdin")
+    args = parser.parse_args()
+
+    if args.filename:
+        title = os.path.basename(args.filename)
         try:
-            with open(filename) as f:
+            with open(args.filename) as f:
                 data = load_trajectory(f)
         except FileNotFoundError:
-            print(f"Error: File not found: {filename}", file=sys.stderr)
+            print(f"Error: File not found: {args.filename}", file=sys.stderr)
             sys.exit(1)
     else:
         title = "stdin"
         data = load_trajectory(sys.stdin)
 
-    # Allow the caller to label the window (e.g. when the JSON arrives on stdin).
-    title = os.environ.get("GRAPH_TITLE", title)
+    # An explicit --title wins; GRAPH_TITLE remains for callers that already set it.
+    title = args.title or os.environ.get("GRAPH_TITLE", title)
 
     # Create figure with 3-row layout (taller to give phase plane more vertical space)
     fig = plt.figure(figsize=(14, 22), num=title)
