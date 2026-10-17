@@ -137,9 +137,9 @@ class VIAM_TRAJEX_TOTG_API trajectory {
         }
 
        private:
-        // Holds the lambda plumbing in the source file. The chain is already validated. Not
-        // hidden: `from` is a template, instantiated in the caller's translation unit, and
-        // calls this from there.
+        // Holds the lambda plumbing in the source file. The chain is already validated. This
+        // can't be hidden, because it's called from `from`, which is a template and so is
+        // instantiated in the caller's translation unit.
         static tcp_limits from_chain_(jacobian::kinematic_chain chain, double max_linear_velocity);
 
        public:
