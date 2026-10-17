@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include <viam/trajex/totg/export.hpp>
 #include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::jacobian {
@@ -17,7 +18,7 @@ namespace viam::trajex::jacobian {
 /// A validated URDF-style serial kinematic chain, parsed from an (n, 10)
 /// model-table tensor and held in chain order.
 ///
-class kinematic_chain {
+class VIAM_TRAJEX_TOTG_API kinematic_chain {
    public:
     ///
     /// Parses an (n, 10) tensor in the viam::sdk::ModelTable format into a
@@ -184,7 +185,7 @@ class kinematic_chain {
 
     // Per-revolute-joint world-frame axes and origins plus the end-effector
     // position.
-    struct chain_state_;
+    struct VIAM_TRAJEX_TOTG_HIDDEN chain_state_;
 
     // Constant per-row kinematics derived once at construction: the
     // parent-to-joint link transform (row-major 4x4) and, for revolute rows,
@@ -198,7 +199,7 @@ class kinematic_chain {
     // Validates the rows (joint types, axes) and counts actuated joints, then
     // precomputes the per-row constants; all public construction funnels
     // through here via `from`.
-    explicit kinematic_chain(std::vector<joint_row_> rows);
+    VIAM_TRAJEX_TOTG_HIDDEN explicit kinematic_chain(std::vector<joint_row_> rows);
 
     // Defined here, not in the source file: the deduced overloads above instantiate in the
     // caller's translation unit, so a definition there would have to be exported.
@@ -212,7 +213,7 @@ class kinematic_chain {
     // Evaluates the forward kinematics at joint positions q, capturing the
     // per-joint quantities the Jacobian assemblies need. Throws
     // std::invalid_argument on q-size mismatch.
-    chain_state_ compute_chain_state_(const xvector<>& q) const;
+    VIAM_TRAJEX_TOTG_HIDDEN chain_state_ compute_chain_state_(const xvector<>& q) const;
 
     std::vector<joint_row_> rows_;
     std::vector<row_constants_> constants_;
