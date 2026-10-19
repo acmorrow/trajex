@@ -12,9 +12,9 @@ Two inputs are accepted and auto-detected:
     the move can be re-planned and rendered.
 
 A realtime log records the executed trajectory, not the planner's phase plane,
-so re-planning regenerates the limit curves. The TCP limit and path tolerance
-are reproduced only if the log recorded them; older logs fall back to the driver
-default tolerance and a joint-only plan.
+so re-planning regenerates the limit curves. The path tolerance is reproduced
+only if the log recorded it; older logs fall back to the driver default. No arm
+driver records its kinematics, so the plan is joint-only.
 """
 
 import json
@@ -33,7 +33,7 @@ def realtime_to_replay(d):
         sys.exit('error: realtime log missing configuration velocity/acceleration limits')
 
     out = {
-        'schema_version': 2,
+        'schema_version': 3,
         'waypoints_rads': d['waypoints_rad'],
         'max_velocity_vec_rads_per_sec': max_vel,
         'max_acceleration_vec_rads_per_sec2': max_acc,
@@ -45,18 +45,6 @@ def realtime_to_replay(d):
         out['path_tolerance_delta_rads'] = DEFAULT_PATH_TOLERANCE_RADS
         print(f'note: realtime log records no path tolerance; assuming driver default '
               f'{DEFAULT_PATH_TOLERANCE_RADS}', file=sys.stderr)
-
-    # A TCP limit needs both the cap and the model-table; pass them through only
-    # together, matching the replay record's "both or neither" contract.
-    if 'tcp_max_linear_velocity' in d and 'model_table' in d:
-        out['tcp_max_linear_velocity'] = d['tcp_max_linear_velocity']
-        out['model_table'] = d['model_table']
-    elif 'tcp_max_linear_velocity' in d or 'model_table' in d:
-        print('note: realtime log has only one of TCP speed / model_table; '
-              'rendering joint-only (no TCP curve)', file=sys.stderr)
-    else:
-        print('note: realtime log records no TCP limit; rendering joint-only '
-              '(no TCP curve)', file=sys.stderr)
 
     return out
 

@@ -2,10 +2,11 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <viam/trajex/types/xt.hpp>
@@ -14,14 +15,18 @@ namespace viam::trajex::jacobian {
 
 // TODO(RSDK-14104): Remove duplicated code that exists in the viam-cpp-sdk
 
+// TODO: Move this to viam/trajex/kinematics/chain.hpp as viam::trajex::kinematics::chain, with the
+// builder as kinematics::chain::builder. The file and namespace are named for the Jacobian because
+// that was all this once computed, but the chain is the type and the Jacobian is one of the
+// things it evaluates.
+
 ///
 /// A validated serial kinematic chain, held in chain order.
 ///
-/// Chains are assembled with kinematic_chain::builder, or parsed from an (n, 10) model-table
-/// tensor. A finished chain is immutable and copyable. Each rotating or translating joint consumes
-/// one element of the joint vector q, in chain order; fixed joints consume none. A rotating joint's
-/// element is an angle in radians, and a translating joint's is a displacement in the length unit
-/// of the chain's translations.
+/// Chains are assembled with kinematic_chain::builder. A finished chain is immutable and copyable.
+/// Each rotating or translating joint consumes one element of the joint vector q, in chain order;
+/// fixed joints consume none. A rotating joint's element is an angle in radians, and a translating
+/// joint's is a displacement in the length unit of the chain's translations.
 ///
 class kinematic_chain {
    public:
@@ -46,38 +51,19 @@ class kinematic_chain {
     class builder;
 
     ///
-    /// Parses an (n, 10) tensor in the viam::sdk::ModelTable format into a
-    /// kinematic chain.
+    /// Reports each joint, from the base to the end effector, exactly as it was given to the
+    /// builder.
     ///
-    /// @param tensor (n, 10) tensor in the viam::sdk::ModelTable format
-    /// @return Validated kinematic chain
-    /// @throws std::invalid_argument on non-2D input, wrong column count, a
-    ///         non-integer joint-type encoding, an empty table, a prismatic
-    ///         joint, or a rotating row with zero-magnitude axis
+    /// The visitor is called once per joint with the arguments of the builder overload that added
+    /// it: (const joint_origin&) for a fixed joint, (const joint_origin&, const rotation_axis&) for
+    /// a rotating one, and (const joint_origin&, const translation_axis&) for a translating one.
+    /// Making the same calls on a builder rebuilds an identical chain, which is how a chain is
+    /// serialized and restored.
     ///
-    [[nodiscard]] static kinematic_chain from(const xmatrix<>& tensor);
-
+    /// @param visitor Callable accepting all three argument lists
     ///
-    /// Builds from a model table the caller holds in something other than an xmatrix.
-    ///
-    /// A caller already holding an xmatrix binds to the overload above and never reaches this.
-    ///
-    /// @throws std::invalid_argument if the table is not 2-dimensional, plus everything the
-    ///         overload above throws
-    ///
-    template <xrank_same_as_or_dynamic<xmatrix<>> T>
-    [[nodiscard]] static kinematic_chain from(const T& tensor) {
-        if (!xrank_is_same_as<xmatrix<>>(tensor)) {
-            throw std::invalid_argument("viam::trajex::jacobian: expected 2D model-table tensor, got " +
-                                        std::to_string(tensor.dimension()) + "D");
-        }
-        return from(xmatrix<>(tensor));
-    }
-
-    // Otherwise this converts into the xmatrix overload, which is the UB case.
-    template <xexpression_like T>
-        requires(!xrank_same_as_or_dynamic<T, xmatrix<>>)
-    static kinematic_chain from(const T&) = delete;
+    template <typename Visitor>
+    void visit_joints(Visitor&& visitor) const;
 
     ///
     /// Computes the geometric Jacobian at joint positions q.
@@ -110,7 +96,7 @@ class kinematic_chain {
         return jacobian(xvector<>(q));
     }
 
-    // As on from() above.
+    // Otherwise this converts into the xvector overload, which is the UB case.
     template <xexpression_like Q>
         requires(!xrank_same_as_or_dynamic<Q, xvector<>>)
     xmatrix<> jacobian(const Q&) const = delete;
@@ -211,36 +197,31 @@ class kinematic_chain {
         return linear_velocity_gain_at(xvector<>(q), xvector<>(q_prime), xvector<>(q_double_prime));
     }
 
-    // As on from() above, and any one wrong argument is enough.
+    // As on jacobian() above, and any one wrong argument is enough.
     template <xexpression_like Q, xexpression_like QP, xexpression_like QPP>
         requires(!(xrank_same_as_or_dynamic<Q, xvector<>> && xrank_same_as_or_dynamic<QP, xvector<>> &&
                    xrank_same_as_or_dynamic<QPP, xvector<>>))
     linear_velocity_gain linear_velocity_gain_at(const Q&, const QP&, const QPP&) const = delete;
 
    private:
-    // How a joint moves. This never leaves the class: the builder's method names and the
-    // tensor's type column are each translated into it at construction.
-    enum class joint_kind_ : std::uint8_t {
-        k_fixed,
-        k_rotational,
-        k_translational,
-    };
-
-    // A joint in the form the forward-kinematics walk consumes, with everything that does not
-    // depend on q already computed: the parent-to-joint origin transform (row-major 4x4) and, for
-    // a moving joint, its normalized local axis. The walk runs several times per integration
-    // step, so none of this is recomputed there.
-    struct joint_ {
-        joint_kind_ kind = joint_kind_::k_fixed;
-        std::array<double, 16> origin_tf{};
-        std::array<double, 3> unit_axis{};
-    };
+    // A joint is one of three types, and which one says how it moves, as the builder overload
+    // that added it does. Each holds what it was given, which visit_joints reports back so that a
+    // rebuilt chain is identical to this one, and what build derives from that once: everything
+    // the forward-kinematics walk needs that does not depend on q. The walk runs several times per
+    // integration step, so none of it is recomputed there. All three are defined after the class,
+    // since they hold the nested description types by value and those are not yet complete here.
+    struct joint_base_;
+    struct fixed_joint_;
+    template <typename Axis>
+    struct moving_joint_;
+    using rotating_joint_ = moving_joint_<rotation_axis>;
+    using translating_joint_ = moving_joint_<translation_axis>;
+    using joint_ = std::variant<fixed_joint_, rotating_joint_, translating_joint_>;
 
     // Per-moving-joint world-frame axes and origins plus the end-effector position.
     struct chain_state_;
 
-    // Takes joints that have already been validated by the builder or by `from`, and counts the
-    // moving ones.
+    // Takes joints the builder has already validated and derived, and counts the moving ones.
     explicit kinematic_chain(std::vector<joint_> joints);
 
     // Defined here, not in the source file: the deduced overloads above instantiate in the
@@ -287,6 +268,23 @@ struct kinematic_chain::rotation_axis {
 ///
 struct kinematic_chain::translation_axis {
     std::array<double, 3> direction{};
+};
+
+// What every joint has: its origin as given, and the parent-to-joint transform (row-major 4x4)
+// build derives from it.
+struct kinematic_chain::joint_base_ {
+    joint_origin origin;
+    std::array<double, 16> origin_tf;
+};
+
+struct kinematic_chain::fixed_joint_ : joint_base_ {};
+
+// A rotating or translating joint, which also has its axis as given and the normalized form
+// build derives from it.
+template <typename Axis>
+struct kinematic_chain::moving_joint_ : joint_base_ {
+    Axis axis;
+    std::array<double, 3> unit_axis;
 };
 
 ///
@@ -360,15 +358,25 @@ class kinematic_chain::builder {
     [[nodiscard]] kinematic_chain build() &&;
 
    private:
-    // Joints as the caller described them. Validation and the derived transforms wait for
-    // build(), which is the one place that can report an error with the joint's index.
-    struct pending_joint_ {
-        joint_kind_ kind;
-        joint_origin origin;
-        std::array<double, 3> axis;
-    };
-
-    std::vector<pending_joint_> joints_;
+    // Joints as the caller described them, with their derived values not yet filled in.
+    // Validation and derivation wait for build(), which is the one place that can report an error
+    // with the joint's index.
+    std::vector<joint_> joints_;
 };
+
+template <typename Visitor>
+void kinematic_chain::visit_joints(Visitor&& visitor) const {
+    for (const joint_& joint : joints_) {
+        std::visit(
+            [&]<typename Joint>(const Joint& j) {
+                if constexpr (std::is_same_v<Joint, fixed_joint_>) {
+                    visitor(j.origin);
+                } else {
+                    visitor(j.origin, j.axis);
+                }
+            },
+            joint);
+    }
+}
 
 }  // namespace viam::trajex::jacobian

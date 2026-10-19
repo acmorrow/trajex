@@ -22,20 +22,6 @@ void verify_path_visits_waypoints(const path& p, const xmatrix<>& waypoints, dou
 /// Example: a 3-waypoint path with a single circular blend yields "LCL".
 std::string path_type_sequence(const path& p);
 
-/// Yaskawa GP12 model table (viam::sdk::ModelTable tensor format): six revolute joints
-/// followed by a fixed tool row, transcribed from gp12.urdf.
-inline xmatrix<> gp12_model_table() {
-    return xmatrix<>{
-        {0, 0, 0.450, 0, 0, 0, 0, 0, 1, 0},
-        {0.155, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-        {0, 0, 0.614, 0, 0, 0, 0, -1, 0, 0},
-        {0.640, 0, 0.200, 0, 0, 0, -1, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, -1, 0, 0},
-        {0, 0, 0, 0, 0, 0, -1, 0, 0, 0},
-        {0.100, 0, 0, 3.14159265, -1.570796, 0, 0, 0, 0, 3},
-    };
-}
-
 /// The quaternion w, x, y, z for a URDF fixed-axis XYZ rpy, which composes as
 /// Rz(yaw) * Ry(pitch) * Rx(roll).
 inline std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double yaw) {
@@ -49,9 +35,9 @@ inline std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double
         (cr * cp * cy) + (sr * sp * sy), (sr * cp * cy) - (cr * sp * sy), (cr * sp * cy) + (sr * cp * sy), (cr * cp * sy) - (sr * sp * cy)};
 }
 
-/// The Yaskawa GP12 of gp12_model_table as a chain. The tool's origin uses the table's own
-/// truncated rpy rather than exact multiples of pi, so the two describe the same geometry to
-/// rounding and the regression tests that use either reproduce the same trajectories.
+/// The Yaskawa GP12: six revolute joints and a fixed tool, transcribed from gp12.urdf. The tool's
+/// origin keeps that file's truncated rpy rather than exact multiples of pi, as the model table it
+/// replaced did, so the regression tests that use it still run the arm they were written against.
 inline jacobian::kinematic_chain gp12_chain() {
     using joint_origin = jacobian::kinematic_chain::joint_origin;
     using rotation_axis = jacobian::kinematic_chain::rotation_axis;

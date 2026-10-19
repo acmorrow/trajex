@@ -4,10 +4,11 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace viam::trajex::jacobian {
@@ -89,19 +90,6 @@ mat4 axis_rotation4(const vec3& axis, double theta) {
     return r;
 }
 
-// 4x4 transform for a URDF link: rotation Rz(yaw) * Ry(pitch) * Rx(roll) with
-// translation xyz.
-mat4 link_transform(const vec3& xyz, const vec3& rpy) {
-    const mat4 rx = axis_rotation4({1.0, 0.0, 0.0}, rpy[0]);
-    const mat4 ry = axis_rotation4({0.0, 1.0, 0.0}, rpy[1]);
-    const mat4 rz = axis_rotation4({0.0, 0.0, 1.0}, rpy[2]);
-    mat4 out = matmul4(matmul4(rz, ry), rx);
-    at(out, 0, 3) = xyz[0];
-    at(out, 1, 3) = xyz[1];
-    at(out, 2, 3) = xyz[2];
-    return out;
-}
-
 // Rotate a 3-vector by the rotation part of a 4x4 transform.
 vec3 rotate(const mat4& transform, const vec3& v) {
     return {
@@ -158,14 +146,6 @@ vec3 linear_column(const auto& joint, const vec3& p_e) {
     return cross(joint.axis, {p_e[0] - joint.position[0], p_e[1] - joint.position[1], p_e[2] - joint.position[2]});
 }
 
-// Column-9 encodings of the model-table tensor, matching viam::sdk::ModelTable::JointType.
-enum class model_table_joint_type : std::uint8_t {
-    k_revolute = 0,
-    k_continuous = 1,
-    k_prismatic = 2,
-    k_fixed = 3,
-};
-
 }  // namespace
 
 // The world-frame axis and origin of each moving joint, plus the end-effector position, captured
@@ -204,77 +184,29 @@ kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvecto
     mat4 running_transform = identity4();
     std::size_t qi = 0;
     for (const joint_& joint : joints_) {
-        running_transform = matmul4(running_transform, joint.origin_tf);
-        if (joint.kind == joint_kind_::k_fixed) {
-            continue;
-        }
-
-        const bool translates = joint.kind == joint_kind_::k_translational;
-        state.joints.push_back({rotate(running_transform, joint.unit_axis), translation(running_transform), translates});
-        const mat4 motion = translates ? axis_translation4(joint.unit_axis, q(qi)) : axis_rotation4(joint.unit_axis, q(qi));
-        running_transform = matmul4(running_transform, motion);
-        ++qi;
+        std::visit(
+            [&]<typename Joint>(const Joint& j) {
+                running_transform = matmul4(running_transform, j.origin_tf);
+                if constexpr (!std::is_same_v<Joint, fixed_joint_>) {
+                    constexpr bool translates = std::is_same_v<Joint, translating_joint_>;
+                    state.joints.push_back({rotate(running_transform, j.unit_axis), translation(running_transform), translates});
+                    if constexpr (translates) {
+                        running_transform = matmul4(running_transform, axis_translation4(j.unit_axis, q(qi)));
+                    } else {
+                        running_transform = matmul4(running_transform, axis_rotation4(j.unit_axis, q(qi)));
+                    }
+                    ++qi;
+                }
+            },
+            joint);
     }
     state.p_e = translation(running_transform);
     return state;
 }
 
 kinematic_chain::kinematic_chain(std::vector<joint_> joints) : joints_(std::move(joints)) {
-    actuated_count_ =
-        static_cast<std::size_t>(std::ranges::count_if(joints_, [](const joint_& joint) { return joint.kind != joint_kind_::k_fixed; }));
-}
-
-kinematic_chain kinematic_chain::from(const xmatrix<>& tensor) {
-    if (tensor.shape()[1] != 10) {
-        throw std::invalid_argument("viam::trajex::jacobian: expected model-table shape (n, 10), got (n, " +
-                                    std::to_string(tensor.shape()[1]) + ")");
-    }
-    if (tensor.shape()[0] == 0) {
-        throw std::invalid_argument("viam::trajex::jacobian: empty model table");
-    }
-
-    std::vector<joint_> joints;
-    joints.reserve(tensor.shape()[0]);
-    for (std::size_t i = 0; i < tensor.shape()[0]; ++i) {
-        const double type_value = tensor(i, 9);
-        const int type_int = static_cast<int>(type_value);
-        if (static_cast<double>(type_int) != type_value) {
-            throw std::invalid_argument("viam::trajex::jacobian: row " + std::to_string(i) + " joint type value " +
-                                        std::to_string(type_value) + " is not an integer");
-        }
-
-        const vec3 xyz = {tensor(i, 0), tensor(i, 1), tensor(i, 2)};
-        const vec3 rpy = {tensor(i, 3), tensor(i, 4), tensor(i, 5)};
-        const vec3 axis = {tensor(i, 6), tensor(i, 7), tensor(i, 8)};
-        joint_ joint{.kind = joint_kind_::k_fixed, .origin_tf = link_transform(xyz, rpy)};
-
-        switch (static_cast<model_table_joint_type>(type_int)) {
-            // A continuous joint is a revolute joint without position limits. The model table
-            // carries no limits for any joint type and the Jacobian column depends only on the
-            // axis and the current angle, so the two are indistinguishable to us and share a
-            // case. The tensor path refuses prismatic rows, since it is kept only until its
-            // callers move to kinematic_chain::builder.
-            case model_table_joint_type::k_revolute:
-            case model_table_joint_type::k_continuous:
-                if (dot(axis, axis) == 0.0) {
-                    throw std::invalid_argument("viam::trajex::jacobian: row " + std::to_string(i) +
-                                                " is a revolute joint with zero-magnitude axis");
-                }
-                joint.kind = joint_kind_::k_rotational;
-                joint.unit_axis = normalized(axis);
-                break;
-            case model_table_joint_type::k_fixed:
-                break;
-            case model_table_joint_type::k_prismatic:
-                throw std::invalid_argument("viam::trajex::jacobian: row " + std::to_string(i) +
-                                            " has unsupported joint type (only revolute, continuous and fixed are supported)");
-            default:
-                throw std::invalid_argument("viam::trajex::jacobian: row " + std::to_string(i) +
-                                            " joint type does not match any joint_type value");
-        }
-        joints.push_back(joint);
-    }
-    return kinematic_chain(std::move(joints));
+    actuated_count_ = static_cast<std::size_t>(
+        std::ranges::count_if(joints_, [](const joint_& joint) { return !std::holds_alternative<fixed_joint_>(joint); }));
 }
 
 xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
@@ -385,17 +317,17 @@ kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at(c
 }
 
 kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin) & {
-    joints_.push_back({.kind = joint_kind_::k_fixed, .origin = origin, .axis = {}});
+    joints_.emplace_back(fixed_joint_{{origin, {}}});
     return *this;
 }
 
 kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin, const rotation_axis& axis) & {
-    joints_.push_back({.kind = joint_kind_::k_rotational, .origin = origin, .axis = axis.direction});
+    joints_.emplace_back(rotating_joint_{{origin, {}}, axis, {}});
     return *this;
 }
 
 kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin, const translation_axis& axis) & {
-    joints_.push_back({.kind = joint_kind_::k_translational, .origin = origin, .axis = axis.direction});
+    joints_.emplace_back(translating_joint_{{origin, {}}, axis, {}});
     return *this;
 }
 
@@ -404,38 +336,41 @@ kinematic_chain kinematic_chain::builder::build() && {
         throw std::invalid_argument("viam::trajex::jacobian: a kinematic chain needs at least one joint");
     }
 
-    std::vector<joint_> joints;
-    joints.reserve(joints_.size());
     for (std::size_t i = 0; i < joints_.size(); ++i) {
-        const pending_joint_& pending = joints_[i];
         const std::string which = "viam::trajex::jacobian: joint " + std::to_string(i);
+        std::visit(
+            [&]<typename Joint>(Joint& joint) {
+                const auto& [translation, rotation] = joint.origin;
+                if (!all_finite(translation)) {
+                    throw std::invalid_argument(which + " has a non-finite translation");
+                }
 
-        if (!all_finite(pending.origin.translation)) {
-            throw std::invalid_argument(which + " has a non-finite translation");
-        }
+                // Any nonzero quaternion denotes exactly one rotation, so we normalize rather than
+                // demand that the caller already did. Only a zero or non-finite quaternion is
+                // refused, since there is no rotation to recover from it. The norm is checked as
+                // well as the components because large finite components can still overflow it.
+                // The quaternion as given is kept for visit_joints; only the derived transform sees
+                // the normalized one.
+                const auto& [w, x, y, z] = rotation;
+                const double rotation_norm = std::sqrt((w * w) + (x * x) + (y * y) + (z * z));
+                if (!all_finite(rotation) || !std::isfinite(rotation_norm) || rotation_norm == 0.0) {
+                    throw std::invalid_argument(which + " has a zero or non-finite quaternion");
+                }
+                joint.origin_tf =
+                    origin_transform(translation, {w / rotation_norm, x / rotation_norm, y / rotation_norm, z / rotation_norm});
 
-        // Any nonzero quaternion denotes exactly one rotation, so we normalize rather than demand
-        // that the caller already did. Only a zero or non-finite quaternion is refused, since
-        // there is no rotation to recover from it. The norm is checked as well as the components
-        // because large finite components can still overflow it.
-        const auto& [w, x, y, z] = pending.origin.rotation;
-        const double rotation_norm = std::sqrt((w * w) + (x * x) + (y * y) + (z * z));
-        if (!all_finite(pending.origin.rotation) || !std::isfinite(rotation_norm) || rotation_norm == 0.0) {
-            throw std::invalid_argument(which + " has a zero or non-finite quaternion");
-        }
-        const std::array<double, 4> unit_rotation = {w / rotation_norm, x / rotation_norm, y / rotation_norm, z / rotation_norm};
-
-        joint_ joint{.kind = pending.kind, .origin_tf = origin_transform(pending.origin.translation, unit_rotation)};
-        if (pending.kind != joint_kind_::k_fixed) {
-            const double axis_norm = norm(pending.axis);
-            if (!all_finite(pending.axis) || !std::isfinite(axis_norm) || axis_norm == 0.0) {
-                throw std::invalid_argument(which + " has a zero or non-finite axis");
-            }
-            joint.unit_axis = normalized(pending.axis);
-        }
-        joints.push_back(joint);
+                if constexpr (!std::is_same_v<Joint, fixed_joint_>) {
+                    const auto& direction = joint.axis.direction;
+                    const double axis_norm = norm(direction);
+                    if (!all_finite(direction) || !std::isfinite(axis_norm) || axis_norm == 0.0) {
+                        throw std::invalid_argument(which + " has a zero or non-finite axis");
+                    }
+                    joint.unit_axis = normalized(direction);
+                }
+            },
+            joints_[i]);
     }
-    return kinematic_chain(std::move(joints));
+    return kinematic_chain(std::move(joints_));
 }
 
 }  // namespace viam::trajex::jacobian

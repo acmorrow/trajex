@@ -118,24 +118,6 @@ class trajectory {
         using linear_velocity_gain_fn = std::function<gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
 
         ///
-        /// Builds the gain callback from a kinematic chain parsed from a model table.
-        ///
-        /// @param model_table (n, 10) tensor in the viam::sdk::ModelTable format
-        /// @param max_linear_velocity Cap on TCP linear speed, in the model table's length unit
-        ///        per second
-        /// @return A limits object whose callback evaluates the parsed chain
-        /// @throws std::invalid_argument on a malformed model table
-        ///
-        /// What counts as a model table is kinematic_chain::from's rule rather than one
-        /// restated here, so this accepts exactly what that accepts.
-        ///
-        template <typename T>
-            requires requires(const T& t) { jacobian::kinematic_chain::from(t); }
-        [[nodiscard]] static tcp_limits from(const T& model_table, double max_linear_velocity) {
-            return from(jacobian::kinematic_chain::from(model_table), max_linear_velocity);
-        }
-
-        ///
         /// Builds the gain callback from a kinematic chain.
         ///
         /// The capped point is the origin of the chain's last frame.

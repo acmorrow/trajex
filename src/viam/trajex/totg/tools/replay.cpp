@@ -1,5 +1,7 @@
 #include <viam/trajex/totg/tools/replay.hpp>
 
+#include <array>
+#include <cstddef>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -14,6 +16,25 @@
 #endif
 
 namespace viam::trajex::totg {
+
+namespace {
+
+// One fixed-length numeric field of a kinematic_chain joint in a replay record.
+template <std::size_t N>
+std::array<double, N> chain_joint_field(const Json::Value& joint, Json::ArrayIndex index, const char* key) {
+    const auto& value = joint[key];
+    if (!value.isArray() || value.size() != N) {
+        throw std::runtime_error("kinematic_chain joint " + std::to_string(index) + " field " + key + " must be an array of " +
+                                 std::to_string(N) + " numbers");
+    }
+    std::array<double, N> out{};
+    for (Json::ArrayIndex k = 0; k < value.size(); ++k) {
+        out[k] = value[k].asDouble();
+    }
+    return out;
+}
+
+}  // namespace
 
 std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in) {
     Json::Value root;
@@ -84,35 +105,42 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
         cfg.max_blend_curvature = root["max_blend_curvature"].asDouble();
     }
 
-    // Optional TCP speed limit (replay schema v2+). model_table is the (n, 10) tensor the TCP
-    // jacobian was built from; tcp_max_linear_velocity is the scalar cap. Rebuild the callbacks
-    // via tcp_limits::from so the replayed run reproduces the same TCP limit.
-    if (root.isMember("model_table")) {
-        const auto& mt_json = root["model_table"];
-        if (!mt_json.isArray() || mt_json.empty()) {
-            throw std::runtime_error("model_table must be a non-empty array of rows");
+    // Optional kinematics and TCP speed limit (schema v3). Each joint drives the builder overload
+    // its axis key names, which rebuilds the chain the record was written from.
+    if (root.isMember("kinematic_chain")) {
+        const auto& chain_json = root["kinematic_chain"];
+        if (!chain_json.isArray() || chain_json.empty()) {
+            throw std::runtime_error("kinematic_chain must be a non-empty array of joints");
         }
-        const auto rows = static_cast<std::size_t>(mt_json.size());
-        xmatrix<> model_table = xt::zeros<double>(std::vector<std::size_t>{rows, std::size_t{10}});
-        for (Json::ArrayIndex i = 0; i < mt_json.size(); ++i) {
-            const auto& row = mt_json[i];
-            if (!row.isArray() || row.size() != 10) {
-                throw std::runtime_error("model_table row must have 10 columns");
+        using chain = jacobian::kinematic_chain;
+        chain::builder builder;
+        for (Json::ArrayIndex i = 0; i < chain_json.size(); ++i) {
+            const auto& joint = chain_json[i];
+            const chain::joint_origin origin{.translation = chain_joint_field<3>(joint, i, "xyz"),
+                                             .rotation = chain_joint_field<4>(joint, i, "wxyz")};
+            const bool rotates = joint.isMember("rotation_axis");
+            const bool translates = joint.isMember("translation_axis");
+            if (rotates && translates) {
+                throw std::runtime_error("kinematic_chain joint " + std::to_string(i) + " has both a rotation_axis and a translation_axis");
             }
-            for (Json::ArrayIndex j = 0; j < 10; ++j) {
-                model_table(static_cast<std::size_t>(i), static_cast<std::size_t>(j)) = row[j].asDouble();
+            if (rotates) {
+                builder.extend(origin, chain::rotation_axis{chain_joint_field<3>(joint, i, "rotation_axis")});
+            } else if (translates) {
+                builder.extend(origin, chain::translation_axis{chain_joint_field<3>(joint, i, "translation_axis")});
+            } else {
+                builder.extend(origin);
             }
         }
-        cfg.model_table = std::move(model_table);
+        cfg.kinematics = std::move(builder).build();
     }
 
+    // A v2 record that carried a TCP limit did so with a model_table, which nothing reads any
+    // more. Its cap arrives without kinematics and is refused here rather than silently dropped.
     if (root.isMember("tcp_max_linear_velocity")) {
-        if (!cfg.model_table) {
-            throw std::runtime_error("tcp_max_linear_velocity given without a model_table to build the TCP jacobian");
+        if (!cfg.kinematics) {
+            throw std::runtime_error("tcp_max_linear_velocity given without a kinematic_chain to apply it to");
         }
-        // Two unwraps: the optional, then the rank guard. kinematic_chain::from deduces its
-        // argument, and deduction does not see through the guard's conversion.
-        cfg.tcp = trajectory::tcp_limits::from(**cfg.model_table, root["tcp_max_linear_velocity"].asDouble());
+        cfg.tcp_max_linear_velocity = root["tcp_max_linear_velocity"].asDouble();
     }
 
     return {std::move(cfg), std::move(waypoints)};
@@ -181,8 +209,8 @@ legacy_replay_planner legacy_replay_planner::create(std::istream& in) {
 
     // The legacy generator cannot enforce a TCP limit, and the planner refuses to register it
     // while one is set. A legacy replay of a TCP-carrying record is a deliberate uncapped
-    // comparison run, so drop the limit explicitly; the model-table provenance is kept.
-    cfg.tcp.reset();
+    // comparison run, so drop the cap explicitly; the kinematics are kept.
+    cfg.tcp_max_linear_velocity.reset();
 
     legacy_replay_planner p(std::move(cfg));
 

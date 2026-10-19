@@ -348,22 +348,6 @@ BOOST_AUTO_TEST_CASE(integration_points_respect_combined_velocity_limit) {
     }
 }
 
-// gp12_chain is meant to be gp12_model_table built the other way, so the regression tests that
-// moved from one to the other still exercise the same arm.
-BOOST_AUTO_TEST_CASE(gp12_chain_matches_gp12_model_table) {
-    const auto table = jacobian::kinematic_chain::from(test::gp12_model_table());
-    const auto chain = test::gp12_chain();
-    const xvector<> q = {1.4, 1.06, 1.8, -2.34, 0.94, -0.47};
-    const xvector<> q_prime = {0.2, 0.7, -0.4, 0.5, -0.6, 0.3};
-    const xvector<> q_double_prime = {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2};
-
-    const auto from_table = table.linear_velocity_gain_at(q, q_prime, q_double_prime);
-    const auto from_chain = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
-    BOOST_CHECK_SMALL(from_table.gain_per_arc_unit - from_chain.gain_per_arc_unit, 1e-12);
-    BOOST_CHECK_SMALL(from_table.d_gain_ds - from_chain.d_gain_ds, 1e-12);
-    BOOST_CHECK_SMALL(static_cast<double>(xt::amax(xt::abs(table.jacobian(q) - chain.jacobian(q)))()), 1e-12);
-}
-
 // A gain callback whose derivative is NaN at a TCP-binding point makes the TCP slope non-finite.
 // NaN compares false against everything, so an unguarded non-finite slope silently corrupts every
 // curve-following decision downstream (trap detection, tangent following); the integrator must
