@@ -51,6 +51,15 @@ class kinematic_chain {
     class builder;
 
     ///
+    /// Gets the number of elements in the joint vector q: one per rotating or translating joint.
+    ///
+    /// @return The chain's degrees of freedom
+    ///
+    [[nodiscard]] std::size_t dof() const noexcept {
+        return actuated_count_;
+    }
+
+    ///
     /// Reports each joint, from the base to the end effector, exactly as it was given to the
     /// builder.
     ///

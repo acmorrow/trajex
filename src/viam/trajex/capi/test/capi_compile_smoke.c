@@ -37,6 +37,16 @@ int main(void) {
     (void)viam_trajex_string_destroy;
     (void)viam_trajex_totg_generate;
 
+    // Kinematic chain entry points.
+    (void)viam_trajex_kinematic_chain_builder_create;
+    (void)viam_trajex_kinematic_chain_builder_destroy;
+    (void)viam_trajex_kinematic_chain_builder_extend_fixed;
+    (void)viam_trajex_kinematic_chain_builder_extend_rotational;
+    (void)viam_trajex_kinematic_chain_builder_extend_translational;
+    (void)viam_trajex_kinematic_chain_builder_build;
+    (void)viam_trajex_kinematic_chain_destroy;
+    (void)viam_trajex_kinematic_chain_end_position;
+
     // Streaming session entry points.
     (void)viam_trajex_totg_streaming_session_create;
     (void)viam_trajex_totg_streaming_session_destroy;
@@ -59,6 +69,7 @@ int main(void) {
     (void)viam_trajex_totg_key_path_colinearization_ratio;
     (void)viam_trajex_totg_key_waypoint_deduplication_tolerance_rads;
     (void)viam_trajex_totg_key_trajectory_sampling_freq_hz;
+    (void)viam_trajex_totg_key_tcp_max_linear_velocity;
     (void)viam_trajex_totg_key_sample_times_sec;
     (void)viam_trajex_totg_key_configurations_rads;
     (void)viam_trajex_totg_key_velocities_rads_per_sec;
