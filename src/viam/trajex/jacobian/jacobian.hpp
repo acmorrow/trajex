@@ -112,7 +112,7 @@ class kinematic_chain {
     ///         translating joint's is J_v_i = w_i, J_w_i = 0.
     /// @throws std::invalid_argument on q-size mismatch, or if q is not 1-dimensional
     ///
-    /// The integrator calls this once per step holding an xvector, and binds here with no copy.
+    /// A caller holding an xvector binds here with no copy.
     ///
     [[nodiscard]] xmatrix<> jacobian(const xvector<>& q) const;
 

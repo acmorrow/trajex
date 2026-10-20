@@ -250,10 +250,14 @@ kinematic_chain::frame_kinematics kinematic_chain::forward_kinematics(std::size_
         throw std::out_of_range("viam::trajex::jacobian: joint " + std::to_string(joint) + " is past the end of a chain of " +
                                 std::to_string(joints_.size()) + " joints");
     }
-    if (q_dot.size() != actuated_count_ || q_ddot.size() != actuated_count_) {
-        throw std::invalid_argument("viam::trajex::jacobian: q_dot/q_ddot size mismatch: expected " + std::to_string(actuated_count_) +
-                                    " (actuated joints)");
-    }
+    const auto require_actuated_size = [this](const char* name, const xvector<>& values) {
+        if (values.size() != actuated_count_) {
+            throw std::invalid_argument(std::string{"viam::trajex::jacobian: "} + name + " size mismatch: expected " +
+                                        std::to_string(actuated_count_) + " (actuated joints), got " + std::to_string(values.size()));
+        }
+    };
+    require_actuated_size("q_dot", q_dot);
+    require_actuated_size("q_ddot", q_ddot);
 
     // Only the moving joints up to and including `joint` move its frame. They come first in q, so
     // the leading entries of q_dot and q_ddot are the ones that apply to them.

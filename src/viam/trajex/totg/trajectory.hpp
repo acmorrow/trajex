@@ -284,7 +284,7 @@ class trajectory {
     /// Combined velocity limits together with their joint and TCP components.
     ///
     /// Equivalent to get_velocity_limits() and get_velocity_limit_components() at the same cursor,
-    /// but evaluates the TCP Jacobian only once. For diagnostics that emit both the combined curve
+    /// but calls the TCP evaluator only once. For diagnostics that emit both the combined curve
     /// and its components.
     ///
     struct velocity_limits_detail {
@@ -392,7 +392,7 @@ class trajectory {
     /// Computes the combined velocity limits and their joint and TCP components in one evaluation.
     ///
     /// Equivalent to calling get_velocity_limits() and get_velocity_limit_components() at the same
-    /// cursor, but evaluates the TCP Jacobian only once. Intended for diagnostics that need both.
+    /// cursor, but calls the TCP evaluator only once. Intended for diagnostics that need both.
     ///
     /// @param cursor Path cursor positioned at query location
     /// @return Acceleration limit, combined velocity limit, and the joint and TCP components

@@ -167,7 +167,8 @@ satisfy these requirements, we identify it as a numbered
   bounding `||v||` by the cap `v_max` gives `s_dot_max_tcp(s) = v_max /
   g(s)`. Where `g(s)` falls below `epsilon` the TCP is stationary however
   fast we traverse the path, so the curve is infinite there and cannot
-  constrain; a NaN Jacobian is treated the same way.
+  constrain. The same holds where the TCP does not move relative to the
+  path at all, which the evaluator reports by returning no gain.
 
   This is the same kind of object as the joint velocity limit curve of
   Eq. 36, being the `s_dot` at which a quantity linear in `s_dot`
@@ -215,5 +216,5 @@ satisfy these requirements, we identify it as a numbered
 
   Finally, note what the cap bounds. It bounds the TCP speed of the
   kinematics model it was given, and nothing at runtime compares the result
-  against a measured Cartesian speed, so a stale or incorrect model table
-  produces a confidently wrong limit.
+  against a measured Cartesian speed, so a stale or incorrect kinematic
+  chain produces a confidently wrong limit.

@@ -333,7 +333,7 @@ BOOST_AUTO_TEST_CASE(decider_return_type_is_flexible) {
 // The legacy generator cannot enforce a TCP speed limit, so it must never run as a fallback
 // for one: a planner whose config carries a TCP limit refuses to register legacy at all.
 BOOST_AUTO_TEST_CASE(legacy_registration_with_tcp_limit_throws) {
-    auto cfg = simple_config();
+    auto cfg = gp12_config();
     cfg.kinematics = gp12_chain();
     cfg.tcp_max_linear_speed = 0.5;
 
@@ -368,6 +368,22 @@ BOOST_AUTO_TEST_CASE(tcp_cap_without_kinematics_rejected_at_construction) {
     auto cfg = simple_config();
     cfg.tcp_max_linear_speed = 0.5;
     BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(cfg)), std::invalid_argument);
+}
+
+// A chain whose moving joints do not match the joint limits is refused where the config is
+// accepted, with or without a cap, rather than failing partway through the first trajectory.
+BOOST_AUTO_TEST_CASE(kinematics_dof_mismatch_rejected_at_construction) {
+    auto mismatched = simple_config();
+    mismatched.kinematics = gp12_chain();
+    BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(mismatched)), std::invalid_argument);
+
+    mismatched.tcp_max_linear_speed = 0.5;
+    BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(mismatched)), std::invalid_argument);
+
+    auto matched = gp12_config();
+    matched.kinematics = gp12_chain();
+    matched.tcp_max_linear_speed = 0.5;
+    BOOST_CHECK_NO_THROW(static_cast<void>(planner<test_receiver>(matched)));
 }
 
 // A config carrying kinematics and a cap survives a serialize_for_replay -> replay_planner round

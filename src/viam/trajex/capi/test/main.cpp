@@ -713,6 +713,27 @@ BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_rejects_a_wrong_joint_count) {
     BOOST_TEST(owned_error);
 }
 
+// A chain of fixed joints alone has no joint vector, so q may be NULL with n_q zero, and the end
+// sits wherever the fixed origins put it.
+BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_with_no_moving_joints) {
+    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+    BOOST_TEST_REQUIRE(builder);
+    const double first[3] = {1.0, 2.0, 3.0};
+    const double second[3] = {0.5, 0.0, -1.0};
+    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), first, k_identity_rotation) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), second, k_identity_rotation) == 0);
+
+    const char* raw = nullptr;
+    const chain_owner chain{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    const error_string owned_error{raw};
+    BOOST_TEST_REQUIRE(chain);
+
+    const auto p = end_position(chain.get(), nullptr, 0);
+    BOOST_TEST(p[0] == 1.5, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(p[1] == 2.0, boost::test_tools::tolerance(1e-12));
+    BOOST_TEST(p[2] == 2.0, boost::test_tools::tolerance(1e-12));
+}
+
 // ============================================================================
 // TCP limits through the C ABI
 // ============================================================================

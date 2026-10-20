@@ -60,6 +60,15 @@ planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {
     if (config_.tcp_max_linear_speed && !config_.kinematics) {
         throw std::invalid_argument("planner config tcp_max_linear_speed requires kinematics");
     }
+
+    // As in the C ABI, a chain must match the joint limits whether or not a cap is set, so that a
+    // mismatch is reported by the config that made it rather than partway through the first
+    // trajectory that caps, and so that a replay record never carries a chain it could not apply.
+    if (config_.kinematics && config_.kinematics->dof() != config_.velocity_limits->size()) {
+        throw std::invalid_argument("planner config kinematics has " + std::to_string(config_.kinematics->dof()) +
+                                    " rotating or translating joints, but the joint limits describe " +
+                                    std::to_string(config_.velocity_limits->size()));
+    }
 }
 
 const struct planner_base::config& planner_base::get_config() const noexcept {

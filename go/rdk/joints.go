@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && cgo
 
 // Package rdk turns RDK's kinematic models into trajex joints. It is the one
 // place in this module that knows what an RDK model is; everything else

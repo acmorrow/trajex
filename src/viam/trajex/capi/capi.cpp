@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <ranges>
