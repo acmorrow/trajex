@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -389,11 +390,53 @@ BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
         .evaluator =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 auto r = test::planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, q_prime, q_double_prime);
-                r.arc_length_derivative = std::numeric_limits<double>::quiet_NaN();
+                if (r) {
+                    r->arc_length_derivative = std::numeric_limits<double>::quiet_NaN();
+                }
                 return r;
             },
     };
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
+}
+
+// An evaluator says the TCP is not moving relative to the path by returning nothing, so a ratio
+// it does return must be a real one. A NaN, an infinity or a negative ratio is a broken evaluator
+// rather than a singularity, and the integrator refuses it rather than reading it as one.
+BOOST_AUTO_TEST_CASE(tcp_non_finite_or_negative_ratio_throws) {
+    const path p = make_2dof_path();
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -1.0}) {
+        BOOST_TEST_CONTEXT("value=" << bad) {
+            auto opt = base_2dof_options();
+            opt.tcp = trajectory::tcp_limits{
+                .max_linear_speed = 0.5,
+                .evaluator = [bad](const xvector<>&,
+                                   const xvector<>&,
+                                   const xvector<>&) -> std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> {
+                    return trajectory::tcp_limits::linear_speed_per_arc_velocity{.value = bad, .arc_length_derivative = 0.0};
+                },
+            };
+            BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
+        }
+    }
+}
+
+// An evaluator that returns nothing everywhere describes a TCP that never moves relative to the
+// path, so the TCP never constrains, and the trajectory must be exactly the joint-only one.
+BOOST_AUTO_TEST_CASE(tcp_evaluator_returning_nothing_is_joint_only) {
+    const path p = make_2dof_path();
+    const auto joint_only = trajectory::create(p, base_2dof_options());
+
+    auto opt = base_2dof_options();
+    opt.tcp = trajectory::tcp_limits{
+        .max_linear_speed = 0.5,
+        .evaluator = [](const xvector<>&,
+                        const xvector<>&,
+                        const xvector<>&) -> std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> { return std::nullopt; },
+    };
+    const auto never_moving = trajectory::create(p, opt);
+
+    BOOST_TEST(never_moving.duration().count() == joint_only.duration().count());
+    BOOST_TEST(never_moving.get_integration_points().size() == joint_only.get_integration_points().size());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

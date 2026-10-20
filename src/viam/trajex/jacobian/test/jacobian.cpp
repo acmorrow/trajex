@@ -416,13 +416,14 @@ void check_linear_speed_per_arc_velocity(
     const auto speed_ratio_at = [&](const xvector<>& qq, const xvector<>& qp) { return norm(linear_velocity_via_jacobian(chain, qq, qp)); };
 
     const auto r = limits.evaluator(q, q_prime, q_double_prime);
-    BOOST_CHECK_CLOSE(r.value, speed_ratio_at(q, q_prime), 1e-7);
+    BOOST_REQUIRE(r.has_value());
+    BOOST_CHECK_CLOSE(r->value, speed_ratio_at(q, q_prime), 1e-7);
 
     const double h = 1e-6;
     const double numeric = (speed_ratio_at(q + (h * q_prime), q_prime + (h * q_double_prime)) -
                             speed_ratio_at(q - (h * q_prime), q_prime - (h * q_double_prime))) /
                            (2.0 * h);
-    BOOST_CHECK_SMALL(r.arc_length_derivative - numeric, tol);
+    BOOST_CHECK_SMALL(r->arc_length_derivative - numeric, tol);
 }
 
 }  // namespace
@@ -815,20 +816,23 @@ BOOST_AUTO_TEST_CASE(binds_the_cap_and_answers_repeatably) {
 
     const auto first = limits.evaluator(q, q_prime, q_double_prime);
     const auto second = limits.evaluator(q, q_prime, q_double_prime);
-    BOOST_CHECK_EQUAL(first.value, second.value);
-    BOOST_CHECK_EQUAL(first.arc_length_derivative, second.arc_length_derivative);
+    BOOST_REQUIRE(first.has_value());
+    BOOST_REQUIRE(second.has_value());
+    BOOST_CHECK_EQUAL(first->value, second->value);
+    BOOST_CHECK_EQUAL(first->arc_length_derivative, second->arc_length_derivative);
 
     BOOST_CHECK_EQUAL(limits.max_linear_speed, 0.5);
 }
 
-// When the ratio ||J*f'|| is zero, here because the path tangent is zero, its derivative
-// dot(v, a) / ||v|| is 0 / 0 and undefined. The evaluator reports a finite derivative rather than a
-// NaN that would propagate into the phase-plane slope downstream.
-BOOST_AUTO_TEST_CASE(singular_ratio_yields_finite_derivative) {
+// Where the TCP does not move relative to the path, ||J*f'|| is zero and its derivative
+// dot(v, a) / ||v|| is 0 / 0, which does not exist, so the evaluator returns nothing. That happens
+// when the path tangent is zero, and also when the joints move but along a direction the Jacobian
+// sends to zero, as the two-link arm's do when stretched straight out with the elbow turning back
+// twice as fast as the shoulder turns forward.
+BOOST_AUTO_TEST_CASE(singular_ratio_yields_nothing) {
     const auto limits = trajectory::tcp_limits::from(build_chain(twolink_chain()), 0.5);
-    const auto r = limits.evaluator(xvector<>{0.3, -0.7}, xvector<>{0.0, 0.0}, xvector<>{0.2, -0.4});
-    BOOST_CHECK_SMALL(r.value, 1e-15);
-    BOOST_CHECK(std::isfinite(r.arc_length_derivative));
+    BOOST_CHECK(!limits.evaluator(xvector<>{0.3, -0.7}, xvector<>{0.0, 0.0}, xvector<>{0.2, -0.4}).has_value());
+    BOOST_CHECK(!limits.evaluator(xvector<>{0.0, 0.0}, xvector<>{1.0, -2.0}, xvector<>{0.2, -0.4}).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

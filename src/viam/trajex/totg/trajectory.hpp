@@ -100,8 +100,10 @@ class trajectory {
     /// and bisection each query at the arc position under examination, so successive calls do
     /// not advance monotonically along the path.
     ///
-    /// The evaluator may return a NaN ratio, which signals a singularity and is treated as
-    /// non-constraining. A non-finite slope where TCP is the binding curve throws instead.
+    /// Where the TCP does not move relative to the path, the ratio is zero and its derivative does
+    /// not exist, and the evaluator returns nothing. The TCP does not constrain there. Anything the
+    /// evaluator does return must be finite, with a non-negative ratio, and integration throws if it
+    /// is not, since that is a broken evaluator rather than a singularity.
     ///
     /// Units are the caller's. max_linear_speed must be expressed in the length unit the evaluator
     /// measures the TCP's motion in, per second. Nothing here checks that they agree.
@@ -112,8 +114,8 @@ class trajectory {
         /// its derivative along the path.
         ///
         struct linear_speed_per_arc_velocity {
-            double value = 0.0;                  ///< ||J_v(q)*f'(s)||
-            double arc_length_derivative = 0.0;  ///< Derivative of value with respect to arc length
+            double value = 0.0;                  ///< ||J_v(q)*f'(s)||, finite and non-negative
+            double arc_length_derivative = 0.0;  ///< Derivative of value with respect to arc length, finite
         };
 
         ///
@@ -132,8 +134,9 @@ class trajectory {
         /// instead of reading an indeterminate value.
         double max_linear_speed = 0.0;
 
-        /// Maps (q, q_prime, q_double_prime) at a point on the path to the ratio and its derivative.
-        std::function<linear_speed_per_arc_velocity(const xvector<>&, const xvector<>&, const xvector<>&)> evaluator;
+        /// Maps (q, q_prime, q_double_prime) at a point on the path to the ratio and its derivative,
+        /// or to nothing where the TCP does not move relative to the path.
+        std::function<std::optional<linear_speed_per_arc_velocity>(const xvector<>&, const xvector<>&, const xvector<>&)> evaluator;
     };
 
     ///

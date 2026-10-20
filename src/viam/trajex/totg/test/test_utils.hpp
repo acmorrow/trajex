@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -72,8 +73,9 @@ inline xmatrix<> planar_2link_jacobian(double l1, double l2, const xvector<>& q)
 
 /// The TCP's linear speed per unit of arc velocity for the planar 2-link, and its derivative along
 /// the path, for tests that build tcp_limits by hand. The derivative is a central difference of
-/// ||planar_2link_jacobian(q) * q_prime|| along the path.
-inline trajectory::tcp_limits::linear_speed_per_arc_velocity planar_2link_linear_speed_per_arc_velocity(
+/// ||planar_2link_jacobian(q) * q_prime|| along the path. Empty where that speed is exactly zero,
+/// as the evaluator contract asks, since the derivative does not exist there.
+inline std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> planar_2link_linear_speed_per_arc_velocity(
     double l1, double l2, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
     const auto speed_ratio_at = [&](const xvector<>& qq, const xvector<>& qp) {
         const auto J = planar_2link_jacobian(l1, l2, qq);
@@ -88,11 +90,14 @@ inline trajectory::tcp_limits::linear_speed_per_arc_velocity planar_2link_linear
         return std::sqrt((vx * vx) + (vy * vy) + (vz * vz));
     };
     const double value = speed_ratio_at(q, q_prime);
+    if (value == 0.0) {
+        return std::nullopt;
+    }
     const double h = 1e-6;
     const double derivative =
         (speed_ratio_at(q + h * q_prime, q_prime + h * q_double_prime) - speed_ratio_at(q - h * q_prime, q_prime - h * q_double_prime)) /
         (2.0 * h);
-    return {.value = value, .arc_length_derivative = derivative};
+    return trajectory::tcp_limits::linear_speed_per_arc_velocity{.value = value, .arc_length_derivative = derivative};
 }
 
 /// Builds tcp_limits for a planar 2-link (l1 = l2 = 1).
