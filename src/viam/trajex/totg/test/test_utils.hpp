@@ -8,6 +8,7 @@
 #include <utility>
 
 #include <viam/trajex/totg/trajectory.hpp>
+#include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg::test {
@@ -109,21 +110,18 @@ inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_speed) {
 /// At each sampled instant the realized TCP velocity is J(q)*q_dot; this returns the peak of
 /// its Euclidean norm. Used to verify a TCP-limited trajectory respects its v_TCP cap.
 inline double max_realized_tcp_speed(const trajectory& traj, double l1, double l2, int samples = 1000) {
-    const double duration = traj.duration().count();
     double peak = 0.0;
-    // Sample over [0, duration] inclusive: end-of-path stamping artifacts surface at the terminal
-    // instant, so the exact end of the trajectory must be checked against the cap too. The
-    // clamp matters: the duration * i / samples round trip can land one ulp above the duration on
-    // the last iteration (duration-value dependent, observed on arm64), and sampling past the
-    // duration throws.
-    for (int i = 0; i <= samples; ++i) {
-        const double t = std::min(duration, duration * static_cast<double>(i) / static_cast<double>(samples));
-        const auto smp = traj.sample(trajectory::seconds{t});
-        const auto J = planar_2link_jacobian(l1, l2, smp.configuration);
+    // End-of-path stamping artifacts surface at the terminal instant, so the exact end of the
+    // trajectory must be checked against the cap too. The sampler spaces its samples evenly over
+    // [0, duration] and lands the last one exactly on the duration, never past it.
+    uniform_sampler sampler{static_cast<std::size_t>(samples) + 1};
+    auto cursor = traj.create_cursor();
+    while (const auto smp = sampler.next(cursor)) {
+        const auto J = planar_2link_jacobian(l1, l2, smp->configuration);
         double v[3] = {0.0, 0.0, 0.0};
         for (std::size_t r = 0; r < 3; ++r) {
-            for (std::size_t c = 0; c < smp.velocity.size(); ++c) {
-                v[r] += J(r, c) * smp.velocity(c);
+            for (std::size_t c = 0; c < smp->velocity.size(); ++c) {
+                v[r] += J(r, c) * smp->velocity(c);
             }
         }
         peak = std::max(peak, std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2])));

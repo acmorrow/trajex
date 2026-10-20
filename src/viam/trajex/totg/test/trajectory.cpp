@@ -4,13 +4,12 @@
 #include <cmath>
 
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/xt.hpp>
 
 #include <boost/test/unit_test.hpp>
-
-#include "test_utils.hpp"
 
 namespace {
 

@@ -1,9 +1,8 @@
 // Path tube coalescing algorithm tests
 // Extracted from test.cpp lines 152-189 (helpers) and 377-1105 (tests)
 
-#include "test_utils.hpp"
-
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/arc_length.hpp>
 #include <viam/trajex/types/xt.hpp>

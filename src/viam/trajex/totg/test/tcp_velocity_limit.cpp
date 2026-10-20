@@ -14,11 +14,10 @@
 
 #include <viam/trajex/totg/observers.hpp>
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/tools/json_serialization.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/types/xt.hpp>
-
-#include "test_utils.hpp"
 
 namespace viam::trajex::totg {
 
@@ -43,9 +42,13 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     const path p = make_2dof_path();
     auto opt = base_2dof_options();
 
-    // non-positive max_linear_speed
-    opt.tcp = test::planar_2link_tcp_limits(0.0);
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+    // non-positive or non-finite max_linear_speed
+    for (const double bad : {0.0, -0.5, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        BOOST_TEST_CONTEXT("max_linear_speed=" << bad) {
+            opt.tcp = test::planar_2link_tcp_limits(bad);
+            BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+        }
+    }
 
     // missing evaluator
     opt.tcp = trajectory::tcp_limits{.max_linear_speed = 0.5, .evaluator = {}};
@@ -227,13 +230,12 @@ BOOST_AUTO_TEST_CASE(steep_falling_crossing_respects_tcp_limit) {
     BOOST_TEST(test::max_realized_tcp_speed(traj, 1.0, 1.0, 4000) <= 0.3 + 1e-3);
 }
 
-// Regression (RSDK-13338): generation used to leave the terminal integration point with a NaN
-// acceleration when the trajectory terminated at a path-end switching point that carried no
-// forward_accel (the switching-point cache's path-end sentinel, and forward integration landing
-// exactly on the path end). Sampling at exactly t == duration interpolates from that point with
-// dt == 0; the NaN poisons the interpolated arc length, the path cursor seeks to its sentinel,
-// and the sample query throws "Cannot query cursor at sentinel position". The terminal
-// acceleration must be finite and the trajectory sampleable at its exact duration.
+// The terminal integration point must carry a finite acceleration, and the trajectory must be
+// sampleable at exactly its duration, which interpolates from that point with dt == 0. A NaN there
+// would seek the path cursor to its sentinel and make the sample throw. This was written for
+// RSDK-13338, which reported exactly that on a TCP-capped path, but the failure does not reproduce
+// at any commit of the branch that added it, with or without the fixes that came with it. It is
+// kept as a check of the property across a sweep of caps, not as a regression test.
 BOOST_AUTO_TEST_CASE(terminal_acceleration_finite_and_sampleable_at_exact_duration) {
     for (const double cap : {0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0}) {
         const path p = path::create(xmatrix<>{{0.0, 2.0}, {10.0, 0.0}});

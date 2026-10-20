@@ -2648,13 +2648,11 @@ BOOST_AUTO_TEST_CASE(vik_182_forward_integration_acc_natural_escape_stall) {
                                          k_local_joint_kinematics_tolerance_override);
 }
 
-// Reproducer for RSDK-13338 "Cannot query cursor at sentinel position": with a 0.5 m/s TCP cap
-// on the gp12 chain, the terminal integration point could end up with a NaN s_ddot (a path-end
-// point that never received a finite acceleration). Sampling at exactly t == duration then
-// interpolated a NaN arc length (0.5 * NaN * 0 * 0), seeking the path cursor to its sentinel so
-// the sample query threw. This test verifies the terminal acceleration is finite and that
-// sampling at the duration succeeds. The replay record predates TCP options (schema v1), so this
-// test wires the cap and the gp12 model-table jacobian itself.
+// The same check as tcp_velocity_limit_tests/terminal_acceleration_finite_and_sampleable_at_exact_duration,
+// on the gp12 chain with a 0.5 m/s cap and a field record, so the property is also held on a real
+// arm. Like that test it was written for RSDK-13338, whose failure does not reproduce at any
+// commit of the branch that added it. The record predates TCP options (schema v1), so the test
+// applies the cap to the gp12 chain itself.
 BOOST_AUTO_TEST_CASE(gp12_tcp_terminal_acceleration_sentinel_sample) {
     std::ifstream in(std::filesystem::path(VIAM_TRAJEX_TEST_DATA_DIR) /
                      "gp12_tcp_terminal_nan_acceleration-20260612.trajex-totg-replay.json");

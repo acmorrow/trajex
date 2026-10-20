@@ -1,12 +1,11 @@
 // Path circular blend tests
 // Extracted from test.cpp lines 152-189 (helpers) and 1106-1560 (tests)
 
-#include "test_utils.hpp"
-
 #include <cmath>
 #include <numbers>
 
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/waypoint_accumulator.hpp>
 #include <viam/trajex/types/angles.hpp>
 #include <viam/trajex/types/arc_length.hpp>
