@@ -148,10 +148,10 @@ vec3 linear_column(const auto& joint, const vec3& p_e) {
 
 }  // namespace
 
-// The world-frame axis and origin of each moving joint, plus the end-effector position, captured
-// while evaluating the forward kinematics. With these in hand, a rotating joint's Jacobian column
-// is J_v_i = axis x (p_e - position) (linear) stacked on J_w_i = axis (angular), and a
-// translating joint's is J_v_i = axis stacked on zero.
+// The world-frame axis and origin of each moving joint the forward kinematics passed through, and
+// the position p_e of the frame where it stopped. With these, a rotating joint's Jacobian column
+// is the linear part J_v_i = axis x (p_e - position) over the angular part J_w_i = axis, and a
+// translating joint's is J_v_i = axis over zero.
 //
 // The joints are a std::vector of small structs, not (N, 3) xtensor arrays: they are filled one
 // joint at a time during the walk and read back one joint at a time by the per-joint column
@@ -167,12 +167,13 @@ struct kinematic_chain::chain_state_ {
     vec3 p_e;
 };
 
-// Evaluate the forward kinematics joint by joint (base to end-effector), accumulating the running
-// transform. For each moving joint, capture its world-frame axis and origin before applying its
-// motion. Neither depends on the joint's own motion, since a joint neither rotates nor translates
-// its own axis. The q-independent terms (origin transform, unit axis) come precomputed from
-// construction.
-kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvector<>& q) const {
+// Evaluate the forward kinematics joint by joint from the base through last_joint, accumulating
+// the running transform. For each moving joint we capture its world-frame axis and origin before
+// applying its motion, which is safe because a joint neither rotates nor translates its own axis.
+// The origin transforms and unit axes do not depend on q, so they were computed once at
+// construction. Joints after last_joint cannot move anything before them, so we stop there, but q
+// is still checked against the whole chain, because callers always hand us a full joint vector.
+kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvector<>& q, std::size_t last_joint) const {
     if (q.size() != actuated_count_) {
         throw std::invalid_argument("viam::trajex::jacobian: q size mismatch: expected " + std::to_string(actuated_count_) +
                                     " (actuated joints), got " + std::to_string(q.size()));
@@ -183,7 +184,7 @@ kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvecto
 
     mat4 running_transform = identity4();
     std::size_t qi = 0;
-    for (const joint_& joint : joints_) {
+    for (std::size_t index = 0; index <= last_joint; ++index) {
         std::visit(
             [&]<typename Joint>(const Joint& j) {
                 running_transform = matmul4(running_transform, j.origin_tf);
@@ -198,7 +199,7 @@ kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvecto
                     ++qi;
                 }
             },
-            joint);
+            joints_[index]);
     }
     state.p_e = translation(running_transform);
     return state;
@@ -210,7 +211,7 @@ kinematic_chain::kinematic_chain(std::vector<joint_> joints) : joints_(std::move
 }
 
 xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
-    const chain_state_ state = compute_chain_state_(q);
+    const chain_state_ state = compute_chain_state_(q, joints_.size() - 1);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{6}, actuated_count_});
     for (std::size_t i = 0; i < actuated_count_; ++i) {
@@ -229,7 +230,7 @@ xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
 }
 
 xmatrix<> kinematic_chain::linear_jacobian(const xvector<>& q) const {
-    const chain_state_ state = compute_chain_state_(q);
+    const chain_state_ state = compute_chain_state_(q, joints_.size() - 1);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{3}, actuated_count_});
     for (std::size_t i = 0; i < actuated_count_; ++i) {
@@ -241,45 +242,49 @@ xmatrix<> kinematic_chain::linear_jacobian(const xvector<>& q) const {
     return J;
 }
 
-std::array<double, 3> kinematic_chain::end_position(const xvector<>& q) const {
-    return compute_chain_state_(q).p_e;
-}
-
-kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at(const xvector<>& q,
-                                                                               const xvector<>& q_prime,
-                                                                               const xvector<>& q_double_prime) const {
-    if (q_prime.size() != actuated_count_ || q_double_prime.size() != actuated_count_) {
-        throw std::invalid_argument("viam::trajex::jacobian: q_prime/q_double_prime size mismatch: expected " +
-                                    std::to_string(actuated_count_) + " (actuated joints)");
+kinematic_chain::frame_kinematics kinematic_chain::forward_kinematics(std::size_t joint,
+                                                                      const xvector<>& q,
+                                                                      const xvector<>& q_dot,
+                                                                      const xvector<>& q_ddot) const {
+    if (joint >= joints_.size()) {
+        throw std::out_of_range("viam::trajex::jacobian: joint " + std::to_string(joint) + " is past the end of a chain of " +
+                                std::to_string(joints_.size()) + " joints");
+    }
+    if (q_dot.size() != actuated_count_ || q_ddot.size() != actuated_count_) {
+        throw std::invalid_argument("viam::trajex::jacobian: q_dot/q_ddot size mismatch: expected " + std::to_string(actuated_count_) +
+                                    " (actuated joints)");
     }
 
-    const chain_state_ state = compute_chain_state_(q);
+    // Only the moving joints up to and including `joint` move its frame. They come first in q, so
+    // the leading entries of q_dot and q_ddot are the ones that apply to them.
+    const chain_state_ state = compute_chain_state_(q, joint);
+    const std::size_t moving = state.joints.size();
 
     vec3 v{0.0, 0.0, 0.0};
-    for (std::size_t i = 0; i < actuated_count_; ++i) {
+    for (std::size_t i = 0; i < moving; ++i) {
         const vec3 col = linear_column(state.joints[i], state.p_e);
-        v = {v[0] + (col[0] * q_prime(i)), v[1] + (col[1] * q_prime(i)), v[2] + (col[2] * q_prime(i))};
+        v = {v[0] + (col[0] * q_dot(i)), v[1] + (col[1] * q_dot(i)), v[2] + (col[2] * q_dot(i))};
     }
 
-    // Differentiate v = sum(col_i * q'_i) along the path, walking base to tip. Everything
-    // downstream of joint i moves with the motion of the joints before it, so we carry that motion
-    // per unit of path speed: omega is the angular velocity the rotating joints so far impart, and
-    // a point p moves at omega x p - c + t, where c sums (w_j q'_j) x p_j over those rotating
-    // joints and t sums w_j q'_j over the translating ones. A joint's axis then turns at omega x w,
-    // and a rotating joint's lever arm r = p_e - p changes at v minus the velocity of p.
+    // Differentiate v = sum(col_i * q_dot_i) from the base to the tip. Everything after joint i
+    // moves with the joints before it, so we carry their motion along as we go. omega is the
+    // angular velocity that the rotating joints so far impart, and a point p moves at
+    // omega x p - c + t, where c sums (w_j q_dot_j) x p_j over those rotating joints and t sums
+    // w_j q_dot_j over the translating ones. A joint's axis therefore turns at omega x w, and the
+    // lever arm r = p_e - p of a rotating joint changes at v minus the velocity of p.
     vec3 dv{0.0, 0.0, 0.0};
     vec3 omega{0.0, 0.0, 0.0};
     vec3 c{0.0, 0.0, 0.0};
     vec3 t{0.0, 0.0, 0.0};
-    for (std::size_t i = 0; i < actuated_count_; ++i) {
-        const auto& joint = state.joints[i];
-        const vec3& w = joint.axis;
-        const vec3& p = joint.position;
+    for (std::size_t i = 0; i < moving; ++i) {
+        const auto& captured = state.joints[i];
+        const vec3& w = captured.axis;
+        const vec3& p = captured.position;
         const vec3 dw = cross(omega, w);
 
         vec3 col = w;
         vec3 d_col = dw;
-        if (!joint.translates) {
+        if (!captured.translates) {
             const vec3 r = {state.p_e[0] - p[0], state.p_e[1] - p[1], state.p_e[2] - p[2]};
             col = cross(w, r);
             const vec3 cp = cross(omega, p);
@@ -289,12 +294,12 @@ kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at(c
             const vec3 d_col_b = cross(w, dr);
             d_col = {d_col_a[0] + d_col_b[0], d_col_a[1] + d_col_b[1], d_col_a[2] + d_col_b[2]};
         }
-        dv = {dv[0] + (d_col[0] * q_prime(i)) + (col[0] * q_double_prime(i)),
-              dv[1] + (d_col[1] * q_prime(i)) + (col[1] * q_double_prime(i)),
-              dv[2] + (d_col[2] * q_prime(i)) + (col[2] * q_double_prime(i))};
+        dv = {dv[0] + (d_col[0] * q_dot(i)) + (col[0] * q_ddot(i)),
+              dv[1] + (d_col[1] * q_dot(i)) + (col[1] * q_ddot(i)),
+              dv[2] + (d_col[2] * q_dot(i)) + (col[2] * q_ddot(i))};
 
-        const vec3 wq = {w[0] * q_prime(i), w[1] * q_prime(i), w[2] * q_prime(i)};
-        if (joint.translates) {
+        const vec3 wq = {w[0] * q_dot(i), w[1] * q_dot(i), w[2] * q_dot(i)};
+        if (captured.translates) {
             t = {t[0] + wq[0], t[1] + wq[1], t[2] + wq[2]};
         } else {
             omega = {omega[0] + wq[0], omega[1] + wq[1], omega[2] + wq[2]};
@@ -303,17 +308,7 @@ kinematic_chain::linear_velocity_gain kinematic_chain::linear_velocity_gain_at(c
         }
     }
 
-    const double gain = norm(v);
-    // The slope d||v||/ds is undefined at a singular gain (||J*f'|| -> 0): dot(v, dv) / gain is
-    // 0 / 0 or x / 0. Callers evaluate the slope only where the TCP curve is the binding
-    // (finite-gain) constraint, so this is not reached in normal operation, but guard the division
-    // at the API boundary so a singular gain yields a defined 0 slope rather than a NaN/inf that
-    // would poison the phase-plane slope downstream.
-    double d_gain_ds = dot(v, dv) / gain;
-    if (!std::isfinite(d_gain_ds)) {
-        d_gain_ds = 0.0;
-    }
-    return {.gain_per_arc_unit = gain, .d_gain_ds = d_gain_ds};
+    return {.position = state.p_e, .linear_velocity = v, .linear_acceleration = dv};
 }
 
 kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin) & {

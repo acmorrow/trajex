@@ -92,47 +92,48 @@ class trajectory {
     ///
     /// TCP (tool center point) limits. Currently constrains linear TCP speed.
     ///
-    /// The linear_velocity_gain callback reports how fast the TCP moves per unit of path arc
-    /// length at a point on the path, ||J_v(q)*f'(s)||, together with its derivative along the
-    /// path. The folded limit is max_linear_speed divided by the gain, and its phase-plane
-    /// slope follows from the derivative. Forward integration, backward integration, and
-    /// bisection each query at the arc position under examination, so successive calls do not
-    /// advance monotonically along the path.
+    /// The evaluator reports, at a point on the path, the ratio of the TCP's linear speed to the
+    /// arc velocity s_dot. That ratio is ||J_v(q)*f'(s)||, the distance the TCP moves per unit of
+    /// arc length, and the evaluator also reports its derivative along the path. The TCP's limit
+    /// on arc velocity is max_linear_speed divided by the ratio, and the slope of that limit in
+    /// the phase plane follows from the derivative. Forward integration, backward integration,
+    /// and bisection each query at the arc position under examination, so successive calls do
+    /// not advance monotonically along the path.
     ///
-    /// The callback may return a NaN gain, which signals a singularity and is treated as
+    /// The evaluator may return a NaN ratio, which signals a singularity and is treated as
     /// non-constraining. A non-finite slope where TCP is the binding curve throws instead.
     ///
-    /// Units are the caller's. max_linear_speed must be expressed in the same length unit as
-    /// the gain, per second; nothing here checks that they agree.
+    /// Units are the caller's. max_linear_speed must be expressed in the length unit the evaluator
+    /// measures the TCP's motion in, per second. Nothing here checks that they agree.
     ///
     struct tcp_limits {
         ///
-        /// The linear velocity gain at a point on the path and its derivative along the path.
+        /// The ratio of the TCP's linear speed to the arc velocity at a point on the path, and
+        /// its derivative along the path.
         ///
-        struct gain {
-            double per_arc_unit = 0.0;  ///< ||J_v(q)*f'(s)||: TCP speed per unit of path speed
-            double d_ds = 0.0;          ///< Derivative of per_arc_unit with respect to arc length
+        struct linear_speed_per_arc_velocity {
+            double value = 0.0;                  ///< ||J_v(q)*f'(s)||
+            double arc_length_derivative = 0.0;  ///< Derivative of value with respect to arc length
         };
 
-        /// Maps (q, q_prime, q_double_prime) to the linear velocity gain and its derivative.
-        using linear_velocity_gain_fn = std::function<gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
-
         ///
-        /// Builds the gain callback from a kinematic chain.
+        /// Builds the evaluator from a kinematic chain.
         ///
         /// The capped point is the origin of the chain's last frame.
         ///
         /// @param chain Chain describing the arm and whatever it carries
         /// @param max_linear_speed Cap on TCP linear speed, in the length unit of the chain's
         ///        translations per second
-        /// @return A limits object whose callback evaluates the chain
+        /// @return A limits object whose evaluator computes the ratio from the chain
         ///
         [[nodiscard]] static tcp_limits from(jacobian::kinematic_chain chain, double max_linear_speed);
 
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
         double max_linear_speed = 0.0;
-        linear_velocity_gain_fn linear_velocity_gain;
+
+        /// Maps (q, q_prime, q_double_prime) at a point on the path to the ratio and its derivative.
+        std::function<linear_speed_per_arc_velocity(const xvector<>&, const xvector<>&, const xvector<>&)> evaluator;
     };
 
     ///

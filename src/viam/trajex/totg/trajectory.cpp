@@ -71,17 +71,18 @@ struct switching_point_cache {
 }
 
 // TCP velocity limit: v_TCP / ||J_v(q)*f'(s)||.
-// Returns +inf at a singularity (gain < eps) or a NaN gain (non-constraining).
+// Returns +inf where the ratio is NaN or below epsilon, which marks a singularity, so that the TCP
+// limit does not constrain there.
 arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
                                         const xvector<>& q_prime,
                                         const xvector<>& q_double_prime,
                                         const trajectory::tcp_limits& tcp,
                                         class epsilon epsilon) {
-    const double gain = tcp.linear_velocity_gain(q, q_prime, q_double_prime).per_arc_unit;
-    if (std::isnan(gain) || gain < static_cast<double>(epsilon)) {
+    const double ratio = tcp.evaluator(q, q_prime, q_double_prime).value;
+    if (std::isnan(ratio) || ratio < static_cast<double>(epsilon)) {
         return arc_velocity{std::numeric_limits<double>::infinity()};
     }
-    return arc_velocity{tcp.max_linear_speed / gain};
+    return arc_velocity{tcp.max_linear_speed / ratio};
 }
 
 // Computes maximum path velocity (s_dot) from joint velocity and acceleration limits.
@@ -365,15 +366,16 @@ phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_
         return compute_velocity_limit_derivative(q_prime, q_double_prime, opt.max_velocity, opt.epsilon);
     }
 
-    // TCP binding (gain finite): d/ds s_dot_max_TCP = -v_TCP * (dg/ds) / g^2.
-    const auto gd = opt.tcp->linear_velocity_gain(configuration_of(cursor), q_prime, q_double_prime);
-    const double slope = -opt.tcp->max_linear_speed * gd.d_ds / (gd.per_arc_unit * gd.per_arc_unit);
+    // The TCP limit is the lower of the two here, so its ratio g is finite, and
+    // d/ds s_dot_max_TCP = -v_TCP * (dg/ds) / g^2.
+    const auto r = opt.tcp->evaluator(configuration_of(cursor), q_prime, q_double_prime);
+    const double slope = -opt.tcp->max_linear_speed * r.arc_length_derivative / (r.value * r.value);
 
     if (!std::isfinite(slope)) {
         throw std::runtime_error{
-            "compute_velocity_limit_derivative_with_tcp: non-finite TCP limit-curve slope (linear_velocity_gain "
-            "returned per_arc_unit " +
-            std::to_string(gd.per_arc_unit) + ", d_ds " + std::to_string(gd.d_ds) + " at a TCP-binding cursor)"};
+            "compute_velocity_limit_derivative_with_tcp: non-finite TCP limit-curve slope (evaluator "
+            "returned value " +
+            std::to_string(r.value) + ", arc_length_derivative " + std::to_string(r.arc_length_derivative) + " at a TCP-binding cursor)"};
     }
     return phase_plane_slope{slope};
 }
@@ -1274,14 +1276,33 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
     on_event(traj, std::move(event));
 }
 
+// The chain knows nothing about paths. We hand it the path tangent and curvature where it expects a
+// joint velocity and acceleration, which is a change of variables, and what comes back is the end
+// point's motion per unit of arc length, dp/ds and d^2p/ds^2. The cap is on speed, so the evaluator
+// reduces that motion to its magnitude ||dp/ds|| and the derivative of that magnitude,
+// dp/ds . d^2p/ds^2 / ||dp/ds||.
 trajectory::tcp_limits trajectory::tcp_limits::from(jacobian::kinematic_chain chain, double max_linear_speed) {
     return tcp_limits{
         .max_linear_speed = max_linear_speed,
-        .linear_velocity_gain =
-            [chain = std::move(chain)](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-                const auto g = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
-                return gain{.per_arc_unit = g.gain_per_arc_unit, .d_ds = g.d_gain_ds};
-            },
+        .evaluator = [chain = std::move(chain)](
+                         const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) -> linear_speed_per_arc_velocity {
+            const auto fk = chain.forward_kinematics(q, q_prime, q_double_prime);
+            const auto& v = fk.linear_velocity;
+            const auto& a = fk.linear_acceleration;
+
+            const double value = std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
+
+            // The derivative is undefined where the ratio is singular, since ||dp/ds|| -> 0 makes it
+            // 0 / 0 or x / 0. The integrator asks for it only where the TCP limit is the lower one,
+            // which requires a ratio of at least epsilon, so this should not happen in normal
+            // operation. If it does, we return 0 rather than a NaN or inf that would poison the
+            // phase-plane slope downstream.
+            double derivative = ((v[0] * a[0]) + (v[1] * a[1]) + (v[2] * a[2])) / value;
+            if (!std::isfinite(derivative)) {
+                derivative = 0.0;
+            }
+            return {.value = value, .arc_length_derivative = derivative};
+        },
     };
 }
 
@@ -1345,8 +1366,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
         if (!(opt.tcp->max_linear_speed > 0.0) || !std::isfinite(opt.tcp->max_linear_speed)) {
             throw std::invalid_argument{"tcp.max_linear_speed must be a finite positive number"};
         }
-        if (!opt.tcp->linear_velocity_gain) {
-            throw std::invalid_argument{"tcp.linear_velocity_gain must be set"};
+        if (!opt.tcp->evaluator) {
+            throw std::invalid_argument{"tcp.evaluator must be set"};
         }
     }
 

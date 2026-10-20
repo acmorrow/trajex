@@ -43,19 +43,19 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     const path p = make_2dof_path();
     auto opt = base_2dof_options();
 
-    // non-positive max_velocity
+    // non-positive max_linear_speed
     opt.tcp = test::planar_2link_tcp_limits(0.0);
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
-    // missing gain callback
-    opt.tcp = trajectory::tcp_limits{.max_linear_speed = 0.5, .linear_velocity_gain = {}};
+    // missing evaluator
+    opt.tcp = trajectory::tcp_limits{.max_linear_speed = 0.5, .evaluator = {}};
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
-    // default-initialized limit with only the callback filled in: max_velocity is
+    // default-initialized limit with only the evaluator filled in: max_linear_speed is
     // zero-initialized, so validation must reject it deterministically
     trajectory::tcp_limits default_init;
-    default_init.linear_velocity_gain = [](const xvector<>& q, const xvector<>& qp, const xvector<>& qpp) {
-        return test::planar_2link_linear_velocity_gain(1.0, 1.0, q, qp, qpp);
+    default_init.evaluator = [](const xvector<>& q, const xvector<>& qp, const xvector<>& qpp) {
+        return test::planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, qp, qpp);
     };
     opt.tcp = default_init;
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
@@ -65,7 +65,7 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     BOOST_CHECK_NO_THROW(static_cast<void>(trajectory::create(p, opt)));
 }
 
-// The TCP velocity component max_velocity / ||J(q) * tangent|| is exposed per cursor by
+// The TCP velocity component max_linear_speed / ||J(q) * tangent|| is exposed per cursor by
 // get_velocity_limit_components. A straight joint-space path has a constant tangent, so placing a
 // known (q, tangent) pair under the cursor at the path midpoint lets us read the raw component.
 BOOST_AUTO_TEST_CASE(tcp_velocity_component_basic_and_singularity) {
@@ -348,7 +348,8 @@ BOOST_AUTO_TEST_CASE(integration_points_respect_combined_velocity_limit) {
     }
 }
 
-// A gain callback whose derivative is NaN at a TCP-binding point makes the TCP slope non-finite.
+// An evaluator that returns a NaN arc length derivative where the TCP limit is the lower one makes
+// the TCP slope non-finite.
 // NaN compares false against everything, so an unguarded non-finite slope silently corrupts every
 // curve-following decision downstream (trap detection, tangent following); the integrator must
 // reject it loudly instead.
@@ -357,11 +358,11 @@ BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
     auto opt = trajectory::options{.max_velocity = xvector<>{100.0, 100.0}, .max_acceleration = xvector<>{0.05, 0.05}};
     opt.tcp = trajectory::tcp_limits{
         .max_linear_speed = 0.3,
-        .linear_velocity_gain =
+        .evaluator =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-                auto g = test::planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);
-                g.d_ds = std::numeric_limits<double>::quiet_NaN();
-                return g;
+                auto r = test::planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, q_prime, q_double_prime);
+                r.arc_length_derivative = std::numeric_limits<double>::quiet_NaN();
+                return r;
             },
     };
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);

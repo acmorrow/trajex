@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <numbers>
@@ -315,30 +316,113 @@ void check_matches_numerical(const test_chain& joints, const xvector<>& q, doubl
     BOOST_CHECK_SMALL(matrix_diff_norm(J, J_num), tol);
 }
 
-// Checks linear_velocity_gain_at against ||linear_jacobian(q) * q_prime|| for the gain, and against
-// a central difference of that along the path for its derivative. linear_jacobian is itself
-// checked against the reference forward kinematics, so the gain needs no reference of its own.
-void check_linear_velocity_gain(
-    const test_chain& joints, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime, double tol = 1e-6) {
-    const auto chain = build_chain(joints);
-    const auto gain_at = [&](const xvector<>& qq, const xvector<>& qp) {
-        const auto J = chain.linear_jacobian(qq);
-        std::array<double, 3> v{0.0, 0.0, 0.0};
-        for (std::size_t r = 0; r < 3; ++r) {
-            for (std::size_t j = 0; j < qp.size(); ++j) {
-                v[r] += J(r, j) * qp(j);
-            }
+// The end point's linear velocity J_v(q) * q_dot, computed with linear_jacobian. That is checked
+// against the reference forward kinematics elsewhere in this file, so it can serve as a reference
+// here.
+std::array<double, 3> linear_velocity_via_jacobian(const kinematic_chain& chain, const xvector<>& q, const xvector<>& q_dot) {
+    const auto J = chain.linear_jacobian(q);
+    std::array<double, 3> v{0.0, 0.0, 0.0};
+    for (std::size_t r = 0; r < 3; ++r) {
+        for (std::size_t j = 0; j < q_dot.size(); ++j) {
+            v[r] += J(r, j) * q_dot(j);
         }
-        return std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
-    };
-    const auto analytic = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
-    BOOST_CHECK_CLOSE(analytic.gain_per_arc_unit, gain_at(q, q_prime), 1e-7);
+    }
+    return v;
+}
+
+double norm(const std::array<double, 3>& v) {
+    return std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
+}
+
+// Checks forward_kinematics at the end of the chain. The position is compared with the reference
+// forward kinematics and the linear velocity with J_v(q) * q_dot. The linear acceleration is
+// compared with a central difference of that velocity along the motion q + t q_dot,
+// q_dot + t q_ddot, whose derivative at t = 0 is J_v_dot q_dot + J_v q_ddot.
+void check_forward_kinematics(
+    const test_chain& joints, const xvector<>& q, const xvector<>& q_dot, const xvector<>& q_ddot, double tol = 1e-6) {
+    const auto chain = build_chain(joints);
+    const auto fk = chain.forward_kinematics(q, q_dot, q_ddot);
+
+    const auto T = forward_transform(joints, q);
+    BOOST_CHECK_SMALL(vec3_diff_norm(fk.position, {T(0, 3), T(1, 3), T(2, 3)}), 1e-12);
+
+    BOOST_CHECK_SMALL(vec3_diff_norm(fk.linear_velocity, linear_velocity_via_jacobian(chain, q, q_dot)), 1e-12);
 
     const double h = 1e-6;
-    const double numeric =
-        (gain_at(q + (h * q_prime), q_prime + (h * q_double_prime)) - gain_at(q - (h * q_prime), q_prime - (h * q_double_prime))) /
-        (2.0 * h);
-    BOOST_CHECK_SMALL(analytic.d_gain_ds - numeric, tol);
+    const auto v_plus = linear_velocity_via_jacobian(chain, q + (h * q_dot), q_dot + (h * q_ddot));
+    const auto v_minus = linear_velocity_via_jacobian(chain, q - (h * q_dot), q_dot - (h * q_ddot));
+    const std::array<double, 3> numeric = {
+        (v_plus[0] - v_minus[0]) / (2.0 * h), (v_plus[1] - v_minus[1]) / (2.0 * h), (v_plus[2] - v_minus[2]) / (2.0 * h)};
+    BOOST_CHECK_SMALL(vec3_diff_norm(fk.linear_acceleration, numeric), tol);
+}
+
+// The leading n entries of v.
+xvector<> leading(const xvector<>& v, std::size_t n) {
+    xvector<> out = xt::zeros<double>({n});
+    for (std::size_t i = 0; i < n; ++i) {
+        out(i) = v(i);
+    }
+    return out;
+}
+
+// Checks forward_kinematics at every frame of the chain. Frame k depends only on joints 0..k, so
+// it must agree with the end frame of a chain built from those joints alone, given the leading
+// entries of q, q_dot and q_ddot that belong to them. We check that shorter chain's end frame
+// against the references first, so that each frame is compared with an independent answer rather
+// than only with another result from the same implementation.
+void check_forward_kinematics_at_every_frame(const test_chain& joints,
+                                             const xvector<>& q,
+                                             const xvector<>& q_dot,
+                                             const xvector<>& q_ddot) {
+    const auto chain = build_chain(joints);
+    BOOST_REQUIRE_EQUAL(chain.size(), joints.size());
+
+    for (std::size_t k = 0; k < joints.size(); ++k) {
+        const test_chain prefix(joints.begin(), joints.begin() + static_cast<std::ptrdiff_t>(k + 1));
+        const auto n = static_cast<std::size_t>(
+            std::count_if(prefix.begin(), prefix.end(), [](const test_joint& j) { return j.kind != test_joint_kind::k_fixed; }));
+        const xvector<> q_p = leading(q, n);
+        const xvector<> q_dot_p = leading(q_dot, n);
+        const xvector<> q_ddot_p = leading(q_ddot, n);
+
+        BOOST_TEST_CONTEXT("frame " << k) {
+            check_forward_kinematics(prefix, q_p, q_dot_p, q_ddot_p);
+
+            const auto expected = build_chain(prefix).forward_kinematics(q_p, q_dot_p, q_ddot_p);
+            const auto actual = chain.forward_kinematics(k, q, q_dot, q_ddot);
+            BOOST_CHECK_SMALL(vec3_diff_norm(actual.position, expected.position), 1e-12);
+            BOOST_CHECK_SMALL(vec3_diff_norm(actual.linear_velocity, expected.linear_velocity), 1e-12);
+            BOOST_CHECK_SMALL(vec3_diff_norm(actual.linear_acceleration, expected.linear_acceleration), 1e-12);
+        }
+    }
+
+    // The three-argument form must report the last frame.
+    const auto end = chain.forward_kinematics(q, q_dot, q_ddot);
+    const auto last = chain.forward_kinematics(chain.size() - 1, q, q_dot, q_ddot);
+    BOOST_CHECK(end.position == last.position);
+    BOOST_CHECK(end.linear_velocity == last.linear_velocity);
+    BOOST_CHECK(end.linear_acceleration == last.linear_acceleration);
+}
+
+using viam::trajex::totg::trajectory;
+
+// Checks the evaluator that tcp_limits::from builds. Its value, the TCP's linear speed per unit of
+// arc velocity, is compared with ||J_v(q) * q_prime||, and its arc length derivative with a central
+// difference of that along the path.
+void check_linear_speed_per_arc_velocity(
+    const test_chain& joints, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime, double tol = 1e-6) {
+    const auto chain = build_chain(joints);
+    const auto limits = trajectory::tcp_limits::from(chain, 1.0);
+    const auto speed_ratio_at = [&](const xvector<>& qq, const xvector<>& qp) { return norm(linear_velocity_via_jacobian(chain, qq, qp)); };
+
+    const auto r = limits.evaluator(q, q_prime, q_double_prime);
+    BOOST_CHECK_CLOSE(r.value, speed_ratio_at(q, q_prime), 1e-7);
+
+    const double h = 1e-6;
+    const double numeric = (speed_ratio_at(q + (h * q_prime), q_prime + (h * q_double_prime)) -
+                            speed_ratio_at(q - (h * q_prime), q_prime - (h * q_double_prime))) /
+                           (2.0 * h);
+    BOOST_CHECK_SMALL(r.arc_length_derivative - numeric, tol);
 }
 
 }  // namespace
@@ -568,7 +652,8 @@ BOOST_AUTO_TEST_CASE(evaluation_refuses_a_rank_that_is_not_one) {
     const auto evaluable = [&]<typename T>() { return requires(const T& t) { chain.jacobian(t); }; };
     const auto linear_evaluable = [&]<typename T>() { return requires(const T& t) { chain.linear_jacobian(t); }; };
     const auto position_evaluable = [&]<typename T>() { return requires(const T& t) { chain.end_position(t); }; };
-    const auto gain_evaluable = [&]<typename T>() { return requires(const T& t) { chain.linear_velocity_gain_at(t, t, t); }; };
+    const auto frame_evaluable = [&]<typename T>() { return requires(const T& t) { chain.forward_kinematics(std::size_t{0}, t, t, t); }; };
+    const auto end_frame_evaluable = [&]<typename T>() { return requires(const T& t) { chain.forward_kinematics(t, t, t); }; };
 
     using rank_three = xt::xtensor<double, 3>;
 
@@ -583,25 +668,63 @@ BOOST_AUTO_TEST_CASE(evaluation_refuses_a_rank_that_is_not_one) {
     BOOST_CHECK(position_evaluable.template operator()<xvector<>>());
     BOOST_CHECK(!position_evaluable.template operator()<xmatrix<>>());
 
-    BOOST_CHECK(gain_evaluable.template operator()<xvector<>>());
-    BOOST_CHECK(!gain_evaluable.template operator()<xmatrix<>>());
+    BOOST_CHECK(frame_evaluable.template operator()<xvector<>>());
+    BOOST_CHECK(frame_evaluable.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(!frame_evaluable.template operator()<xmatrix<>>());
+    BOOST_CHECK(!frame_evaluable.template operator()<rank_three>());
+
+    BOOST_CHECK(end_frame_evaluable.template operator()<xvector<>>());
+    BOOST_CHECK(end_frame_evaluable.template operator()<xt::xarray<double>>());
+    BOOST_CHECK(!end_frame_evaluable.template operator()<xmatrix<>>());
+    BOOST_CHECK(!end_frame_evaluable.template operator()<rank_three>());
 
     // A rank settled at runtime reaches the check.
     const xt::xarray<double> good = {0.3, -0.7};
     const xt::xarray<double> two_d = {{0.3, -0.7}, {0.1, 0.2}};
     BOOST_CHECK_NO_THROW(static_cast<void>(chain.jacobian(good)));
+    BOOST_CHECK_NO_THROW(static_cast<void>(chain.forward_kinematics(good, good, good)));
     BOOST_CHECK_THROW(static_cast<void>(chain.jacobian(two_d)), std::invalid_argument);
     BOOST_CHECK_THROW(static_cast<void>(chain.linear_jacobian(two_d)), std::invalid_argument);
     BOOST_CHECK_THROW(static_cast<void>(chain.end_position(two_d)), std::invalid_argument);
-    BOOST_CHECK_THROW(static_cast<void>(chain.linear_velocity_gain_at(two_d, good, good)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(0, two_d, good, good)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(0, good, two_d, good)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(0, good, good, two_d)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(two_d, good, good)), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(rejects_wrong_q_size) {
     const auto chain = build_chain(twolink_chain());
+    const xvector<> q = {0.0, 0.0};
     const xvector<> q_bad = {0.0, 0.0, 0.0};
     BOOST_CHECK_THROW(static_cast<void>(chain.jacobian(q_bad)), std::invalid_argument);
     BOOST_CHECK_THROW(static_cast<void>(chain.linear_jacobian(q_bad)), std::invalid_argument);
     BOOST_CHECK_THROW(static_cast<void>(chain.end_position(q_bad)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(q_bad, q, q)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(q, q_bad, q)), std::invalid_argument);
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(q, q, q_bad)), std::invalid_argument);
+}
+
+// size() counts every joint given to the builder, which is every frame forward_kinematics can report
+// on, while dof() counts only the moving joints, which is the length of q.
+BOOST_AUTO_TEST_CASE(size_counts_joints_and_dof_counts_moving_joints) {
+    const auto chain = build_chain(scara_chain());
+    BOOST_CHECK_EQUAL(chain.size(), 5U);
+    BOOST_CHECK_EQUAL(chain.dof(), 4U);
+}
+
+BOOST_AUTO_TEST_CASE(rejects_a_frame_past_the_end) {
+    const auto chain = build_chain(scara_chain());
+    const xvector<> q = {0.4, -1.1, 0.12, 0.7};
+    BOOST_CHECK_NO_THROW(static_cast<void>(chain.forward_kinematics(chain.size() - 1, q, q, q)));
+    BOOST_CHECK_THROW(static_cast<void>(chain.forward_kinematics(chain.size(), q, q, q)), std::out_of_range);
+}
+
+// end_position reports the position that forward_kinematics reports for the chain at rest.
+BOOST_AUTO_TEST_CASE(end_position_is_the_resting_end_frame_position) {
+    const auto chain = build_chain(mixed_chain());
+    const xvector<> q = {0.3, -0.6, 0.2, 1.1};
+    const xvector<> zeros = xt::zeros<double>({std::size_t{4}});
+    BOOST_CHECK(chain.end_position(q) == chain.forward_kinematics(q, zeros, zeros).position);
 }
 
 BOOST_AUTO_TEST_CASE(fixed_joints_consume_no_q) {
@@ -622,64 +745,90 @@ BOOST_AUTO_TEST_CASE(indifferent_to_full_turn_offsets) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite validate linear_velocity_gain_at: the gain ||J*f'|| and its
-// path derivative d/ds||J*f'|| against a central finite difference of the gain along the path.
-BOOST_AUTO_TEST_SUITE(linear_velocity_gain_tests)
+// The tests in this suite validate forward_kinematics, which reports a frame's position and the
+// linear velocity and acceleration of its origin for a given joint velocity and acceleration.
+BOOST_AUTO_TEST_SUITE(forward_kinematics_tests)
 
 BOOST_AUTO_TEST_CASE(twolink_typical) {
-    check_linear_velocity_gain(twolink_chain(), {0.3, -0.7}, {1.0, 0.5}, {0.2, -0.4});
+    check_forward_kinematics(twolink_chain(), {0.3, -0.7}, {1.0, 0.5}, {0.2, -0.4});
 }
 
 BOOST_AUTO_TEST_CASE(threelink_with_spacers_typical) {
-    check_linear_velocity_gain(threelink_with_spacers_chain(), {0.3, -0.5, 0.8}, {0.6, 0.1, -0.7}, {-0.2, 0.4, 0.3});
+    check_forward_kinematics(threelink_with_spacers_chain(), {0.3, -0.5, 0.8}, {0.6, 0.1, -0.7}, {-0.2, 0.4, 0.3});
 }
 
 BOOST_AUTO_TEST_CASE(sixdof_typical) {
-    check_linear_velocity_gain(
+    check_forward_kinematics(
         sixdof_arm_chain(), {0.1, -0.5, 1.2, -0.3, 0.6, -0.1}, {0.2, 0.7, -0.4, 0.5, -0.6, 0.3}, {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2});
 }
 
 BOOST_AUTO_TEST_CASE(rotated_origins_typical) {
-    check_linear_velocity_gain(rotated_origins_chain(), {0.4, -0.9, 0.3}, {0.6, -0.2, 0.5}, {0.1, 0.4, -0.3});
+    check_forward_kinematics(rotated_origins_chain(), {0.4, -0.9, 0.3}, {0.6, -0.2, 0.5}, {0.1, 0.4, -0.3});
 }
 
 BOOST_AUTO_TEST_CASE(with_prismatic_joints) {
-    check_linear_velocity_gain(scara_chain(), {0.4, -1.1, 0.12, 0.7}, {0.3, -0.5, 0.8, 0.2}, {0.1, 0.2, -0.4, 0.3});
-    check_linear_velocity_gain(mixed_chain(), {0.3, -0.6, 0.2, 1.1}, {0.5, 0.4, -0.7, 0.2}, {-0.3, 0.1, 0.2, 0.6});
+    check_forward_kinematics(scara_chain(), {0.4, -1.1, 0.12, 0.7}, {0.3, -0.5, 0.8, 0.2}, {0.1, 0.2, -0.4, 0.3});
+    check_forward_kinematics(mixed_chain(), {0.3, -0.6, 0.2, 1.1}, {0.5, 0.4, -0.7, 0.2}, {-0.3, 0.1, 0.2, 0.6});
 }
 
-// A singular gain (||J*f'|| -> 0, here from a zero path tangent) has an undefined slope, since
-// dot(v, dv) / gain is 0 / 0. The function must return a finite, non-poisoning value rather than a
-// NaN that would propagate into the phase-plane slope downstream.
-BOOST_AUTO_TEST_CASE(singular_gain_yields_finite_derivative) {
-    const auto chain = build_chain(twolink_chain());
-    const auto vg = chain.linear_velocity_gain_at(xvector<>{0.3, -0.7}, xvector<>{0.0, 0.0}, xvector<>{0.2, -0.4});
-    BOOST_CHECK_SMALL(vg.gain_per_arc_unit, 1e-15);
-    BOOST_CHECK(std::isfinite(vg.d_gain_ds));
+BOOST_AUTO_TEST_CASE(every_frame_matches_its_prefix_chain) {
+    check_forward_kinematics_at_every_frame(threelink_with_spacers_chain(), {0.3, -0.5, 0.8}, {0.6, 0.1, -0.7}, {-0.2, 0.4, 0.3});
+    check_forward_kinematics_at_every_frame(
+        sixdof_arm_chain(), {0.1, -0.5, 1.2, -0.3, 0.6, -0.1}, {0.2, 0.7, -0.4, 0.5, -0.6, 0.3}, {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2});
+    check_forward_kinematics_at_every_frame(rotated_origins_chain(), {0.4, -0.9, 0.3}, {0.6, -0.2, 0.5}, {0.1, 0.4, -0.3});
+    check_forward_kinematics_at_every_frame(mixed_chain(), {0.3, -0.6, 0.2, 1.1}, {0.5, 0.4, -0.7, 0.2}, {-0.3, 0.1, 0.2, 0.6});
 }
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite validate trajectory::tcp_limits::from: the gain callback reports what
-// the chain it was given reports, and keeps doing so across calls.
+// The tests in this suite validate trajectory::tcp_limits::from, whose evaluator reports the TCP's
+// linear speed per unit of arc velocity, ||J_v(q) * f'||, and its derivative along the path.
 BOOST_AUTO_TEST_SUITE(tcp_limits_from_tests)
 
-BOOST_AUTO_TEST_CASE(matches_linear_velocity_gain) {
-    const auto chain = build_chain(sixdof_arm_chain());
+BOOST_AUTO_TEST_CASE(twolink_typical) {
+    check_linear_speed_per_arc_velocity(twolink_chain(), {0.3, -0.7}, {1.0, 0.5}, {0.2, -0.4});
+}
+
+BOOST_AUTO_TEST_CASE(threelink_with_spacers_typical) {
+    check_linear_speed_per_arc_velocity(threelink_with_spacers_chain(), {0.3, -0.5, 0.8}, {0.6, 0.1, -0.7}, {-0.2, 0.4, 0.3});
+}
+
+BOOST_AUTO_TEST_CASE(sixdof_typical) {
+    check_linear_speed_per_arc_velocity(
+        sixdof_arm_chain(), {0.1, -0.5, 1.2, -0.3, 0.6, -0.1}, {0.2, 0.7, -0.4, 0.5, -0.6, 0.3}, {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2});
+}
+
+BOOST_AUTO_TEST_CASE(rotated_origins_typical) {
+    check_linear_speed_per_arc_velocity(rotated_origins_chain(), {0.4, -0.9, 0.3}, {0.6, -0.2, 0.5}, {0.1, 0.4, -0.3});
+}
+
+BOOST_AUTO_TEST_CASE(with_prismatic_joints) {
+    check_linear_speed_per_arc_velocity(scara_chain(), {0.4, -1.1, 0.12, 0.7}, {0.3, -0.5, 0.8, 0.2}, {0.1, 0.2, -0.4, 0.3});
+    check_linear_speed_per_arc_velocity(mixed_chain(), {0.3, -0.6, 0.2, 1.1}, {0.5, 0.4, -0.7, 0.2}, {-0.3, 0.1, 0.2, 0.6});
+}
+
+BOOST_AUTO_TEST_CASE(binds_the_cap_and_answers_repeatably) {
+    const auto limits = trajectory::tcp_limits::from(build_chain(sixdof_arm_chain()), 0.5);
     const xvector<> q = {0.1, -0.5, 1.2, -0.3, 0.6, -0.1};
     const xvector<> q_prime = {0.2, 0.7, -0.4, 0.5, -0.6, 0.3};
     const xvector<> q_double_prime = {-0.1, 0.3, 0.2, -0.5, 0.4, -0.2};
 
-    const auto limits = viam::trajex::totg::trajectory::tcp_limits::from(chain, 0.5);
-    const auto expected = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
-
-    for (int call = 0; call < 2; ++call) {
-        const auto g = limits.linear_velocity_gain(q, q_prime, q_double_prime);
-        BOOST_CHECK_EQUAL(g.per_arc_unit, expected.gain_per_arc_unit);
-        BOOST_CHECK_EQUAL(g.d_ds, expected.d_gain_ds);
-    }
+    const auto first = limits.evaluator(q, q_prime, q_double_prime);
+    const auto second = limits.evaluator(q, q_prime, q_double_prime);
+    BOOST_CHECK_EQUAL(first.value, second.value);
+    BOOST_CHECK_EQUAL(first.arc_length_derivative, second.arc_length_derivative);
 
     BOOST_CHECK_EQUAL(limits.max_linear_speed, 0.5);
+}
+
+// When the ratio ||J*f'|| is zero, here because the path tangent is zero, its derivative
+// dot(v, a) / ||v|| is 0 / 0 and undefined. The evaluator reports a finite derivative rather than a
+// NaN that would propagate into the phase-plane slope downstream.
+BOOST_AUTO_TEST_CASE(singular_ratio_yields_finite_derivative) {
+    const auto limits = trajectory::tcp_limits::from(build_chain(twolink_chain()), 0.5);
+    const auto r = limits.evaluator(xvector<>{0.3, -0.7}, xvector<>{0.0, 0.0}, xvector<>{0.2, -0.4});
+    BOOST_CHECK_SMALL(r.value, 1e-15);
+    BOOST_CHECK(std::isfinite(r.arc_length_derivative));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

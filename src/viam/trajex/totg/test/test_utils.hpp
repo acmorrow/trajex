@@ -69,11 +69,12 @@ inline xmatrix<> planar_2link_jacobian(double l1, double l2, const xvector<>& q)
     return J;
 }
 
-/// Numerical linear velocity gain for the planar 2-link, for tests that build tcp_limits by hand.
-/// Central-differences ||planar_2link_jacobian(q) * q_prime|| along the path.
-inline trajectory::tcp_limits::gain planar_2link_linear_velocity_gain(
+/// The TCP's linear speed per unit of arc velocity for the planar 2-link, and its derivative along
+/// the path, for tests that build tcp_limits by hand. The derivative is a central difference of
+/// ||planar_2link_jacobian(q) * q_prime|| along the path.
+inline trajectory::tcp_limits::linear_speed_per_arc_velocity planar_2link_linear_speed_per_arc_velocity(
     double l1, double l2, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-    const auto gain_at = [&](const xvector<>& qq, const xvector<>& qp) {
+    const auto speed_ratio_at = [&](const xvector<>& qq, const xvector<>& qp) {
         const auto J = planar_2link_jacobian(l1, l2, qq);
         double vx = 0.0;
         double vy = 0.0;
@@ -85,20 +86,21 @@ inline trajectory::tcp_limits::gain planar_2link_linear_velocity_gain(
         }
         return std::sqrt((vx * vx) + (vy * vy) + (vz * vz));
     };
-    const double g = gain_at(q, q_prime);
+    const double value = speed_ratio_at(q, q_prime);
     const double h = 1e-6;
-    const double dg =
-        (gain_at(q + h * q_prime, q_prime + h * q_double_prime) - gain_at(q - h * q_prime, q_prime - h * q_double_prime)) / (2.0 * h);
-    return {.per_arc_unit = g, .d_ds = dg};
+    const double derivative =
+        (speed_ratio_at(q + h * q_prime, q_prime + h * q_double_prime) - speed_ratio_at(q - h * q_prime, q_prime - h * q_double_prime)) /
+        (2.0 * h);
+    return {.value = value, .arc_length_derivative = derivative};
 }
 
 /// Builds tcp_limits for a planar 2-link (l1 = l2 = 1).
 inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_speed) {
     return trajectory::tcp_limits{
         .max_linear_speed = max_linear_speed,
-        .linear_velocity_gain =
+        .evaluator =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-                return planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);
+                return planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, q_prime, q_double_prime);
             },
     };
 }
