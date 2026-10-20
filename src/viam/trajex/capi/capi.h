@@ -418,8 +418,9 @@ int viam_trajex_kinematic_chain_end_position(
 /// @name Schema key constants
 ///
 /// String constants for the input and output keys honored by `viam_trajex_totg_generate`. Callers can reference these
-/// in place of hard-coded string literals; the underlying string values are 1:1 with the existing trajex
-/// `service::mlmodel::infer` schema and are part of the stable ABI.
+/// in place of hard-coded string literals. The string values are part of the stable ABI. They match the keys of the
+/// trajex `service::mlmodel::infer` schema, except for `viam_trajex_totg_key_tcp_max_linear_velocity`, which the service
+/// does not accept because it has no way to receive a kinematic chain.
 ///
 /// @{
 ///

@@ -31,6 +31,7 @@ func TestSchemaKeysMatchABI(t *testing.T) {
 		{"configs", totg.KeyConfigurationsRads, "configurations_rads"},
 		{"vels", totg.KeyVelocitiesRadsPerSec, "velocities_rads_per_sec"},
 		{"accs", totg.KeyAccelerationsRadsPerSec2, "accelerations_rads_per_sec2"},
+		{"tcp_cap", totg.KeyTCPMaxLinearVelocity, "tcp_max_linear_velocity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			test.That(t, tc.actual, test.ShouldEqual, tc.expected)

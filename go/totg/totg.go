@@ -38,6 +38,7 @@ var (
 	KeyConfigurationsRads                 string //nolint:revive
 	KeyVelocitiesRadsPerSec               string //nolint:revive
 	KeyAccelerationsRadsPerSec2           string //nolint:revive
+	KeyTCPMaxLinearVelocity               string //nolint:revive
 )
 
 func init() {
@@ -52,6 +53,7 @@ func init() {
 	KeyConfigurationsRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_configurations_rads))
 	KeyVelocitiesRadsPerSec = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocities_rads_per_sec))
 	KeyAccelerationsRadsPerSec2 = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_accelerations_rads_per_sec2))
+	KeyTCPMaxLinearVelocity = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_tcp_max_linear_velocity))
 }
 
 // Generate computes a time-parameterized trajectory from the named-tensor
@@ -66,6 +68,36 @@ func init() {
 // ctx is cancelled while the C call is in flight (which itself cannot be
 // interrupted), the result is discarded and ctx.Err() is returned.
 func Generate(ctx context.Context, inputs, outputs *trajex.TensorMap) error {
+	return generate(ctx, nil, inputs, outputs)
+}
+
+// GenerateWithKinematics behaves like Generate, but also takes a kinematic
+// chain describing the arm, which is what allows inputs to carry limits such
+// as KeyTCPMaxLinearVelocity. Having kinematics is a property of the caller,
+// while wanting a cap is a property of a particular call, so a caller with a
+// chain may pass it on every call. When inputs carry no such limit, the
+// trajectory is exactly the one Generate would produce.
+//
+// The chain must not be nil, must not already have been released with Close,
+// and its number of rotational and translational joints must equal the
+// number of degrees of freedom in the waypoints. The chain is only read during the call, so it may be released as
+// soon as the call returns.
+func GenerateWithKinematics(ctx context.Context, chain *trajex.KinematicChain, inputs, outputs *trajex.TensorMap) error {
+	// A null chain would reach the C ABI as an ordinary request without
+	// kinematics. That is harmless when no cap was asked for, but it hides a
+	// mistake on the caller's part, so we refuse it here instead.
+	chainHandle := (*C.viam_trajex_kinematic_chain_t)(chain.UnsafeHandle())
+	if chainHandle == nil {
+		return errors.New("trajex/totg: GenerateWithKinematics requires a kinematic chain that is not nil and has not been released")
+	}
+	return generate(ctx, chainHandle, inputs, outputs)
+}
+
+// Generate and GenerateWithKinematics both end up here. They are separate
+// functions, rather than one taking a chain that may be nil, because a bare
+// nil in an argument list tells someone reading the call nothing about what
+// it means. The streaming package makes the same split for its constructors.
+func generate(ctx context.Context, chain *C.viam_trajex_kinematic_chain_t, inputs, outputs *trajex.TensorMap) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -73,7 +105,7 @@ func Generate(ctx context.Context, inputs, outputs *trajex.TensorMap) error {
 	outHandle := (*C.viam_trajex_tensor_map_t)(outputs.UnsafeHandle())
 
 	var errOut *C.char
-	rc := C.viam_trajex_totg_generate(inHandle, outHandle, &errOut)
+	rc := C.viam_trajex_totg_generate(chain, inHandle, outHandle, &errOut)
 	if rc != 0 {
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)
