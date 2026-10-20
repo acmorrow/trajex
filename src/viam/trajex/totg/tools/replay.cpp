@@ -136,11 +136,11 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
 
     // A v2 record that carried a TCP limit did so with a model_table, which nothing reads any
     // more. Its cap arrives without kinematics and is refused here rather than silently dropped.
-    if (root.isMember("tcp_max_linear_velocity")) {
+    if (root.isMember("tcp_max_linear_speed")) {
         if (!cfg.kinematics) {
-            throw std::runtime_error("tcp_max_linear_velocity given without a kinematic_chain to apply it to");
+            throw std::runtime_error("tcp_max_linear_speed given without a kinematic_chain to apply it to");
         }
-        cfg.tcp_max_linear_velocity = root["tcp_max_linear_velocity"].asDouble();
+        cfg.tcp_max_linear_speed = root["tcp_max_linear_speed"].asDouble();
     }
 
     return {std::move(cfg), std::move(waypoints)};
@@ -210,7 +210,7 @@ legacy_replay_planner legacy_replay_planner::create(std::istream& in) {
     // The legacy generator cannot enforce a TCP limit, and the planner refuses to register it
     // while one is set. A legacy replay of a TCP-carrying record is a deliberate uncapped
     // comparison run, so drop the cap explicitly; the kinematics are kept.
-    cfg.tcp_max_linear_velocity.reset();
+    cfg.tcp_max_linear_speed.reset();
 
     legacy_replay_planner p(std::move(cfg));
 

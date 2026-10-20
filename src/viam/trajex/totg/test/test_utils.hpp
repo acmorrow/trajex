@@ -93,9 +93,9 @@ inline trajectory::tcp_limits::gain planar_2link_linear_velocity_gain(
 }
 
 /// Builds tcp_limits for a planar 2-link (l1 = l2 = 1).
-inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_velocity) {
+inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_speed) {
     return trajectory::tcp_limits{
-        .max_linear_velocity = max_linear_velocity,
+        .max_linear_speed = max_linear_speed,
         .linear_velocity_gain =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 return planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);

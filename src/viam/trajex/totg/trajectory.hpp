@@ -94,7 +94,7 @@ class trajectory {
     ///
     /// The linear_velocity_gain callback reports how fast the TCP moves per unit of path arc
     /// length at a point on the path, ||J_v(q)*f'(s)||, together with its derivative along the
-    /// path. The folded limit is max_linear_velocity divided by the gain, and its phase-plane
+    /// path. The folded limit is max_linear_speed divided by the gain, and its phase-plane
     /// slope follows from the derivative. Forward integration, backward integration, and
     /// bisection each query at the arc position under examination, so successive calls do not
     /// advance monotonically along the path.
@@ -102,7 +102,7 @@ class trajectory {
     /// The callback may return a NaN gain, which signals a singularity and is treated as
     /// non-constraining. A non-finite slope where TCP is the binding curve throws instead.
     ///
-    /// Units are the caller's. max_linear_velocity must be expressed in the same length unit as
+    /// Units are the caller's. max_linear_speed must be expressed in the same length unit as
     /// the gain, per second; nothing here checks that they agree.
     ///
     struct tcp_limits {
@@ -123,15 +123,15 @@ class trajectory {
         /// The capped point is the origin of the chain's last frame.
         ///
         /// @param chain Chain describing the arm and whatever it carries
-        /// @param max_linear_velocity Cap on TCP linear speed, in the length unit of the chain's
+        /// @param max_linear_speed Cap on TCP linear speed, in the length unit of the chain's
         ///        translations per second
         /// @return A limits object whose callback evaluates the chain
         ///
-        [[nodiscard]] static tcp_limits from(jacobian::kinematic_chain chain, double max_linear_velocity);
+        [[nodiscard]] static tcp_limits from(jacobian::kinematic_chain chain, double max_linear_speed);
 
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
-        double max_linear_velocity = 0.0;
+        double max_linear_speed = 0.0;
         linear_velocity_gain_fn linear_velocity_gain;
     };
 

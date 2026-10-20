@@ -419,7 +419,7 @@ int viam_trajex_kinematic_chain_end_position(
 ///
 /// String constants for the input and output keys honored by `viam_trajex_totg_generate`. Callers can reference these
 /// in place of hard-coded string literals. The string values are part of the stable ABI. They match the keys of the
-/// trajex `service::mlmodel::infer` schema, except for `viam_trajex_totg_key_tcp_max_linear_velocity`, which the service
+/// trajex `service::mlmodel::infer` schema, except for `viam_trajex_totg_key_tcp_max_linear_speed`, which the service
 /// does not accept because it has no way to receive a kinematic chain.
 ///
 /// @{
@@ -431,7 +431,7 @@ extern const char viam_trajex_totg_key_configurations_rads[];
 extern const char viam_trajex_totg_key_path_colinearization_ratio[];
 extern const char viam_trajex_totg_key_path_tolerance_delta_rads[];
 extern const char viam_trajex_totg_key_sample_times_sec[];
-extern const char viam_trajex_totg_key_tcp_max_linear_velocity[];
+extern const char viam_trajex_totg_key_tcp_max_linear_speed[];
 extern const char viam_trajex_totg_key_trajectory_sampling_freq_hz[];
 extern const char viam_trajex_totg_key_velocities_rads_per_sec[];
 extern const char viam_trajex_totg_key_velocity_limits_rads_per_sec[];
@@ -470,7 +470,7 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 /// | `path_colinearization_ratio` | F64 | `[1]` | `0.0` (off) | Colinearization aggressiveness |
 /// | `waypoint_deduplication_tolerance_rads` | F64 | `[1]` | `1e-5` | Waypoints closer than this are merged |
 /// | `trajectory_sampling_freq_hz` | F64 | `[1]` | `100.0` | Output sample rate in Hz |
-/// | `tcp_max_linear_velocity` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
+/// | `tcp_max_linear_speed` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
 ///
 /// ## Outputs
 ///
@@ -489,7 +489,7 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 /// - `acceleration_limits_rads_per_sec2.size()` must equal DOF.
 /// - `waypoints_rads.shape[1]` must equal DOF.
 /// - If `chain` is given, its number of rotating and translating joints must equal DOF, whether or not a cap is set.
-/// - `tcp_max_linear_velocity` is an error without `chain`. A chain without it is legal: having kinematics is a property
+/// - `tcp_max_linear_speed` is an error without `chain`. A chain without it is legal: having kinematics is a property
 ///   of the caller, while wanting a cap is a property of the call.
 ///
 /// @param chain Kinematics of the arm and whatever it carries, or NULL if the caller has none. Read during the call and
@@ -561,13 +561,13 @@ typedef struct viam_trajex_totg_streaming_session viam_trajex_totg_streaming_ses
 /// | Key | Dtype | Shape | Default | Meaning |
 /// |-----|-------|-------|---------|---------|
 /// | `path_colinearization_ratio` | F64 | `[1]` | `0.0` (off) | Colinearization aggressiveness |
-/// | `tcp_max_linear_velocity` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
+/// | `tcp_max_linear_speed` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
 ///
 /// As for `viam_trajex_totg_generate`, the chain is a parameter rather than an entry in `options`,
 /// because a chain reached by string key could be misspelled into silence, and a session that
 /// quietly runs uncapped is the worst way for a safety limit to fail. If `chain` is given, its
 /// number of rotating and translating joints must equal the DOF, whether or not a cap is set, and
-/// `tcp_max_linear_velocity` is an error without it. The session copies what it needs from the
+/// `tcp_max_linear_speed` is an error without it. The session copies what it needs from the
 /// chain, so the caller may destroy the chain as soon as this returns.
 ///
 /// @param chain Kinematics of the arm and whatever it carries, or NULL if the caller has none.

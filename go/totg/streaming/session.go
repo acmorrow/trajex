@@ -44,7 +44,7 @@ var (
 	KeyConfigurationsRads            = totg.KeyConfigurationsRads            //nolint:revive
 	KeyVelocitiesRadsPerSec          = totg.KeyVelocitiesRadsPerSec          //nolint:revive
 	KeyAccelerationsRadsPerSec2      = totg.KeyAccelerationsRadsPerSec2      //nolint:revive
-	KeyTCPMaxLinearVelocity          = totg.KeyTCPMaxLinearVelocity          //nolint:revive
+	KeyTCPMaxLinearSpeed             = totg.KeyTCPMaxLinearSpeed             //nolint:revive
 )
 
 // Session is a Go-owned handle to a CAPI streaming session. Close must be
@@ -66,7 +66,7 @@ func New(options *trajex.TensorMap) (*Session, error) {
 
 // NewWithKinematics behaves like New, but also takes a kinematic chain
 // describing the arm, which is what allows options to carry limits such as
-// KeyTCPMaxLinearVelocity. When options carry no such limit, the session
+// KeyTCPMaxLinearSpeed. When options carry no such limit, the session
 // behaves exactly as one made by New would.
 //
 // The chain must not be nil, must not already have been released with Close,

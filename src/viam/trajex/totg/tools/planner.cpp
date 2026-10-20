@@ -57,8 +57,8 @@ planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {
     // Checked here rather than when the limit is built, so a bad config fails where it is
     // accepted. serialize_for_replay relies on it too, since it runs on failure paths to record
     // diagnostics and must not throw.
-    if (config_.tcp_max_linear_velocity && !config_.kinematics) {
-        throw std::invalid_argument("planner config tcp_max_linear_velocity requires kinematics");
+    if (config_.tcp_max_linear_speed && !config_.kinematics) {
+        throw std::invalid_argument("planner config tcp_max_linear_speed requires kinematics");
     }
 }
 
@@ -145,8 +145,8 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
         get_config().kinematics->visit_joints(writer);
         root["kinematic_chain"] = std::move(writer.joints);
     }
-    if (get_config().tcp_max_linear_velocity) {
-        root["tcp_max_linear_velocity"] = *get_config().tcp_max_linear_velocity;
+    if (get_config().tcp_max_linear_speed) {
+        root["tcp_max_linear_speed"] = *get_config().tcp_max_linear_speed;
     }
 
     Json::Value waypoints_array(Json::arrayValue);

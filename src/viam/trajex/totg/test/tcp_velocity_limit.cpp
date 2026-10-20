@@ -48,7 +48,7 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
     // missing gain callback
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5, .linear_velocity_gain = {}};
+    opt.tcp = trajectory::tcp_limits{.max_linear_speed = 0.5, .linear_velocity_gain = {}};
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
     // default-initialized limit with only the callback filled in: max_velocity is
@@ -356,7 +356,7 @@ BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
     const path p = path::create(xmatrix<>{{0.0, 2.0}, {10.0, 0.0}});
     auto opt = trajectory::options{.max_velocity = xvector<>{100.0, 100.0}, .max_acceleration = xvector<>{0.05, 0.05}};
     opt.tcp = trajectory::tcp_limits{
-        .max_linear_velocity = 0.3,
+        .max_linear_speed = 0.3,
         .linear_velocity_gain =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 auto g = test::planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);

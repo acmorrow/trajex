@@ -81,7 +81,7 @@ arc_velocity compute_tcp_velocity_limit(const xvector<>& q,
     if (std::isnan(gain) || gain < static_cast<double>(epsilon)) {
         return arc_velocity{std::numeric_limits<double>::infinity()};
     }
-    return arc_velocity{tcp.max_linear_velocity / gain};
+    return arc_velocity{tcp.max_linear_speed / gain};
 }
 
 // Computes maximum path velocity (s_dot) from joint velocity and acceleration limits.
@@ -367,7 +367,7 @@ phase_plane_slope compute_velocity_limit_derivative_with_tcp(const xvector<>& q_
 
     // TCP binding (gain finite): d/ds s_dot_max_TCP = -v_TCP * (dg/ds) / g^2.
     const auto gd = opt.tcp->linear_velocity_gain(configuration_of(cursor), q_prime, q_double_prime);
-    const double slope = -opt.tcp->max_linear_velocity * gd.d_ds / (gd.per_arc_unit * gd.per_arc_unit);
+    const double slope = -opt.tcp->max_linear_speed * gd.d_ds / (gd.per_arc_unit * gd.per_arc_unit);
 
     if (!std::isfinite(slope)) {
         throw std::runtime_error{
@@ -1274,9 +1274,9 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
     on_event(traj, std::move(event));
 }
 
-trajectory::tcp_limits trajectory::tcp_limits::from(jacobian::kinematic_chain chain, double max_linear_velocity) {
+trajectory::tcp_limits trajectory::tcp_limits::from(jacobian::kinematic_chain chain, double max_linear_speed) {
     return tcp_limits{
-        .max_linear_velocity = max_linear_velocity,
+        .max_linear_speed = max_linear_speed,
         .linear_velocity_gain =
             [chain = std::move(chain)](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
                 const auto g = chain.linear_velocity_gain_at(q, q_prime, q_double_prime);
@@ -1342,8 +1342,8 @@ trajectory trajectory::create(class path p, options opt, integration_points poin
     }
 
     if (opt.tcp.has_value()) {
-        if (!(opt.tcp->max_linear_velocity > 0.0) || !std::isfinite(opt.tcp->max_linear_velocity)) {
-            throw std::invalid_argument{"tcp.max_linear_velocity must be a finite positive number"};
+        if (!(opt.tcp->max_linear_speed > 0.0) || !std::isfinite(opt.tcp->max_linear_speed)) {
+            throw std::invalid_argument{"tcp.max_linear_speed must be a finite positive number"};
         }
         if (!opt.tcp->linear_velocity_gain) {
             throw std::invalid_argument{"tcp.linear_velocity_gain must be set"};

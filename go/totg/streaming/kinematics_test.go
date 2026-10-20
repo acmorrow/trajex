@@ -48,7 +48,7 @@ func tcpBoundOptions(t *testing.T, capped bool) *trajex.TensorMap {
 	test.That(t, opts.InsertScalarFloat64(streaming.KeyPathToleranceDeltaRads, 0.001), test.ShouldBeNil)
 	test.That(t, opts.InsertScalarFloat64(streaming.KeyTrajectorySamplingFreqHz, 100.0), test.ShouldBeNil)
 	if capped {
-		test.That(t, opts.InsertScalarFloat64(streaming.KeyTCPMaxLinearVelocity, tcpCap), test.ShouldBeNil)
+		test.That(t, opts.InsertScalarFloat64(streaming.KeyTCPMaxLinearSpeed, tcpCap), test.ShouldBeNil)
 	}
 	return opts
 }

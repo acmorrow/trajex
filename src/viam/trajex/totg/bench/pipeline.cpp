@@ -140,8 +140,8 @@ trajectory::options trajectory_options_for(const planner_base::config& config) {
     trajectory::options options;
     options.max_velocity = config.velocity_limits;
     options.max_acceleration = config.acceleration_limits;
-    if (config.tcp_max_linear_velocity) {
-        options.tcp = trajectory::tcp_limits::from(config.kinematics.value(), *config.tcp_max_linear_velocity);
+    if (config.tcp_max_linear_speed) {
+        options.tcp = trajectory::tcp_limits::from(config.kinematics.value(), *config.tcp_max_linear_speed);
     }
     return options;
 }

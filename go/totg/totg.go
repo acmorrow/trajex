@@ -38,7 +38,7 @@ var (
 	KeyConfigurationsRads                 string //nolint:revive
 	KeyVelocitiesRadsPerSec               string //nolint:revive
 	KeyAccelerationsRadsPerSec2           string //nolint:revive
-	KeyTCPMaxLinearVelocity               string //nolint:revive
+	KeyTCPMaxLinearSpeed                  string //nolint:revive
 )
 
 func init() {
@@ -53,7 +53,7 @@ func init() {
 	KeyConfigurationsRads = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_configurations_rads))
 	KeyVelocitiesRadsPerSec = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_velocities_rads_per_sec))
 	KeyAccelerationsRadsPerSec2 = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_accelerations_rads_per_sec2))
-	KeyTCPMaxLinearVelocity = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_tcp_max_linear_velocity))
+	KeyTCPMaxLinearSpeed = capi.CStr(unsafe.Pointer(&C.viam_trajex_totg_key_tcp_max_linear_speed))
 }
 
 // Generate computes a time-parameterized trajectory from the named-tensor
@@ -73,7 +73,7 @@ func Generate(ctx context.Context, inputs, outputs *trajex.TensorMap) error {
 
 // GenerateWithKinematics behaves like Generate, but also takes a kinematic
 // chain describing the arm, which is what allows inputs to carry limits such
-// as KeyTCPMaxLinearVelocity. Having kinematics is a property of the caller,
+// as KeyTCPMaxLinearSpeed. Having kinematics is a property of the caller,
 // while wanting a cap is a property of a particular call, so a caller with a
 // chain may pass it on every call. When inputs carry no such limit, the
 // trajectory is exactly the one Generate would produce.

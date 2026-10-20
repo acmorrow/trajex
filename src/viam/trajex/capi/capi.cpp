@@ -250,14 +250,14 @@ std::optional<viam::trajex::totg::trajectory::tcp_limits> tcp_limits_for(const v
             << " degrees of freedom";
         throw std::invalid_argument(oss.str());
     }
-    const auto* cap = find_optional_tensor<viam::trajex::xvector<double>>(inputs, viam_trajex_totg_key_tcp_max_linear_velocity);
+    const auto* cap = find_optional_tensor<viam::trajex::xvector<double>>(inputs, viam_trajex_totg_key_tcp_max_linear_speed);
     if (!cap) {
         return std::nullopt;
     }
-    require_scalar(*cap, viam_trajex_totg_key_tcp_max_linear_velocity);
+    require_scalar(*cap, viam_trajex_totg_key_tcp_max_linear_speed);
     if (!chain) {
         std::ostringstream oss;
-        oss << "input '" << viam_trajex_totg_key_tcp_max_linear_velocity << "' requires a kinematic chain";
+        oss << "input '" << viam_trajex_totg_key_tcp_max_linear_speed << "' requires a kinematic chain";
         throw std::invalid_argument(oss.str());
     }
     return viam::trajex::totg::trajectory::tcp_limits::from(chain->chain, (*cap)(0));
@@ -489,7 +489,7 @@ const char viam_trajex_totg_key_configurations_rads[] = "configurations_rads";
 const char viam_trajex_totg_key_path_colinearization_ratio[] = "path_colinearization_ratio";
 const char viam_trajex_totg_key_path_tolerance_delta_rads[] = "path_tolerance_delta_rads";
 const char viam_trajex_totg_key_sample_times_sec[] = "sample_times_sec";
-const char viam_trajex_totg_key_tcp_max_linear_velocity[] = "tcp_max_linear_velocity";
+const char viam_trajex_totg_key_tcp_max_linear_speed[] = "tcp_max_linear_speed";
 const char viam_trajex_totg_key_trajectory_sampling_freq_hz[] = "trajectory_sampling_freq_hz";
 const char viam_trajex_totg_key_velocities_rads_per_sec[] = "velocities_rads_per_sec";
 const char viam_trajex_totg_key_velocity_limits_rads_per_sec[] = "velocity_limits_rads_per_sec";

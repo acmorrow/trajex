@@ -69,7 +69,7 @@ int main(void) {
     (void)viam_trajex_totg_key_path_colinearization_ratio;
     (void)viam_trajex_totg_key_waypoint_deduplication_tolerance_rads;
     (void)viam_trajex_totg_key_trajectory_sampling_freq_hz;
-    (void)viam_trajex_totg_key_tcp_max_linear_velocity;
+    (void)viam_trajex_totg_key_tcp_max_linear_speed;
     (void)viam_trajex_totg_key_sample_times_sec;
     (void)viam_trajex_totg_key_configurations_rads;
     (void)viam_trajex_totg_key_velocities_rads_per_sec;

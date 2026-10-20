@@ -679,7 +679,7 @@ BOOST_AUTO_TEST_CASE(matches_linear_velocity_gain) {
         BOOST_CHECK_EQUAL(g.d_ds, expected.d_gain_ds);
     }
 
-    BOOST_CHECK_EQUAL(limits.max_linear_velocity, 0.5);
+    BOOST_CHECK_EQUAL(limits.max_linear_speed, 0.5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

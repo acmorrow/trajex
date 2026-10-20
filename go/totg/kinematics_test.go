@@ -102,7 +102,7 @@ func TestGenerateWithKinematicsRespectsTCPCap(t *testing.T) {
 	defer uncapped.Close()
 	uncappedPeak := peakTCPSpeed(t, chain, uncapped)
 
-	test.That(t, in.InsertScalarFloat64(totg.KeyTCPMaxLinearVelocity, tcpCap), test.ShouldBeNil)
+	test.That(t, in.InsertScalarFloat64(totg.KeyTCPMaxLinearSpeed, tcpCap), test.ShouldBeNil)
 	capped := generateWithKinematics(t, chain, in)
 	defer capped.Close()
 	cappedPeak := peakTCPSpeed(t, chain, capped)
@@ -139,7 +139,7 @@ func TestGenerateWithKinematicsAndNoCapMatchesGenerate(t *testing.T) {
 func TestGenerateRejectsTCPCapWithoutKinematics(t *testing.T) {
 	in := tcpBoundInputs(t)
 	defer in.Close()
-	test.That(t, in.InsertScalarFloat64(totg.KeyTCPMaxLinearVelocity, tcpCap), test.ShouldBeNil)
+	test.That(t, in.InsertScalarFloat64(totg.KeyTCPMaxLinearSpeed, tcpCap), test.ShouldBeNil)
 	out, err := trajex.NewTensorMap()
 	test.That(t, err, test.ShouldBeNil)
 	defer out.Close()

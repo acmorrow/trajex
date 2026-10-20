@@ -721,8 +721,7 @@ BOOST_AUTO_TEST_CASE(totg_generate_respects_a_tcp_cap) {
     const auto chain = make_planar_2link_chain();
     const auto inputs = make_map();
     populate_tcp_bound_inputs(inputs.get());
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs.get(), viam_trajex_totg_key_tcp_max_linear_velocity, k_tcp_cap) ==
-                       0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs.get(), viam_trajex_totg_key_tcp_max_linear_speed, k_tcp_cap) == 0);
 
     const auto outputs = make_map();
     const auto result = run_totg(inputs.get(), outputs.get(), chain.get());
@@ -736,8 +735,7 @@ BOOST_AUTO_TEST_CASE(totg_generate_respects_a_tcp_cap) {
 BOOST_AUTO_TEST_CASE(totg_generate_rejects_a_tcp_cap_without_a_chain) {
     const auto inputs = make_map();
     populate_tcp_bound_inputs(inputs.get());
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs.get(), viam_trajex_totg_key_tcp_max_linear_velocity, k_tcp_cap) ==
-                       0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(inputs.get(), viam_trajex_totg_key_tcp_max_linear_speed, k_tcp_cap) == 0);
 
     const auto outputs = make_map();
     const auto result = run_totg(inputs.get(), outputs.get());
@@ -792,8 +790,7 @@ BOOST_AUTO_TEST_CASE(streaming_session_with_kinematics_respects_a_tcp_cap) {
     populate_tcp_bound_limits(options.get());
     BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_trajectory_sampling_freq_hz, 100.0) ==
                        0);
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_tcp_max_linear_velocity, k_tcp_cap) ==
-                       0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_tcp_max_linear_speed, k_tcp_cap) == 0);
 
     session_owner session;
     {
@@ -827,8 +824,7 @@ BOOST_AUTO_TEST_CASE(streaming_session_rejects_a_tcp_cap_without_kinematics) {
     populate_tcp_bound_limits(options.get());
     BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_trajectory_sampling_freq_hz, 100.0) ==
                        0);
-    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_tcp_max_linear_velocity, k_tcp_cap) ==
-                       0);
+    BOOST_TEST_REQUIRE(viam_trajex_tensor_map_insert_scalar_f64(options.get(), viam_trajex_totg_key_tcp_max_linear_speed, k_tcp_cap) == 0);
 
     const char* raw = nullptr;
     const session_owner session{viam_trajex_totg_streaming_session_create(nullptr, options.get(), &raw)};

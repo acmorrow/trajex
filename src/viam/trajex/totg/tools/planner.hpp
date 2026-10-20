@@ -56,7 +56,7 @@ class planner_base {
         // Cap on the speed of the chain's last frame origin, in the length unit of the chain's
         // translations per second. Totg only, and requires kinematics, which planner construction
         // checks.
-        std::optional<double> tcp_max_linear_velocity{};
+        std::optional<double> tcp_max_linear_speed{};
     };
 
     ///
@@ -256,11 +256,11 @@ class planner : public planner_base {
     ///         generator cannot enforce a TCP limit, so registering it alongside one
     ///         would let a TOTG failure fall back to a trajectory that silently
     ///         ignores a caller-requested safety cap. A consumer that wants a
-    ///         deliberate uncapped legacy run must clear config.tcp_max_linear_velocity
+    ///         deliberate uncapped legacy run must clear config.tcp_max_linear_speed
     ///         first.
     ///
     planner& with_legacy(legacy_success_fn on_success, algorithm_failure_fn on_failure = nullptr) {
-        if (get_config().tcp_max_linear_velocity) {
+        if (get_config().tcp_max_linear_speed) {
             throw std::logic_error(
                 "planner: cannot register the legacy generator with a TCP speed limit set; "
                 "the legacy generator cannot enforce a TCP limit");
@@ -376,8 +376,8 @@ class planner : public planner_base {
                 topts.max_velocity = get_config().velocity_limits;
                 topts.max_acceleration = get_config().acceleration_limits;
                 topts.observer = get_config().observer;
-                if (get_config().tcp_max_linear_velocity) {
-                    topts.tcp = trajectory::tcp_limits::from(get_config().kinematics.value(), *get_config().tcp_max_linear_velocity);
+                if (get_config().tcp_max_linear_speed) {
+                    topts.tcp = trajectory::tcp_limits::from(get_config().kinematics.value(), *get_config().tcp_max_linear_speed);
                 }
 
                 auto start = std::chrono::steady_clock::now();
