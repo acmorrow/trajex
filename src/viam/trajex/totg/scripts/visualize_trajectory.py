@@ -110,7 +110,9 @@ def plot_phase_plane(data, ax):
     s_ip = [float(x) for x in ip['s']]
     joint_vel = ip.get('s_dot_max_vel_joint')
     tcp_vel = ip.get('s_dot_max_vel_tcp')
-    has_tcp_components = joint_vel is not None
+    # The serializer writes both component series together, so either one's presence says whether
+    # this dump carries them. A joint-only run has them too, with the TCP series all null.
+    has_limit_components = joint_vel is not None
 
     lcs = data.get('limit_curve_samples')
     lcs_gap_s, lcs_gap_acc, lcs_gap_vel = [], [], []
@@ -170,7 +172,7 @@ def plot_phase_plane(data, ax):
     for val in lcs_gap_vel:
         if val is not None:
             limit_values.append(float(val))
-    if has_tcp_components:
+    if has_limit_components:
         for series in (joint_vel, tcp_vel):
             for val in (series or []):
                 if val is not None:
@@ -200,7 +202,7 @@ def plot_phase_plane(data, ax):
     # plus a thin overlay of the combined min(joint, TCP) curve the integrator actually rides.
     # Otherwise plot the single combined curve. All curves use the merged sample set so any
     # denser limit_curve_samples in range (e.g. around pruned points) are included.
-    if has_tcp_components:
+    if has_limit_components:
         _plot_inf_transitions(ax, s_for_limits, joint_for_limits, y_max,
                               color='orange', linewidth=1, alpha=0.5, zorder=1)
         _plot_segmented(ax, s_for_limits, joint_for_limits, color='orange', linewidth=1.5,
@@ -226,7 +228,7 @@ def plot_phase_plane(data, ax):
 
         # Mirror the integration-point region: when the joint/TCP split is available, extend both
         # components through the gap (orange joint, purple TCP) instead of only the combined curve.
-        gap_has_components = has_tcp_components and any(v is not None for v in lcs_gap_joint)
+        gap_has_components = has_limit_components and any(v is not None for v in lcs_gap_joint)
         if gap_has_components:
             _plot_segmented(ax, lcs_gap_s, lcs_gap_joint, color='orange', linestyle='--',
                             linewidth=1.5, alpha=0.6, zorder=2)
@@ -377,6 +379,40 @@ def plot_arc_length_vs_time(data, ax):
     ax.grid(True, alpha=0.3)
 
 
+def has_tcp_cap(data):
+    """Whether the trajectory was generated with a TCP speed cap, which the serializer records
+    in the metadata only when there is one."""
+    return 'tcp_max_linear_speed' in data.get('metadata', {})
+
+
+def plot_tcp_speed(data, ax):
+    """Plot the TCP's linear speed over time against its cap."""
+    cap = float(data['metadata']['tcp_max_linear_speed'])
+    ip = data['integration_points']
+    time = np.array([float(x) for x in ip['time']])
+
+    # The TCP limit curve is cap / ||J_v(q) f'(s)||, and the TCP moves at ||J_v(q) f'(s)|| * s_dot,
+    # so its speed is cap * s_dot / limit. Where the limit is null it is infinite, because the
+    # TCP is barely moving relative to the path, so the speed there is zero.
+    speed = []
+    for s_dot, limit in zip(ip['s_dot'], ip['s_dot_max_vel_tcp']):
+        if limit is None:
+            speed.append(0.0)
+        elif float(limit) <= 0.0:
+            speed.append(float('nan'))
+        else:
+            speed.append(cap * _f(s_dot) / float(limit))
+
+    ax.plot(time, speed, color='purple', linewidth=1.5, label='TCP speed')
+    ax.axhline(cap, color='red', linestyle='--', linewidth=1, label=f'Cap ({cap:g})')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Speed (chain length units/s)')
+    ax.set_title('TCP Speed')
+    ax.set_ylim(bottom=0.0)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='best')
+
+
 def plot_arc_acceleration(data, ax):
     """Plot arc acceleration (s_ddot) vs arc length with feasible bounds."""
     s = np.array([float(x) for x in data['integration_points']['s']])
@@ -420,9 +456,12 @@ def main():
     # An explicit --title wins; GRAPH_TITLE remains for callers that already set it.
     title = args.title or os.environ.get("GRAPH_TITLE", title)
 
-    # Create figure with 3-row layout (taller to give phase plane more vertical space)
-    fig = plt.figure(figsize=(14, 22), num=title)
-    gs = fig.add_gridspec(4, 2)
+    # A TCP-capped trajectory gets one more row, for the TCP's speed, so the figure grows to keep
+    # every row the same height.
+    tcp = has_tcp_cap(data)
+    rows = 5 if tcp else 4
+    fig = plt.figure(figsize=(14, 5.5 * rows), num=title)
+    gs = fig.add_gridspec(rows, 2)
 
     # Row 1: Phase plane spans both columns
     ax_phase = fig.add_subplot(gs[0, :])
@@ -442,8 +481,14 @@ def main():
     ax_arc = fig.add_subplot(gs[2, 1])
     plot_arc_length_vs_time(data, ax_arc)
 
-    # Row 4: Arc acceleration spans both columns (same x-axis as phase plane)
-    ax_s_ddot = fig.add_subplot(gs[3, :])
+    # Row 4, when there is a cap: the TCP's speed spans both columns, beside the other time plots
+    ax_tcp = None
+    if tcp:
+        ax_tcp = fig.add_subplot(gs[3, :])
+        plot_tcp_speed(data, ax_tcp)
+
+    # Last row: Arc acceleration spans both columns (same x-axis as phase plane)
+    ax_s_ddot = fig.add_subplot(gs[rows - 1, :])
     plot_arc_acceleration(data, ax_s_ddot)
 
     plt.tight_layout(rect=[0, 0.03, 1, 1])  # Leave space for legend at bottom
@@ -459,6 +504,8 @@ def main():
         ax_arc: plot_arc_length_vs_time,
         ax_s_ddot: plot_arc_acceleration,
     }
+    if ax_tcp is not None:
+        plotters[ax_tcp] = plot_tcp_speed
 
     def pop_out(event):
         plot = plotters.get(event.inaxes)

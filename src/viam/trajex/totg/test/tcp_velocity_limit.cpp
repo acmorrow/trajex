@@ -276,6 +276,32 @@ BOOST_AUTO_TEST_CASE(velocity_limit_components_separate_joint_and_tcp) {
                boost::test_tools::tolerance(1e-12));
 }
 
+// The diagnostic JSON records the TCP cap among the limits the trajectory was generated under, and
+// only when there is one, since a visualizer takes its presence to mean the run was TCP limited.
+BOOST_AUTO_TEST_CASE(serialized_trajectory_records_tcp_cap) {
+    const path p = make_2dof_path();
+    const auto metadata_of = [&](const trajectory::options& opt) {
+        trajectory_integration_event_collector collector;
+        auto observed = opt;
+        observed.observer = &collector;
+        const auto traj = trajectory::create(p, observed);
+        Json::Value root;
+        const Json::CharReaderBuilder reader;
+        std::string errs;
+        std::istringstream in(serialize_trajectory_to_json(collector, &traj));
+        BOOST_REQUIRE_MESSAGE(Json::parseFromStream(reader, in, &root, &errs), errs);
+        return root["metadata"];
+    };
+
+    auto capped = base_2dof_options();
+    capped.tcp = test::planar_2link_tcp_limits(0.1);
+    const auto capped_metadata = metadata_of(capped);
+    BOOST_REQUIRE(capped_metadata.isMember("tcp_max_linear_speed"));
+    BOOST_TEST(capped_metadata["tcp_max_linear_speed"].asDouble() == 0.1);
+
+    BOOST_TEST(!metadata_of(base_2dof_options()).isMember("tcp_max_linear_speed"));
+}
+
 // The diagnostic JSON exposes the joint and TCP limit curves as separate series so the phase
 // plane can be visualized with the TCP curve, and the combined curve is their minimum.
 BOOST_AUTO_TEST_CASE(serialized_trajectory_exposes_tcp_limit_curve) {
