@@ -40,10 +40,10 @@ inline std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double
 /// The Yaskawa GP12: six revolute joints and a fixed tool, transcribed from gp12.urdf. The tool's
 /// origin keeps that file's truncated rpy rather than exact multiples of pi, as the model table it
 /// replaced did, so the regression tests that use it still run the arm they were written against.
-inline jacobian::kinematic_chain gp12_chain() {
-    using joint_origin = jacobian::kinematic_chain::joint_origin;
-    using rotation_axis = jacobian::kinematic_chain::rotation_axis;
-    return jacobian::kinematic_chain::builder{}
+inline kinematics::chain gp12_chain() {
+    using joint_origin = kinematics::chain::joint_origin;
+    using rotation_axis = kinematics::chain::rotation_axis;
+    return kinematics::chain::builder{}
         .extend(joint_origin{.translation = {0, 0, 0.450}}, rotation_axis{{0, 0, 1}})
         .extend(joint_origin{.translation = {0.155, 0, 0}}, rotation_axis{{0, 1, 0}})
         .extend(joint_origin{.translation = {0, 0, 0.614}}, rotation_axis{{0, -1, 0}})

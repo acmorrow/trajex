@@ -1,9 +1,13 @@
 //go:build !windows
 
-package trajex
+// Package kinematics provides Go bindings for the kinematic chains of the
+// trajex C ABI. A Chain describes an arm so that limits can be placed on how
+// its tool moves, and is passed to the algorithm entry points that accept
+// one, such as totg.GenerateWithKinematics.
+package kinematics
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/artifacts/include
+#cgo CFLAGS: -I${SRCDIR}/../artifacts/include
 
 #include <viam/trajex/capi/capi.h>
 */
@@ -13,10 +17,14 @@ import (
 	"unsafe"
 
 	"github.com/pkg/errors"
+
+	// Nothing here is used by name, but this package calls the C ABI, so it
+	// must depend on the package that carries the link directives for it.
+	_ "github.com/viam-modules/trajex/go/internal/capi"
 )
 
 // jointKind records which constructor made a Joint, which is how
-// NewKinematicChain knows which C builder call to make for it. The
+// NewChain knows which C builder call to make for it. The
 // enumeration starts with an unset value so that a zero Joint, which no
 // constructor produced, can be recognized and refused rather than quietly
 // treated as some particular kind of joint.
@@ -67,10 +75,10 @@ func FixedJoint(xyz [3]float64, wxyz [4]float64) Joint {
 	return Joint{kind: jointKindFixed, xyz: xyz, wxyz: wxyz}
 }
 
-// KinematicChain is a Go-owned handle to a serial kinematic chain held on the
+// Chain is a Go-owned handle to a serial kinematic chain held on the
 // C side of the trajex C ABI. Trajex uses a chain to limit how the end of an
 // arm moves through space, for example to cap the speed of its tool center
-// point. Construct one with NewKinematicChain and release it with Close.
+// point. Construct one with NewChain and release it with Close.
 //
 // The chain has no units of its own. Whatever length unit the joint
 // translations use, a TCP speed cap is in that unit per second. The point
@@ -83,25 +91,25 @@ func FixedJoint(xyz [3]float64, wxyz [4]float64) Joint {
 // and must not race with any other use. The functions that take a chain do
 // not hold on to it after they return, so a chain may be released as soon as
 // the last call using it has returned.
-type KinematicChain struct {
-	handle *C.viam_trajex_kinematic_chain_t
+type Chain struct {
+	handle *C.viam_trajex_kinematics_chain_t
 }
 
-// NewKinematicChain builds a chain from joints, which are listed in order from
+// NewChain builds a chain from joints, which are listed in order from
 // the base to the end effector. It returns an error if there are no joints,
 // or if any joint was not made by a Joint constructor, has a translation that
 // is not finite, or has a quaternion or axis that is zero or not finite. When
 // a particular joint is at fault, the error names its index. The returned
 // chain must be released by calling Close.
-func NewKinematicChain(joints []Joint) (*KinematicChain, error) {
-	builder := C.viam_trajex_kinematic_chain_builder_create()
+func NewChain(joints []Joint) (*Chain, error) {
+	builder := C.viam_trajex_kinematics_chain_builder_create()
 	if builder == nil {
 		return nil, errors.New("trajex: kinematic chain builder allocation failed")
 	}
 	// Building consumes the builder whether or not it succeeds, but the
 	// handle itself still has to be destroyed, so we do that on every path
 	// out of this function.
-	defer C.viam_trajex_kinematic_chain_builder_destroy(builder)
+	defer C.viam_trajex_kinematics_chain_builder_destroy(builder)
 
 	// The C builder only refuses to append a joint when given a null
 	// argument or when an allocation fails. Problems with the values
@@ -115,12 +123,12 @@ func NewKinematicChain(joints []Joint) (*KinematicChain, error) {
 		var rc C.int
 		switch j.kind {
 		case jointKindFixed:
-			rc = C.viam_trajex_kinematic_chain_builder_extend_fixed(builder, xyz, wxyz)
+			rc = C.viam_trajex_kinematics_chain_builder_extend_fixed(builder, xyz, wxyz)
 		case jointKindRotational:
-			rc = C.viam_trajex_kinematic_chain_builder_extend_rotational(
+			rc = C.viam_trajex_kinematics_chain_builder_extend_rotational(
 				builder, xyz, wxyz, (*C.double)(unsafe.Pointer(&j.axis[0])))
 		case jointKindTranslational:
-			rc = C.viam_trajex_kinematic_chain_builder_extend_translational(
+			rc = C.viam_trajex_kinematics_chain_builder_extend_translational(
 				builder, xyz, wxyz, (*C.double)(unsafe.Pointer(&j.axis[0])))
 		default:
 			return nil, errors.Errorf("trajex: joint %d was not made by a Joint constructor", i)
@@ -131,22 +139,22 @@ func NewKinematicChain(joints []Joint) (*KinematicChain, error) {
 	}
 
 	var errOut *C.char
-	h := C.viam_trajex_kinematic_chain_builder_build(builder, &errOut)
+	h := C.viam_trajex_kinematics_chain_builder_build(builder, &errOut)
 	if h == nil {
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)
 		return nil, errors.Errorf("trajex: building kinematic chain failed: %s", msg)
 	}
-	return &KinematicChain{handle: h}, nil
+	return &Chain{handle: h}, nil
 }
 
 // Close releases the underlying C chain. It may be called on a nil chain, and
 // calls after the first do nothing.
-func (c *KinematicChain) Close() {
+func (c *Chain) Close() {
 	if c == nil || c.handle == nil {
 		return
 	}
-	C.viam_trajex_kinematic_chain_destroy(c.handle)
+	C.viam_trajex_kinematics_chain_destroy(c.handle)
 	c.handle = nil
 }
 
@@ -154,7 +162,7 @@ func (c *KinematicChain) Close() {
 // nil if the chain is nil or has been released with Close. It exists for the sibling
 // packages in this module that call the C ABI themselves, such as
 // totg.GenerateWithKinematics, and is not meant for other callers.
-func (c *KinematicChain) UnsafeHandle() unsafe.Pointer {
+func (c *Chain) UnsafeHandle() unsafe.Pointer {
 	if c == nil {
 		return nil
 	}
@@ -170,7 +178,7 @@ func (c *KinematicChain) UnsafeHandle() unsafe.Pointer {
 // the chain it built against its own forward kinematics at a few joint
 // positions, which is the most direct way to find out whether the origins,
 // axes, rotations, and units went in the way the caller intended.
-func (c *KinematicChain) EndPosition(q []float64) ([3]float64, error) {
+func (c *Chain) EndPosition(q []float64) ([3]float64, error) {
 	var position [3]float64
 	if c == nil || c.handle == nil {
 		return position, errors.New("trajex: EndPosition on a nil or released kinematic chain")
@@ -180,7 +188,7 @@ func (c *KinematicChain) EndPosition(q []float64) ([3]float64, error) {
 		qPtr = (*C.double)(unsafe.Pointer(&q[0]))
 	}
 	var errOut *C.char
-	rc := C.viam_trajex_kinematic_chain_end_position(
+	rc := C.viam_trajex_kinematics_chain_end_position(
 		c.handle, qPtr, C.size_t(len(q)), (*C.double)(unsafe.Pointer(&position[0])), &errOut)
 	if rc != 0 {
 		msg := C.GoString(errOut)

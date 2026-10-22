@@ -38,14 +38,14 @@ int main(void) {
     (void)viam_trajex_totg_generate;
 
     // Kinematic chain entry points.
-    (void)viam_trajex_kinematic_chain_builder_create;
-    (void)viam_trajex_kinematic_chain_builder_destroy;
-    (void)viam_trajex_kinematic_chain_builder_extend_fixed;
-    (void)viam_trajex_kinematic_chain_builder_extend_rotational;
-    (void)viam_trajex_kinematic_chain_builder_extend_translational;
-    (void)viam_trajex_kinematic_chain_builder_build;
-    (void)viam_trajex_kinematic_chain_destroy;
-    (void)viam_trajex_kinematic_chain_end_position;
+    (void)viam_trajex_kinematics_chain_builder_create;
+    (void)viam_trajex_kinematics_chain_builder_destroy;
+    (void)viam_trajex_kinematics_chain_builder_extend_fixed;
+    (void)viam_trajex_kinematics_chain_builder_extend_rotational;
+    (void)viam_trajex_kinematics_chain_builder_extend_translational;
+    (void)viam_trajex_kinematics_chain_builder_build;
+    (void)viam_trajex_kinematics_chain_destroy;
+    (void)viam_trajex_kinematics_chain_end_position;
 
     // Streaming session entry points.
     (void)viam_trajex_totg_streaming_session_create;

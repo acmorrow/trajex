@@ -257,7 +257,7 @@ void viam_trajex_string_destroy(const char* string);
 /// @}
 
 ///
-/// @defgroup viam_trajex_kinematic_chain Kinematic chain
+/// @defgroup viam_trajex_kinematics_chain Kinematic chain
 ///
 /// A serial kinematic chain, for limits stated in task space such as a TCP speed cap.
 ///
@@ -278,30 +278,30 @@ void viam_trajex_string_destroy(const char* string);
 ///
 
 ///
-/// Opaque kinematic chain builder handle. Construct via `viam_trajex_kinematic_chain_builder_create`; release via
-/// `viam_trajex_kinematic_chain_builder_destroy`.
+/// Opaque kinematic chain builder handle. Construct via `viam_trajex_kinematics_chain_builder_create`; release via
+/// `viam_trajex_kinematics_chain_builder_destroy`.
 ///
-typedef struct viam_trajex_kinematic_chain_builder viam_trajex_kinematic_chain_builder_t;
+typedef struct viam_trajex_kinematics_chain_builder viam_trajex_kinematics_chain_builder_t;
 
 ///
-/// Opaque kinematic chain handle. Construct via `viam_trajex_kinematic_chain_builder_build`; release via
-/// `viam_trajex_kinematic_chain_destroy`.
+/// Opaque kinematic chain handle. Construct via `viam_trajex_kinematics_chain_builder_build`; release via
+/// `viam_trajex_kinematics_chain_destroy`.
 ///
-typedef struct viam_trajex_kinematic_chain viam_trajex_kinematic_chain_t;
+typedef struct viam_trajex_kinematics_chain viam_trajex_kinematics_chain_t;
 
 ///
 /// Construct an empty builder.
 ///
 /// @return Newly-allocated builder handle, or NULL on allocation failure.
 ///
-viam_trajex_kinematic_chain_builder_t* viam_trajex_kinematic_chain_builder_create(void);
+viam_trajex_kinematics_chain_builder_t* viam_trajex_kinematics_chain_builder_create(void);
 
 ///
 /// Destroy a builder, whether or not it has been built.
 ///
 /// @param builder Builder to destroy. NULL is a no-op.
 ///
-void viam_trajex_kinematic_chain_builder_destroy(viam_trajex_kinematic_chain_builder_t* builder);
+void viam_trajex_kinematics_chain_builder_destroy(viam_trajex_kinematics_chain_builder_t* builder);
 
 ///
 /// Append a fixed joint.
@@ -313,12 +313,12 @@ void viam_trajex_kinematic_chain_builder_destroy(viam_trajex_kinematic_chain_bui
 /// @param wxyz Rotation of the joint's origin. Must not be NULL.
 ///
 /// @return 0 on success. -1 on a NULL argument, a builder that has already been built, or allocation failure (no
-///         diagnostic). Invalid values are reported by `viam_trajex_kinematic_chain_builder_build`, which knows the
+///         diagnostic). Invalid values are reported by `viam_trajex_kinematics_chain_builder_build`, which knows the
 ///         joint's index.
 ///
-int viam_trajex_kinematic_chain_builder_extend_fixed(viam_trajex_kinematic_chain_builder_t* builder,
-                                                     const double xyz[3],
-                                                     const double wxyz[4]);
+int viam_trajex_kinematics_chain_builder_extend_fixed(viam_trajex_kinematics_chain_builder_t* builder,
+                                                      const double xyz[3],
+                                                      const double wxyz[4]);
 
 ///
 /// Append a revolute or continuous joint.
@@ -331,12 +331,12 @@ int viam_trajex_kinematic_chain_builder_extend_fixed(viam_trajex_kinematic_chain
 ///
 /// @param axis Axis of rotation in the joint's frame. Must not be NULL.
 ///
-/// @return As for `viam_trajex_kinematic_chain_builder_extend_fixed`.
+/// @return As for `viam_trajex_kinematics_chain_builder_extend_fixed`.
 ///
-int viam_trajex_kinematic_chain_builder_extend_rotational(viam_trajex_kinematic_chain_builder_t* builder,
-                                                          const double xyz[3],
-                                                          const double wxyz[4],
-                                                          const double axis[3]);
+int viam_trajex_kinematics_chain_builder_extend_rotational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                           const double xyz[3],
+                                                           const double wxyz[4],
+                                                           const double axis[3]);
 
 ///
 /// Append a prismatic joint.
@@ -349,18 +349,18 @@ int viam_trajex_kinematic_chain_builder_extend_rotational(viam_trajex_kinematic_
 ///
 /// @param axis Axis of translation in the joint's frame. Must not be NULL.
 ///
-/// @return As for `viam_trajex_kinematic_chain_builder_extend_fixed`.
+/// @return As for `viam_trajex_kinematics_chain_builder_extend_fixed`.
 ///
-int viam_trajex_kinematic_chain_builder_extend_translational(viam_trajex_kinematic_chain_builder_t* builder,
-                                                             const double xyz[3],
-                                                             const double wxyz[4],
-                                                             const double axis[3]);
+int viam_trajex_kinematics_chain_builder_extend_translational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                              const double xyz[3],
+                                                              const double wxyz[4],
+                                                              const double axis[3]);
 
 ///
 /// Validate the appended joints and build the chain.
 ///
 /// Building consumes the builder whether or not it succeeds. Afterwards the only valid call on it is
-/// `viam_trajex_kinematic_chain_builder_destroy`: `extend_*` calls return -1, and a second build returns NULL.
+/// `viam_trajex_kinematics_chain_builder_destroy`: `extend_*` calls return -1, and a second build returns NULL.
 ///
 /// @param builder Builder handle. Must not be NULL.
 ///
@@ -372,15 +372,15 @@ int viam_trajex_kinematic_chain_builder_extend_translational(viam_trajex_kinemat
 ///         a joint has a non-finite translation, a zero or non-finite quaternion, or a zero or non-finite axis, or on
 ///         allocation failure.
 ///
-viam_trajex_kinematic_chain_t* viam_trajex_kinematic_chain_builder_build(viam_trajex_kinematic_chain_builder_t* builder,
-                                                                         const char** error_out);
+viam_trajex_kinematics_chain_t* viam_trajex_kinematics_chain_builder_build(viam_trajex_kinematics_chain_builder_t* builder,
+                                                                           const char** error_out);
 
 ///
 /// Destroy a chain.
 ///
 /// @param chain Chain to destroy. NULL is a no-op.
 ///
-void viam_trajex_kinematic_chain_destroy(viam_trajex_kinematic_chain_t* chain);
+void viam_trajex_kinematics_chain_destroy(viam_trajex_kinematics_chain_t* chain);
 
 ///
 /// Compute the position of the chain's last frame at joint positions q.
@@ -401,8 +401,8 @@ void viam_trajex_kinematic_chain_destroy(viam_trajex_kinematic_chain_t* chain);
 ///
 /// @return 0 on success, -1 on a NULL argument, a wrong `n_q`, or a caught exception.
 ///
-int viam_trajex_kinematic_chain_end_position(
-    const viam_trajex_kinematic_chain_t* chain, const double* q, size_t n_q, double out[3], const char** error_out);
+int viam_trajex_kinematics_chain_end_position(
+    const viam_trajex_kinematics_chain_t* chain, const double* q, size_t n_q, double out[3], const char** error_out);
 
 /// @}
 
@@ -507,7 +507,7 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 ///
 /// @return 0 on success, -1 on failure.
 ///
-int viam_trajex_totg_generate(const viam_trajex_kinematic_chain_t* chain,
+int viam_trajex_totg_generate(const viam_trajex_kinematics_chain_t* chain,
                               const viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT inputs,
                               viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT outputs,
                               const char** error_out);
@@ -581,7 +581,7 @@ typedef struct viam_trajex_totg_streaming_session viam_trajex_totg_streaming_ses
 /// @return Newly-allocated session handle, or NULL on bad arguments, allocation failure,
 ///         or a caught exception during construction.
 ///
-viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_kinematic_chain_t* chain,
+viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_kinematics_chain_t* chain,
                                                                                 const viam_trajex_tensor_map_t* options,
                                                                                 const char** error_out);
 

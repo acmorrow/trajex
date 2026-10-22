@@ -1,6 +1,6 @@
 //go:build !windows && cgo
 
-package trajex_test
+package kinematics_test
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 
 	"go.viam.com/test"
 
-	"github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 )
 
 var (
@@ -22,18 +22,18 @@ var (
 // planar2Link builds two joints rotating about z, one metre apart, with the
 // end of the chain one metre past the second joint. With both angles at zero
 // the end sits two metres out along x.
-func planar2Link(t *testing.T) *trajex.KinematicChain {
+func planar2Link(t *testing.T) *kinematics.Chain {
 	t.Helper()
-	chain, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
-		trajex.RotationalJoint([3]float64{1, 0, 0}, identityRotation, zAxis),
-		trajex.FixedJoint([3]float64{1, 0, 0}, identityRotation),
+	chain, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
+		kinematics.RotationalJoint([3]float64{1, 0, 0}, identityRotation, zAxis),
+		kinematics.FixedJoint([3]float64{1, 0, 0}, identityRotation),
 	})
 	test.That(t, err, test.ShouldBeNil)
 	return chain
 }
 
-func TestKinematicChainEndPositionMatchesPlanarGeometry(t *testing.T) {
+func TestChainEndPositionMatchesPlanarGeometry(t *testing.T) {
 	chain := planar2Link(t)
 	defer chain.Close()
 
@@ -54,12 +54,12 @@ func TestKinematicChainEndPositionMatchesPlanarGeometry(t *testing.T) {
 // is turned a quarter turn about x, which points that joint's z axis along
 // the base's negative y axis. It checks a prismatic joint and an origin with
 // a real rotation in one place.
-func TestKinematicChainTranslationalAndRotatedOrigin(t *testing.T) {
+func TestChainTranslationalAndRotatedOrigin(t *testing.T) {
 	quarterAboutX := [4]float64{math.Cos(math.Pi / 4), math.Sin(math.Pi / 4), 0, 0}
-	chain, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.TranslationalJoint([3]float64{0, 0, 0}, identityRotation, [3]float64{1, 0, 0}),
-		trajex.RotationalJoint([3]float64{0, 0, 0}, quarterAboutX, zAxis),
-		trajex.FixedJoint([3]float64{1, 0, 0}, identityRotation),
+	chain, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.TranslationalJoint([3]float64{0, 0, 0}, identityRotation, [3]float64{1, 0, 0}),
+		kinematics.RotationalJoint([3]float64{0, 0, 0}, quarterAboutX, zAxis),
+		kinematics.FixedJoint([3]float64{1, 0, 0}, identityRotation),
 	})
 	test.That(t, err, test.ShouldBeNil)
 	defer chain.Close()
@@ -74,25 +74,25 @@ func TestKinematicChainTranslationalAndRotatedOrigin(t *testing.T) {
 	test.That(t, p[2], test.ShouldAlmostEqual, 1.0, 1e-12)
 }
 
-func TestNewKinematicChainNamesAnInvalidJoint(t *testing.T) {
-	chain, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.FixedJoint([3]float64{0, 0, 0}, identityRotation),
-		trajex.TranslationalJoint([3]float64{0, 0, 0}, identityRotation, [3]float64{0, 0, 0}),
+func TestNewChainNamesAnInvalidJoint(t *testing.T) {
+	chain, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.FixedJoint([3]float64{0, 0, 0}, identityRotation),
+		kinematics.TranslationalJoint([3]float64{0, 0, 0}, identityRotation, [3]float64{0, 0, 0}),
 	})
 	test.That(t, chain, test.ShouldBeNil)
 	test.That(t, err, test.ShouldNotBeNil)
 	test.That(t, strings.Contains(err.Error(), "joint 1"), test.ShouldBeTrue)
 }
 
-func TestNewKinematicChainRejectsNoJoints(t *testing.T) {
-	chain, err := trajex.NewKinematicChain(nil)
+func TestNewChainRejectsNoJoints(t *testing.T) {
+	chain, err := kinematics.NewChain(nil)
 	test.That(t, chain, test.ShouldBeNil)
 	test.That(t, err, test.ShouldNotBeNil)
 }
 
-func TestNewKinematicChainRejectsAZeroJoint(t *testing.T) {
-	chain, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
+func TestNewChainRejectsAZeroJoint(t *testing.T) {
+	chain, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
 		{},
 	})
 	test.That(t, chain, test.ShouldBeNil)
@@ -100,7 +100,7 @@ func TestNewKinematicChainRejectsAZeroJoint(t *testing.T) {
 	test.That(t, strings.Contains(err.Error(), "joint 1"), test.ShouldBeTrue)
 }
 
-func TestKinematicChainEndPositionRejectsAWrongJointCount(t *testing.T) {
+func TestChainEndPositionRejectsAWrongJointCount(t *testing.T) {
 	chain := planar2Link(t)
 	defer chain.Close()
 
@@ -110,8 +110,8 @@ func TestKinematicChainEndPositionRejectsAWrongJointCount(t *testing.T) {
 	test.That(t, err, test.ShouldNotBeNil)
 }
 
-func TestKinematicChainCloseIsNilSafeAndIdempotent(t *testing.T) {
-	var nilChain *trajex.KinematicChain
+func TestChainCloseIsNilSafeAndIdempotent(t *testing.T) {
+	var nilChain *kinematics.Chain
 	nilChain.Close()
 	// The test package's ShouldBeNil does not treat a nil unsafe.Pointer as
 	// nil, so we compare against nil ourselves.
@@ -125,13 +125,13 @@ func TestKinematicChainCloseIsNilSafeAndIdempotent(t *testing.T) {
 	test.That(t, err, test.ShouldNotBeNil)
 }
 
-// KinematicChain promises that goroutines may share a chain without
+// Chain promises that goroutines may share a chain without
 // coordinating, because nothing in it changes once it is built. On its own,
 // this test only shows that concurrent calls get the right answers. Run with
 // -race, it also shows that the Go side writes nothing the calls share. The
 // race detector cannot see into C++, so the other half of the promise rests
 // on the C ABI handling the chain as const.
-func TestKinematicChainConcurrentEndPosition(t *testing.T) {
+func TestChainConcurrentEndPosition(t *testing.T) {
 	chain := planar2Link(t)
 	defer chain.Close()
 

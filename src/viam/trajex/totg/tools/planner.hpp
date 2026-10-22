@@ -52,9 +52,9 @@ class planner_base {
         // the caller and wanting a cap is a property of the call, so a chain without a cap is legal
         // and simply unused. Kept as the chain rather than as a limit built from it, because the
         // chain is what serialize_for_replay can write down.
-        std::optional<jacobian::kinematic_chain> kinematics{};
+        std::optional<kinematics::chain> kinematics_chain{};
         // Cap on the speed of the chain's last frame origin, in the length unit of the chain's
-        // translations per second. Totg only, and requires kinematics, which planner construction
+        // translations per second. Totg only, and requires kinematics_chain, which planner construction
         // checks.
         std::optional<double> tcp_max_linear_speed{};
     };
@@ -377,7 +377,7 @@ class planner : public planner_base {
                 topts.max_acceleration = get_config().acceleration_limits;
                 topts.observer = get_config().observer;
                 if (get_config().tcp_max_linear_speed) {
-                    topts.tcp = trajectory::tcp_limits::from(get_config().kinematics.value(), *get_config().tcp_max_linear_speed);
+                    topts.tcp = trajectory::tcp_limits::from(get_config().kinematics_chain.value(), *get_config().tcp_max_linear_speed);
                 }
 
                 auto start = std::chrono::steady_clock::now();

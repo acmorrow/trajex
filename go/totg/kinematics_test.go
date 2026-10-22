@@ -11,6 +11,7 @@ import (
 	"go.viam.com/test"
 
 	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 	"github.com/viam-modules/trajex/go/totg"
 )
 
@@ -21,12 +22,12 @@ var (
 
 // planar2Link builds two joints rotating about z, one metre apart, with the
 // end of the chain one metre past the second joint.
-func planar2Link(t *testing.T) *trajex.KinematicChain {
+func planar2Link(t *testing.T) *kinematics.Chain {
 	t.Helper()
-	chain, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
-		trajex.RotationalJoint([3]float64{1, 0, 0}, identityRotation, zAxis),
-		trajex.FixedJoint([3]float64{1, 0, 0}, identityRotation),
+	chain, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
+		kinematics.RotationalJoint([3]float64{1, 0, 0}, identityRotation, zAxis),
+		kinematics.FixedJoint([3]float64{1, 0, 0}, identityRotation),
 	})
 	test.That(t, err, test.ShouldBeNil)
 	return chain
@@ -58,7 +59,7 @@ func tcpBoundInputs(t *testing.T) *trajex.TensorMap {
 // never longer than the curve it cuts across, so the estimate can fall short
 // of the true peak but can never exceed it. That makes it a sound check that
 // a cap was respected, though not on its own a check that the cap was reached.
-func peakTCPSpeed(t *testing.T, chain *trajex.KinematicChain, out *trajex.TensorMap) float64 {
+func peakTCPSpeed(t *testing.T, chain *kinematics.Chain, out *trajex.TensorMap) float64 {
 	t.Helper()
 	_, times, ok, err := out.ViewFloat64s(totg.KeySampleTimesSec)
 	test.That(t, err, test.ShouldBeNil)
@@ -80,7 +81,7 @@ func peakTCPSpeed(t *testing.T, chain *trajex.KinematicChain, out *trajex.Tensor
 	return peak
 }
 
-func generateWithKinematics(t *testing.T, chain *trajex.KinematicChain, in *trajex.TensorMap) *trajex.TensorMap {
+func generateWithKinematics(t *testing.T, chain *kinematics.Chain, in *trajex.TensorMap) *trajex.TensorMap {
 	t.Helper()
 	out, err := trajex.NewTensorMap()
 	test.That(t, err, test.ShouldBeNil)
@@ -150,8 +151,8 @@ func TestGenerateRejectsTCPCapWithoutKinematics(t *testing.T) {
 }
 
 func TestGenerateWithKinematicsRejectsAChainWithTheWrongDOF(t *testing.T) {
-	oneJoint, err := trajex.NewKinematicChain([]trajex.Joint{
-		trajex.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
+	oneJoint, err := kinematics.NewChain([]kinematics.Joint{
+		kinematics.RotationalJoint([3]float64{0, 0, 0}, identityRotation, zAxis),
 	})
 	test.That(t, err, test.ShouldBeNil)
 	defer oneJoint.Close()

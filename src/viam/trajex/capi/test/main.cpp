@@ -58,7 +58,7 @@ struct totg_result {
 // which the deleter no-ops).
 totg_result run_totg(const viam_trajex_tensor_map_t* inputs,
                      viam_trajex_tensor_map_t* outputs,
-                     const viam_trajex_kinematic_chain_t* chain = nullptr) {
+                     const viam_trajex_kinematics_chain_t* chain = nullptr) {
     const char* raw = nullptr;
     const int status = viam_trajex_totg_generate(chain, inputs, outputs, &raw);
     return {status, error_string{raw}};
@@ -150,43 +150,43 @@ map_owner make_waypoint_batch(const std::vector<double>& coordinates) {
 
 // RAII handles for the kinematic chain builder and chain.
 struct chain_builder_deleter {
-    void operator()(viam_trajex_kinematic_chain_builder_t* p) const noexcept {
-        viam_trajex_kinematic_chain_builder_destroy(p);
+    void operator()(viam_trajex_kinematics_chain_builder_t* p) const noexcept {
+        viam_trajex_kinematics_chain_builder_destroy(p);
     }
 };
-using chain_builder_owner = std::unique_ptr<viam_trajex_kinematic_chain_builder_t, chain_builder_deleter>;
+using chain_builder_owner = std::unique_ptr<viam_trajex_kinematics_chain_builder_t, chain_builder_deleter>;
 
 struct chain_deleter {
-    void operator()(viam_trajex_kinematic_chain_t* p) const noexcept {
-        viam_trajex_kinematic_chain_destroy(p);
+    void operator()(viam_trajex_kinematics_chain_t* p) const noexcept {
+        viam_trajex_kinematics_chain_destroy(p);
     }
 };
-using chain_owner = std::unique_ptr<viam_trajex_kinematic_chain_t, chain_deleter>;
+using chain_owner = std::unique_ptr<viam_trajex_kinematics_chain_t, chain_deleter>;
 
 constexpr double k_identity_rotation[4] = {1.0, 0.0, 0.0, 0.0};
 constexpr double k_z_axis[3] = {0.0, 0.0, 1.0};
 
 // Two 1m planar links rotating about z, ending in a 1m fixed flange, built through the C ABI.
 chain_owner make_planar_2link_chain() {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double base[3] = {0.0, 0.0, 0.0};
     const double link[3] = {1.0, 0.0, 0.0};
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_rotational(builder.get(), base, k_identity_rotation, k_z_axis) == 0);
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_rotational(builder.get(), link, k_identity_rotation, k_z_axis) == 0);
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), link, k_identity_rotation) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_rotational(builder.get(), base, k_identity_rotation, k_z_axis) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_rotational(builder.get(), link, k_identity_rotation, k_z_axis) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), link, k_identity_rotation) == 0);
 
     const char* raw = nullptr;
-    chain_owner chain{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    chain_owner chain{viam_trajex_kinematics_chain_builder_build(builder.get(), &raw)};
     const error_string owned_error{raw};
     BOOST_TEST_REQUIRE(chain);
     return chain;
 }
 
-std::array<double, 3> end_position(const viam_trajex_kinematic_chain_t* chain, const double* q, std::size_t n_q) {
+std::array<double, 3> end_position(const viam_trajex_kinematics_chain_t* chain, const double* q, std::size_t n_q) {
     std::array<double, 3> position{};
     const char* raw = nullptr;
-    const int status = viam_trajex_kinematic_chain_end_position(chain, q, n_q, position.data(), &raw);
+    const int status = viam_trajex_kinematics_chain_end_position(chain, q, n_q, position.data(), &raw);
     const error_string owned_error{raw};
     BOOST_TEST_REQUIRE(status == 0);
     return position;
@@ -195,7 +195,7 @@ std::array<double, 3> end_position(const viam_trajex_kinematic_chain_t* chain, c
 // The fastest the chain's end moved between consecutive samples of a 2-DOF output map. A chord
 // is never longer than the arc it spans, so this cannot overstate the speed the trajectory
 // reached.
-double peak_tcp_speed(const viam_trajex_kinematic_chain_t* chain, const viam_trajex_tensor_map_t* outputs) {
+double peak_tcp_speed(const viam_trajex_kinematics_chain_t* chain, const viam_trajex_tensor_map_t* outputs) {
     const auto times = view_required(outputs, viam_trajex_totg_key_sample_times_sec);
     const auto configurations = view_required(outputs, viam_trajex_totg_key_configurations_rads);
     const auto* t = static_cast<const double*>(times.data);
@@ -628,7 +628,7 @@ BOOST_AUTO_TEST_CASE(streaming_extend_leaves_reporting_parameters_untouched_on_f
 // the shim adds: marshaling the arrays, consuming the builder, and reporting.
 // ============================================================================
 
-BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_matches_planar_geometry) {
+BOOST_AUTO_TEST_CASE(kinematics_chain_end_position_matches_planar_geometry) {
     const auto chain = make_planar_2link_chain();
 
     const double straight[2] = {0.0, 0.0};
@@ -643,22 +643,22 @@ BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_matches_planar_geometry) {
     BOOST_TEST(r[1] == 2.0, boost::test_tools::tolerance(1e-12));
 }
 
-BOOST_AUTO_TEST_CASE(kinematic_chain_build_consumes_the_builder) {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+BOOST_AUTO_TEST_CASE(kinematics_chain_build_consumes_the_builder) {
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double origin[3] = {0.0, 0.0, 0.0};
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_rotational(builder.get(), origin, k_identity_rotation, k_z_axis) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_rotational(builder.get(), origin, k_identity_rotation, k_z_axis) == 0);
 
     const char* raw = nullptr;
-    const chain_owner chain{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    const chain_owner chain{viam_trajex_kinematics_chain_builder_build(builder.get(), &raw)};
     const error_string first_error{raw};
     BOOST_TEST_REQUIRE(chain);
     BOOST_TEST(!first_error);
 
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == -1);
 
     raw = nullptr;
-    const chain_owner again{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    const chain_owner again{viam_trajex_kinematics_chain_builder_build(builder.get(), &raw)};
     const error_string second_error{raw};
     BOOST_TEST(!again);
     BOOST_TEST_REQUIRE(second_error);
@@ -666,65 +666,65 @@ BOOST_AUTO_TEST_CASE(kinematic_chain_build_consumes_the_builder) {
 }
 
 // A build that fails names the joint, and still spends the builder.
-BOOST_AUTO_TEST_CASE(kinematic_chain_build_reports_an_invalid_joint) {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+BOOST_AUTO_TEST_CASE(kinematics_chain_build_reports_an_invalid_joint) {
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double origin[3] = {0.0, 0.0, 0.0};
     const double zero_axis[3] = {0.0, 0.0, 0.0};
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == 0);
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_translational(builder.get(), origin, k_identity_rotation, zero_axis) ==
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_translational(builder.get(), origin, k_identity_rotation, zero_axis) ==
                        0);
 
     const char* raw = nullptr;
-    const chain_owner chain{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    const chain_owner chain{viam_trajex_kinematics_chain_builder_build(builder.get(), &raw)};
     const error_string owned_error{raw};
     BOOST_TEST(!chain);
     BOOST_TEST_REQUIRE(owned_error);
     BOOST_TEST(std::string(owned_error.get()).find("joint 1") != std::string::npos);
 
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), origin, k_identity_rotation) == -1);
 }
 
-BOOST_AUTO_TEST_CASE(kinematic_chain_builder_rejects_null_arguments) {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+BOOST_AUTO_TEST_CASE(kinematics_chain_builder_rejects_null_arguments) {
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double origin[3] = {0.0, 0.0, 0.0};
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_fixed(nullptr, origin, k_identity_rotation) == -1);
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), nullptr, k_identity_rotation) == -1);
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_rotational(builder.get(), origin, nullptr, k_z_axis) == -1);
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_extend_translational(builder.get(), origin, k_identity_rotation, nullptr) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_fixed(nullptr, origin, k_identity_rotation) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), nullptr, k_identity_rotation) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_rotational(builder.get(), origin, nullptr, k_z_axis) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_extend_translational(builder.get(), origin, k_identity_rotation, nullptr) == -1);
 
     const char* raw = nullptr;
-    BOOST_TEST(viam_trajex_kinematic_chain_builder_build(nullptr, &raw) == nullptr);
+    BOOST_TEST(viam_trajex_kinematics_chain_builder_build(nullptr, &raw) == nullptr);
     const error_string owned_error{raw};
     BOOST_TEST(owned_error);
 
-    viam_trajex_kinematic_chain_builder_destroy(nullptr);
-    viam_trajex_kinematic_chain_destroy(nullptr);
+    viam_trajex_kinematics_chain_builder_destroy(nullptr);
+    viam_trajex_kinematics_chain_destroy(nullptr);
 }
 
-BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_rejects_a_wrong_joint_count) {
+BOOST_AUTO_TEST_CASE(kinematics_chain_end_position_rejects_a_wrong_joint_count) {
     const auto chain = make_planar_2link_chain();
     const double q[3] = {0.0, 0.0, 0.0};
     double out[3] = {};
     const char* raw = nullptr;
-    BOOST_TEST(viam_trajex_kinematic_chain_end_position(chain.get(), q, 3, out, &raw) == -1);
+    BOOST_TEST(viam_trajex_kinematics_chain_end_position(chain.get(), q, 3, out, &raw) == -1);
     const error_string owned_error{raw};
     BOOST_TEST(owned_error);
 }
 
 // A chain of fixed joints alone has no joint vector, so q may be NULL with n_q zero, and the end
 // sits wherever the fixed origins put it.
-BOOST_AUTO_TEST_CASE(kinematic_chain_end_position_with_no_moving_joints) {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+BOOST_AUTO_TEST_CASE(kinematics_chain_end_position_with_no_moving_joints) {
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double first[3] = {1.0, 2.0, 3.0};
     const double second[3] = {0.5, 0.0, -1.0};
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), first, k_identity_rotation) == 0);
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_fixed(builder.get(), second, k_identity_rotation) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), first, k_identity_rotation) == 0);
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_fixed(builder.get(), second, k_identity_rotation) == 0);
 
     const char* raw = nullptr;
-    const chain_owner chain{viam_trajex_kinematic_chain_builder_build(builder.get(), &raw)};
+    const chain_owner chain{viam_trajex_kinematics_chain_builder_build(builder.get(), &raw)};
     const error_string owned_error{raw};
     BOOST_TEST_REQUIRE(chain);
 
@@ -768,11 +768,11 @@ BOOST_AUTO_TEST_CASE(totg_generate_rejects_a_tcp_cap_without_a_chain) {
 // The chain is checked against the DOF whether or not a cap is set, so the call that hands over
 // the wrong chain is the one that hears about it.
 BOOST_AUTO_TEST_CASE(totg_generate_rejects_a_chain_with_the_wrong_dof) {
-    const chain_builder_owner builder{viam_trajex_kinematic_chain_builder_create()};
+    const chain_builder_owner builder{viam_trajex_kinematics_chain_builder_create()};
     BOOST_TEST_REQUIRE(builder);
     const double origin[3] = {0.0, 0.0, 0.0};
-    BOOST_TEST_REQUIRE(viam_trajex_kinematic_chain_builder_extend_rotational(builder.get(), origin, k_identity_rotation, k_z_axis) == 0);
-    const chain_owner one_joint{viam_trajex_kinematic_chain_builder_build(builder.get(), nullptr)};
+    BOOST_TEST_REQUIRE(viam_trajex_kinematics_chain_builder_extend_rotational(builder.get(), origin, k_identity_rotation, k_z_axis) == 0);
+    const chain_owner one_joint{viam_trajex_kinematics_chain_builder_build(builder.get(), nullptr)};
     BOOST_TEST_REQUIRE(one_joint);
 
     const auto inputs = make_map();

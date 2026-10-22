@@ -13,12 +13,12 @@ import (
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 
-	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 )
 
 // JointsFromModel describes the serial chain from the base of m out to a tool
 // center point, which is where a TCP speed cap applies. The result is meant
-// to be passed to trajex.NewKinematicChain.
+// to be passed to kinematics.NewChain.
 //
 // tcp is the pose of the tool center point relative to the model's own output
 // frame, the frame whose pose m.Transform reports. Where that point lies
@@ -41,7 +41,7 @@ import (
 // for any model that trajex cannot drive with the same joint positions RDK
 // would use: one with a mimic joint on the path to its output frame, or with
 // moving joints anywhere else in the model, such as a gripper's fingers.
-func JointsFromModel(m referenceframe.Model, tcp spatialmath.Pose) ([]trajex.Joint, error) {
+func JointsFromModel(m referenceframe.Model, tcp spatialmath.Pose) ([]kinematics.Joint, error) {
 	if m == nil {
 		return nil, errors.New("trajex/rdk: model is nil")
 	}
@@ -88,7 +88,7 @@ func JointsFromModel(m referenceframe.Model, tcp spatialmath.Pose) ([]trajex.Joi
 	// that precedes its motion as its origin. So we compose the poses of the
 	// links between one joint and the next, and hand the result to the next
 	// joint as its origin.
-	var joints []trajex.Joint
+	var joints []kinematics.Joint
 	var moving []string
 	origin := spatialmath.NewZeroPose()
 	for _, id := range path {
@@ -103,9 +103,9 @@ func JointsFromModel(m referenceframe.Model, tcp spatialmath.Pose) ([]trajex.Joi
 		xyz, wxyz := originComponents(origin)
 		switch e.jointType {
 		case referenceframe.RevoluteJoint:
-			joints = append(joints, trajex.RotationalJoint(xyz, wxyz, e.axis))
+			joints = append(joints, kinematics.RotationalJoint(xyz, wxyz, e.axis))
 		case referenceframe.PrismaticJoint:
-			joints = append(joints, trajex.TranslationalJoint(xyz, wxyz, e.axis))
+			joints = append(joints, kinematics.TranslationalJoint(xyz, wxyz, e.axis))
 		default:
 			return nil, errors.Errorf("trajex/rdk: joint %q has type %q, which trajex does not support", id, e.jointType)
 		}
@@ -119,7 +119,7 @@ func JointsFromModel(m referenceframe.Model, tcp spatialmath.Pose) ([]trajex.Joi
 	// are trivial, since it costs nothing and gives every chain the same
 	// shape whatever the caller passed.
 	xyz, wxyz := originComponents(spatialmath.Compose(origin, tcp))
-	joints = append(joints, trajex.FixedJoint(xyz, wxyz))
+	joints = append(joints, kinematics.FixedJoint(xyz, wxyz))
 
 	// RDK takes one input for every moving joint in the whole model, in its
 	// own order, and a caller will hand trajex those same inputs. Unless the

@@ -1,4 +1,4 @@
-#include <viam/trajex/jacobian/jacobian.hpp>
+#include <viam/trajex/kinematics/chain.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-namespace viam::trajex::jacobian {
+namespace viam::trajex::kinematics {
 
 namespace {
 
@@ -157,7 +157,7 @@ vec3 linear_column(const auto& joint, const vec3& p_e) {
 // joint at a time during the walk and read back one joint at a time by the per-joint column
 // assembly, so a joint is the natural unit. A vectorized xtensor assembly is deferred to the
 // linear-algebra cleanup.
-struct kinematic_chain::chain_state_ {
+struct chain::chain_state_ {
     struct moving_joint {
         vec3 axis;
         vec3 position;
@@ -173,9 +173,9 @@ struct kinematic_chain::chain_state_ {
 // The origin transforms and unit axes do not depend on q, so they were computed once at
 // construction. Joints after last_joint cannot move anything before them, so we stop there, but q
 // is still checked against the whole chain, because callers always hand us a full joint vector.
-kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvector<>& q, std::size_t last_joint) const {
+chain::chain_state_ chain::compute_chain_state_(const xvector<>& q, std::size_t last_joint) const {
     if (q.size() != actuated_count_) {
-        throw std::invalid_argument("viam::trajex::jacobian: q size mismatch: expected " + std::to_string(actuated_count_) +
+        throw std::invalid_argument("viam::trajex::kinematics: q size mismatch: expected " + std::to_string(actuated_count_) +
                                     " (actuated joints), got " + std::to_string(q.size()));
     }
 
@@ -205,12 +205,12 @@ kinematic_chain::chain_state_ kinematic_chain::compute_chain_state_(const xvecto
     return state;
 }
 
-kinematic_chain::kinematic_chain(std::vector<joint_> joints) : joints_(std::move(joints)) {
+chain::chain(std::vector<joint_> joints) : joints_(std::move(joints)) {
     actuated_count_ = static_cast<std::size_t>(
         std::ranges::count_if(joints_, [](const joint_& joint) { return !std::holds_alternative<fixed_joint_>(joint); }));
 }
 
-xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
+xmatrix<> chain::jacobian(const xvector<>& q) const {
     const chain_state_ state = compute_chain_state_(q, joints_.size() - 1);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{6}, actuated_count_});
@@ -229,7 +229,7 @@ xmatrix<> kinematic_chain::jacobian(const xvector<>& q) const {
     return J;
 }
 
-xmatrix<> kinematic_chain::linear_jacobian(const xvector<>& q) const {
+xmatrix<> chain::linear_jacobian(const xvector<>& q) const {
     const chain_state_ state = compute_chain_state_(q, joints_.size() - 1);
 
     xmatrix<> J = xt::zeros<double>({std::size_t{3}, actuated_count_});
@@ -242,17 +242,17 @@ xmatrix<> kinematic_chain::linear_jacobian(const xvector<>& q) const {
     return J;
 }
 
-kinematic_chain::frame_kinematics kinematic_chain::forward_kinematics(std::size_t joint,
-                                                                      const xvector<>& q,
-                                                                      const xvector<>& q_dot,
-                                                                      const xvector<>& q_ddot) const {
+chain::frame_kinematics chain::forward_kinematics(std::size_t joint,
+                                                  const xvector<>& q,
+                                                  const xvector<>& q_dot,
+                                                  const xvector<>& q_ddot) const {
     if (joint >= joints_.size()) {
-        throw std::out_of_range("viam::trajex::jacobian: joint " + std::to_string(joint) + " is past the end of a chain of " +
+        throw std::out_of_range("viam::trajex::kinematics: joint " + std::to_string(joint) + " is past the end of a chain of " +
                                 std::to_string(joints_.size()) + " joints");
     }
     const auto require_actuated_size = [this](const char* name, const xvector<>& values) {
         if (values.size() != actuated_count_) {
-            throw std::invalid_argument(std::string{"viam::trajex::jacobian: "} + name + " size mismatch: expected " +
+            throw std::invalid_argument(std::string{"viam::trajex::kinematics: "} + name + " size mismatch: expected " +
                                         std::to_string(actuated_count_) + " (actuated joints), got " + std::to_string(values.size()));
         }
     };
@@ -315,28 +315,28 @@ kinematic_chain::frame_kinematics kinematic_chain::forward_kinematics(std::size_
     return {.position = state.p_e, .linear_velocity = v, .linear_acceleration = dv};
 }
 
-kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin) & {
+chain::builder& chain::builder::extend(const joint_origin& origin) & {
     joints_.emplace_back(fixed_joint_{{origin, {}}});
     return *this;
 }
 
-kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin, const rotation_axis& axis) & {
+chain::builder& chain::builder::extend(const joint_origin& origin, const rotation_axis& axis) & {
     joints_.emplace_back(rotating_joint_{{origin, {}}, axis, {}});
     return *this;
 }
 
-kinematic_chain::builder& kinematic_chain::builder::extend(const joint_origin& origin, const translation_axis& axis) & {
+chain::builder& chain::builder::extend(const joint_origin& origin, const translation_axis& axis) & {
     joints_.emplace_back(translating_joint_{{origin, {}}, axis, {}});
     return *this;
 }
 
-kinematic_chain kinematic_chain::builder::build() && {
+chain chain::builder::build() && {
     if (joints_.empty()) {
-        throw std::invalid_argument("viam::trajex::jacobian: a kinematic chain needs at least one joint");
+        throw std::invalid_argument("viam::trajex::kinematics: a kinematic chain needs at least one joint");
     }
 
     for (std::size_t i = 0; i < joints_.size(); ++i) {
-        const std::string which = "viam::trajex::jacobian: joint " + std::to_string(i);
+        const std::string which = "viam::trajex::kinematics: joint " + std::to_string(i);
         std::visit(
             [&]<typename Joint>(Joint& joint) {
                 const auto& [translation, rotation] = joint.origin;
@@ -369,7 +369,7 @@ kinematic_chain kinematic_chain::builder::build() && {
             },
             joints_[i]);
     }
-    return kinematic_chain(std::move(joints_));
+    return chain(std::move(joints_));
 }
 
-}  // namespace viam::trajex::jacobian
+}  // namespace viam::trajex::kinematics

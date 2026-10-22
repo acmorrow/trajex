@@ -20,6 +20,7 @@ import (
 
 	trajex "github.com/viam-modules/trajex/go"
 	"github.com/viam-modules/trajex/go/internal/capi"
+	"github.com/viam-modules/trajex/go/kinematics"
 )
 
 // Schema key string constants for inputs and outputs honored by Generate.
@@ -82,11 +83,11 @@ func Generate(ctx context.Context, inputs, outputs *trajex.TensorMap) error {
 // and its number of rotational and translational joints must equal the
 // number of degrees of freedom in the waypoints. The chain is only read during the call, so it may be released as
 // soon as the call returns.
-func GenerateWithKinematics(ctx context.Context, chain *trajex.KinematicChain, inputs, outputs *trajex.TensorMap) error {
+func GenerateWithKinematics(ctx context.Context, chain *kinematics.Chain, inputs, outputs *trajex.TensorMap) error {
 	// A null chain would reach the C ABI as an ordinary request without
 	// kinematics. That is harmless when no cap was asked for, but it hides a
 	// mistake on the caller's part, so we refuse it here instead.
-	chainHandle := (*C.viam_trajex_kinematic_chain_t)(chain.UnsafeHandle())
+	chainHandle := (*C.viam_trajex_kinematics_chain_t)(chain.UnsafeHandle())
 	if chainHandle == nil {
 		return errors.New("trajex/totg: GenerateWithKinematics requires a kinematic chain that is not nil and has not been released")
 	}
@@ -97,7 +98,7 @@ func GenerateWithKinematics(ctx context.Context, chain *trajex.KinematicChain, i
 // functions, rather than one taking a chain that may be nil, because a bare
 // nil in an argument list tells someone reading the call nothing about what
 // it means. The streaming package makes the same split for its constructors.
-func generate(ctx context.Context, chain *C.viam_trajex_kinematic_chain_t, inputs, outputs *trajex.TensorMap) error {
+func generate(ctx context.Context, chain *C.viam_trajex_kinematics_chain_t, inputs, outputs *trajex.TensorMap) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -46,8 +46,8 @@ std::string record_for(planner<test_receiver>::config cfg) {
 // element is 0 for a fixed joint, 1 for a rotating one and 2 for a translating one.
 using joint_description = std::tuple<int, std::array<double, 3>, std::array<double, 4>, std::array<double, 3>>;
 
-std::vector<joint_description> describe(const viam::trajex::jacobian::kinematic_chain& kinematics) {
-    using chain = viam::trajex::jacobian::kinematic_chain;
+std::vector<joint_description> describe(const viam::trajex::kinematics::chain& kinematics) {
+    using chain = viam::trajex::kinematics::chain;
     struct collector {
         std::vector<joint_description> joints;
         void operator()(const chain::joint_origin& o) {
@@ -334,7 +334,7 @@ BOOST_AUTO_TEST_CASE(decider_return_type_is_flexible) {
 // for one: a planner whose config carries a TCP limit refuses to register legacy at all.
 BOOST_AUTO_TEST_CASE(legacy_registration_with_tcp_limit_throws) {
     auto cfg = gp12_config();
-    cfg.kinematics = gp12_chain();
+    cfg.kinematics_chain = gp12_chain();
     cfg.tcp_max_linear_speed = 0.5;
 
     planner<test_receiver> p(std::move(cfg));
@@ -347,13 +347,13 @@ BOOST_AUTO_TEST_CASE(legacy_registration_with_tcp_limit_throws) {
 // generator that would silently ignore it. The kinematics are kept, since they are harmless.
 BOOST_AUTO_TEST_CASE(legacy_replay_of_tcp_record_drops_tcp_limit) {
     auto cfg = gp12_config();
-    cfg.kinematics = gp12_chain();
+    cfg.kinematics_chain = gp12_chain();
     cfg.tcp_max_linear_speed = 0.5;
 
     std::istringstream in(record_for(std::move(cfg)));
     auto replayed = legacy_replay_planner::create(in);
     BOOST_CHECK(!replayed.get_config().tcp_max_linear_speed.has_value());
-    BOOST_CHECK(replayed.get_config().kinematics.has_value());
+    BOOST_CHECK(replayed.get_config().kinematics_chain.has_value());
 
     auto outcome = replayed.execute([](const auto&, const auto&, auto legacy) { return legacy; });
     BOOST_REQUIRE(outcome.receiver.has_value());
@@ -374,14 +374,14 @@ BOOST_AUTO_TEST_CASE(tcp_cap_without_kinematics_rejected_at_construction) {
 // accepted, with or without a cap, rather than failing partway through the first trajectory.
 BOOST_AUTO_TEST_CASE(kinematics_dof_mismatch_rejected_at_construction) {
     auto mismatched = simple_config();
-    mismatched.kinematics = gp12_chain();
+    mismatched.kinematics_chain = gp12_chain();
     BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(mismatched)), std::invalid_argument);
 
     mismatched.tcp_max_linear_speed = 0.5;
     BOOST_CHECK_THROW(static_cast<void>(planner<test_receiver>(mismatched)), std::invalid_argument);
 
     auto matched = gp12_config();
-    matched.kinematics = gp12_chain();
+    matched.kinematics_chain = gp12_chain();
     matched.tcp_max_linear_speed = 0.5;
     BOOST_CHECK_NO_THROW(static_cast<void>(planner<test_receiver>(matched)));
 }
@@ -391,7 +391,7 @@ BOOST_AUTO_TEST_CASE(kinematics_dof_mismatch_rejected_at_construction) {
 // rebuilt limit generates a trajectory.
 BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
     auto cfg = gp12_config();
-    cfg.kinematics = gp12_chain();
+    cfg.kinematics_chain = gp12_chain();
     cfg.tcp_max_linear_speed = 0.5;
 
     std::istringstream in(record_for(std::move(cfg)));
@@ -400,8 +400,8 @@ BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
 
     BOOST_REQUIRE(rc.tcp_max_linear_speed.has_value());
     BOOST_CHECK_EQUAL(*rc.tcp_max_linear_speed, 0.5);
-    BOOST_REQUIRE(rc.kinematics.has_value());
-    BOOST_CHECK(describe(*rc.kinematics) == describe(gp12_chain()));
+    BOOST_REQUIRE(rc.kinematics_chain.has_value());
+    BOOST_CHECK(describe(*rc.kinematics_chain) == describe(gp12_chain()));
 
     auto outcome = replayed.execute([](const auto&, auto tx, const auto&) { return tx; });
     BOOST_REQUIRE(outcome.receiver.has_value());
@@ -411,7 +411,7 @@ BOOST_AUTO_TEST_CASE(replay_record_round_trips_tcp_limit) {
 // Every joint kind, and quaternions and axes that are not unit length, come back exactly as they
 // were given, since the record keeps what the builder was handed rather than what it derived.
 BOOST_AUTO_TEST_CASE(replay_record_round_trips_every_joint_kind) {
-    using chain = viam::trajex::jacobian::kinematic_chain;
+    using chain = viam::trajex::kinematics::chain;
     const auto kinematics = chain::builder{}
                                 .extend(chain::joint_origin{.translation = {0.1, -0.2, 0.3}, .rotation = {2.0, 0.1, -0.3, 0.4}},
                                         chain::rotation_axis{{0.0, 0.0, 3.0}})
@@ -425,22 +425,22 @@ BOOST_AUTO_TEST_CASE(replay_record_round_trips_every_joint_kind) {
         .path_blend_tolerance = 0.01,
         .colinearization_ratio = std::nullopt,
     };
-    cfg.kinematics = kinematics;
+    cfg.kinematics_chain = kinematics;
 
     planner<test_receiver> p(std::move(cfg));
     auto data = p.stash(xmatrix<>{{0.0, 0.0}, {0.3, 0.1}});
     std::istringstream in(p.serialize_for_replay(waypoint_accumulator{*data}));
     const auto replayed = replay_planner::create(in);
 
-    BOOST_REQUIRE(replayed.get_config().kinematics.has_value());
-    BOOST_CHECK(describe(*replayed.get_config().kinematics) == describe(kinematics));
+    BOOST_REQUIRE(replayed.get_config().kinematics_chain.has_value());
+    BOOST_CHECK(describe(*replayed.get_config().kinematics_chain) == describe(kinematics));
     BOOST_CHECK(!replayed.get_config().tcp_max_linear_speed.has_value());
 }
 
-// A record that names a TCP cap but carries no kinematic_chain has nothing to apply the cap to and
+// A record that names a TCP cap but carries no kinematics_chain has nothing to apply the cap to and
 // is rejected rather than silently dropping the limit. That is also what becomes of a schema v2
 // record that described its kinematics as a model_table.
-BOOST_AUTO_TEST_CASE(replay_tcp_speed_without_kinematic_chain_throws) {
+BOOST_AUTO_TEST_CASE(replay_tcp_speed_without_kinematics_chain_throws) {
     const std::string record = R"({
         "schema_version": 2,
         "max_velocity_vec_rads_per_sec": [1, 1, 1, 1, 1, 1],
@@ -461,7 +461,7 @@ BOOST_AUTO_TEST_CASE(replay_joint_with_both_axes_throws) {
         "max_velocity_vec_rads_per_sec": [1],
         "max_acceleration_vec_rads_per_sec2": [1],
         "path_tolerance_delta_rads": 0.01,
-        "kinematic_chain": [{"xyz": [0, 0, 0], "wxyz": [1, 0, 0, 0], "rotation_axis": [0, 0, 1], "translation_axis": [1, 0, 0]}],
+        "kinematics_chain": [{"xyz": [0, 0, 0], "wxyz": [1, 0, 0, 0], "rotation_axis": [0, 0, 1], "translation_axis": [1, 0, 0]}],
         "waypoints_rads": [[0], [0.3]]
     })";
     std::istringstream in(record);

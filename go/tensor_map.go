@@ -2,10 +2,10 @@
 
 // Package trajex provides Go bindings for the trajex C ABI defined in
 // src/viam/trajex/capi/capi.h. The public surface is algorithm-agnostic: a
-// TensorMap handle plus typed insert and view operations, and a
-// KinematicChain that describes an arm so that limits can be placed on how
-// its tool moves. Algorithm-specific
-// entry points (e.g. TOTG) live in subpackages such as totg.
+// TensorMap handle plus typed insert and view operations. Kinematic chains,
+// which describe an arm so that limits can be placed on how its tool moves,
+// live in the kinematics subpackage. Algorithm-specific entry points (e.g.
+// TOTG) live in subpackages such as totg.
 package trajex
 
 /*

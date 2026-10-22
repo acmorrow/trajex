@@ -1,4 +1,4 @@
-#include <viam/trajex/jacobian/jacobian.hpp>
+#include <viam/trajex/kinematics/chain.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/types/xt.hpp>
 
@@ -20,7 +20,7 @@ namespace {
 
 using viam::trajex::xmatrix;
 using viam::trajex::xvector;
-using viam::trajex::jacobian::kinematic_chain;
+using viam::trajex::kinematics::chain;
 
 double matrix_diff_norm(const xmatrix<>& A, const xmatrix<>& B) {
     double s = 0.0;
@@ -59,7 +59,7 @@ twist J_times_qdot(const xmatrix<>& J, const xvector<>& q_dot) {
 }
 
 // A chain as the builder takes it, kept as plain data so the reference forward kinematics below
-// can walk it without going through kinematic_chain.
+// can walk it without going through kinematics::chain.
 enum class test_joint_kind : std::uint8_t { k_fixed, k_rotational, k_translational };
 
 struct test_joint {
@@ -85,19 +85,19 @@ test_joint fixed(std::array<double, 3> xyz, std::array<double, 4> wxyz = k_ident
     return {.kind = test_joint_kind::k_fixed, .xyz = xyz, .wxyz = wxyz, .axis = {}};
 }
 
-kinematic_chain build_chain(const test_chain& joints) {
-    kinematic_chain::builder builder;
+chain build_chain(const test_chain& joints) {
+    chain::builder builder;
     for (const auto& j : joints) {
-        const kinematic_chain::joint_origin origin{.translation = j.xyz, .rotation = j.wxyz};
+        const chain::joint_origin origin{.translation = j.xyz, .rotation = j.wxyz};
         switch (j.kind) {
             case test_joint_kind::k_fixed:
                 builder.extend(origin);
                 break;
             case test_joint_kind::k_rotational:
-                builder.extend(origin, kinematic_chain::rotation_axis{j.axis});
+                builder.extend(origin, chain::rotation_axis{j.axis});
                 break;
             case test_joint_kind::k_translational:
-                builder.extend(origin, kinematic_chain::translation_axis{j.axis});
+                builder.extend(origin, chain::translation_axis{j.axis});
                 break;
         }
     }
@@ -186,11 +186,11 @@ test_chain mixed_chain() {
     };
 }
 
-// The analytic Jacobian in kinematic_chain is the being tested, so it
+// The analytic Jacobian in kinematics::chain is the thing being tested, so it
 // cannot be its own evidence. The Jacobian's defining property is that it is
 // the derivative of the forward kinematics; the numerical-consistency suite
 // verifies exactly that property by finite-differencing the reference forward
-// kinematics below, which is written independently of kinematic_chain.
+// kinematics below, which is written independently of kinematics::chain.
 
 xmatrix<> reference_identity4() {
     xmatrix<> t = xt::zeros<double>({std::size_t{4}, std::size_t{4}});
@@ -319,7 +319,7 @@ void check_matches_numerical(const test_chain& joints, const xvector<>& q, doubl
 // The end point's linear velocity J_v(q) * q_dot, computed with linear_jacobian. That is checked
 // against the reference forward kinematics elsewhere in this file, so it can serve as a reference
 // here.
-std::array<double, 3> linear_velocity_via_jacobian(const kinematic_chain& chain, const xvector<>& q, const xvector<>& q_dot) {
+std::array<double, 3> linear_velocity_via_jacobian(const chain& chain, const xvector<>& q, const xvector<>& q_dot) {
     const auto J = chain.linear_jacobian(q);
     std::array<double, 3> v{0.0, 0.0, 0.0};
     for (std::size_t r = 0; r < 3; ++r) {
@@ -464,7 +464,7 @@ BOOST_AUTO_TEST_CASE(twolink_base_spin_bent) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite check kinematic_chain::jacobian against hand-computed
+// The tests in this suite check chain::jacobian against hand-computed
 // Jacobian values.
 BOOST_AUTO_TEST_SUITE(jacobian_ground_truth_tests)
 
@@ -603,9 +603,9 @@ BOOST_AUTO_TEST_CASE(mixed) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite cover kinematic_chain itself: reuse of one built chain across
+// The tests in this suite cover kinematics::chain itself: reuse of one built chain across
 // evaluations, agreement between its entry points, and the joint vectors it accepts.
-BOOST_AUTO_TEST_SUITE(kinematic_chain_tests)
+BOOST_AUTO_TEST_SUITE(chain_tests)
 
 BOOST_AUTO_TEST_CASE(built_chain_is_reusable_across_evaluations) {
     const auto chain = build_chain(twolink_chain());
@@ -837,7 +837,7 @@ BOOST_AUTO_TEST_CASE(singular_ratio_yields_nothing) {
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The tests in this suite validate kinematic_chain::builder and its inverse, visit_joints: that
+// The tests in this suite validate chain::builder and its inverse, visit_joints: that
 // build() normalizes what it may and refuses what it cannot represent, and that a chain reports
 // its joints exactly as it was given them.
 BOOST_AUTO_TEST_SUITE(builder_tests)
@@ -887,10 +887,10 @@ BOOST_AUTO_TEST_CASE(visit_joints_reports_joints_as_given) {
     given[2].axis = {0.0, 3.0, 4.0};
 
     test_chain reported;
-    build_chain(given).visit_joints([&]<typename... Axis>(const kinematic_chain::joint_origin& origin, const Axis&... axis) {
+    build_chain(given).visit_joints([&]<typename... Axis>(const chain::joint_origin& origin, const Axis&... axis) {
         if constexpr (sizeof...(Axis) == 0) {
             reported.push_back(fixed(origin.translation, origin.rotation));
-        } else if constexpr ((std::is_same_v<Axis, kinematic_chain::rotation_axis> && ...)) {
+        } else if constexpr ((std::is_same_v<Axis, chain::rotation_axis> && ...)) {
             reported.push_back(rotating(origin.translation, axis.direction..., origin.rotation));
         } else {
             reported.push_back(translating(origin.translation, axis.direction..., origin.rotation));

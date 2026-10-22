@@ -11,24 +11,17 @@
 
 #include <viam/trajex/types/xt.hpp>
 
-namespace viam::trajex::jacobian {
-
-// TODO(RSDK-14104): Remove duplicated code that exists in the viam-cpp-sdk
-
-// TODO: Move this to viam/trajex/kinematics/chain.hpp as viam::trajex::kinematics::chain, with the
-// builder as kinematics::chain::builder. The file and namespace are named for the Jacobian because
-// that was all this once computed, but the chain is the type and the Jacobian is one of the
-// things it evaluates.
+namespace viam::trajex::kinematics {
 
 ///
 /// A validated serial kinematic chain, held in chain order.
 ///
-/// Chains are assembled with kinematic_chain::builder. A finished chain is immutable and copyable.
+/// Chains are assembled with chain::builder. A finished chain is immutable and copyable.
 /// Each rotating or translating joint consumes one element of the joint vector q, in chain order;
 /// fixed joints consume none. A rotating joint's element is an angle in radians, and a translating
 /// joint's is a displacement in the length unit of the chain's translations.
 ///
-class kinematic_chain {
+class chain {
    public:
     ///
     /// The rigid transform from a joint's parent frame to the joint's own frame.
@@ -270,13 +263,13 @@ class kinematic_chain {
     struct chain_state_;
 
     // Takes joints the builder has already validated and derived, and counts the moving ones.
-    explicit kinematic_chain(std::vector<joint_> joints);
+    explicit chain(std::vector<joint_> joints);
 
     // Defined here, not in the source file: the deduced overloads above instantiate in the
     // caller's translation unit, so a definition there would have to be exported.
     static void require_rank_one_(const auto& value) {
         if (!xrank_is_same_as<xvector<>>(value)) {
-            throw std::invalid_argument("viam::trajex::jacobian: expected a 1D joint vector, got " + std::to_string(value.dimension()) +
+            throw std::invalid_argument("viam::trajex::kinematics: expected a 1D joint vector, got " + std::to_string(value.dimension()) +
                                         "D");
         }
     }
@@ -294,7 +287,7 @@ class kinematic_chain {
 /// The rigid transform from a joint's parent frame to the joint's own frame. It applies before
 /// the joint's motion.
 ///
-struct kinematic_chain::joint_origin {
+struct chain::joint_origin {
     std::array<double, 3> translation{};
 
     /// Quaternion w, x, y, z in the Hamilton convention. It need not be unit length, since the
@@ -306,7 +299,7 @@ struct kinematic_chain::joint_origin {
 /// The axis a revolute or continuous joint rotates about, in the joint's own frame. It need not
 /// be unit length.
 ///
-struct kinematic_chain::rotation_axis {
+struct chain::rotation_axis {
     std::array<double, 3> direction{};
 };
 
@@ -314,29 +307,29 @@ struct kinematic_chain::rotation_axis {
 /// The axis a prismatic joint translates along, in the joint's own frame. It need not be unit
 /// length.
 ///
-struct kinematic_chain::translation_axis {
+struct chain::translation_axis {
     std::array<double, 3> direction{};
 };
 
 // What every joint has: its origin as given, and the parent-to-joint transform (row-major 4x4)
 // build derives from it.
-struct kinematic_chain::joint_base_ {
+struct chain::joint_base_ {
     joint_origin origin;
     std::array<double, 16> origin_tf;
 };
 
-struct kinematic_chain::fixed_joint_ : joint_base_ {};
+struct chain::fixed_joint_ : joint_base_ {};
 
 // A rotating or translating joint, which also has its axis as given and the normalized form
 // build derives from it.
 template <typename Axis>
-struct kinematic_chain::moving_joint_ : joint_base_ {
+struct chain::moving_joint_ : joint_base_ {
     Axis axis;
     std::array<double, 3> unit_axis;
 };
 
 ///
-/// Assembles a kinematic_chain one joint at a time, from the base to the end effector.
+/// Assembles a chain one joint at a time, from the base to the end effector.
 ///
 /// The overload chosen says how each joint moves: an origin alone is a fixed joint, an origin and
 /// a rotation_axis a revolute or continuous joint, and an origin and a translation_axis a
@@ -345,7 +338,7 @@ struct kinematic_chain::moving_joint_ : joint_base_ {
 /// origin of the last joint's frame, so a chain should end at whatever point the caller wants
 /// limited, with a fixed joint if need be.
 ///
-class kinematic_chain::builder {
+class chain::builder {
    public:
     ///
     /// Appends a fixed joint.
@@ -403,7 +396,7 @@ class kinematic_chain::builder {
     ///         has a non-finite translation, a zero or non-finite quaternion, or a zero or
     ///         non-finite axis
     ///
-    [[nodiscard]] kinematic_chain build() &&;
+    [[nodiscard]] chain build() &&;
 
    private:
     // Joints as the caller described them, with their derived values not yet filled in.
@@ -412,12 +405,12 @@ class kinematic_chain::builder {
     std::vector<joint_> joints_;
 };
 
-inline std::size_t kinematic_chain::size() const noexcept {
+inline std::size_t chain::size() const noexcept {
     return joints_.size();
 }
 
 template <typename Visitor>
-void kinematic_chain::visit_joints(Visitor&& visitor) const {
+void chain::visit_joints(Visitor&& visitor) const {
     for (const joint_& joint : joints_) {
         std::visit(
             [&]<typename Joint>(const Joint& j) {
@@ -431,4 +424,4 @@ void kinematic_chain::visit_joints(Visitor&& visitor) const {
     }
 }
 
-}  // namespace viam::trajex::jacobian
+}  // namespace viam::trajex::kinematics

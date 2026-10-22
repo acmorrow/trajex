@@ -14,7 +14,7 @@ import (
 	"go.viam.com/rdk/utils"
 	"go.viam.com/test"
 
-	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 	"github.com/viam-modules/trajex/go/rdk"
 )
 
@@ -31,11 +31,11 @@ func loadModel(t *testing.T, file string) referenceframe.Model {
 	return m
 }
 
-func chainFromModel(t *testing.T, m referenceframe.Model, tcp spatialmath.Pose) *trajex.KinematicChain {
+func chainFromModel(t *testing.T, m referenceframe.Model, tcp spatialmath.Pose) *kinematics.Chain {
 	t.Helper()
 	joints, err := rdk.JointsFromModel(m, tcp)
 	test.That(t, err, test.ShouldBeNil)
-	chain, err := trajex.NewKinematicChain(joints)
+	chain, err := kinematics.NewChain(joints)
 	test.That(t, err, test.ShouldBeNil)
 	return chain
 }

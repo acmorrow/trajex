@@ -19,12 +19,12 @@ namespace viam::trajex::totg {
 
 namespace {
 
-// One fixed-length numeric field of a kinematic_chain joint in a replay record.
+// One fixed-length numeric field of a kinematics_chain joint in a replay record.
 template <std::size_t N>
 std::array<double, N> chain_joint_field(const Json::Value& joint, Json::ArrayIndex index, const char* key) {
     const auto& value = joint[key];
     if (!value.isArray() || value.size() != N) {
-        throw std::runtime_error("kinematic_chain joint " + std::to_string(index) + " field " + key + " must be an array of " +
+        throw std::runtime_error("kinematics_chain joint " + std::to_string(index) + " field " + key + " must be an array of " +
                                  std::to_string(N) + " numbers");
     }
     std::array<double, N> out{};
@@ -107,12 +107,12 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
 
     // Optional kinematics and TCP speed limit (schema v3). Each joint drives the builder overload
     // its axis key names, which rebuilds the chain the record was written from.
-    if (root.isMember("kinematic_chain")) {
-        const auto& chain_json = root["kinematic_chain"];
+    if (root.isMember("kinematics_chain")) {
+        const auto& chain_json = root["kinematics_chain"];
         if (!chain_json.isArray() || chain_json.empty()) {
-            throw std::runtime_error("kinematic_chain must be a non-empty array of joints");
+            throw std::runtime_error("kinematics_chain must be a non-empty array of joints");
         }
-        using chain = jacobian::kinematic_chain;
+        using chain = kinematics::chain;
         chain::builder builder;
         for (Json::ArrayIndex i = 0; i < chain_json.size(); ++i) {
             const auto& joint = chain_json[i];
@@ -121,7 +121,8 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
             const bool rotates = joint.isMember("rotation_axis");
             const bool translates = joint.isMember("translation_axis");
             if (rotates && translates) {
-                throw std::runtime_error("kinematic_chain joint " + std::to_string(i) + " has both a rotation_axis and a translation_axis");
+                throw std::runtime_error("kinematics_chain joint " + std::to_string(i) +
+                                         " has both a rotation_axis and a translation_axis");
             }
             if (rotates) {
                 builder.extend(origin, chain::rotation_axis{chain_joint_field<3>(joint, i, "rotation_axis")});
@@ -131,14 +132,14 @@ std::pair<planner_base::config, xmatrix<>> parse_replay_record(std::istream& in)
                 builder.extend(origin);
             }
         }
-        cfg.kinematics = std::move(builder).build();
+        cfg.kinematics_chain = std::move(builder).build();
     }
 
     // A v2 record that carried a TCP limit did so with a model_table, which nothing reads any
     // more. Its cap arrives without kinematics and is refused here rather than silently dropped.
     if (root.isMember("tcp_max_linear_speed")) {
-        if (!cfg.kinematics) {
-            throw std::runtime_error("tcp_max_linear_speed given without a kinematic_chain to apply it to");
+        if (!cfg.kinematics_chain) {
+            throw std::runtime_error("tcp_max_linear_speed given without a kinematics_chain to apply it to");
         }
         cfg.tcp_max_linear_speed = root["tcp_max_linear_speed"].asDouble();
     }

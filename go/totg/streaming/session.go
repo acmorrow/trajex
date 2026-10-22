@@ -27,6 +27,7 @@ import (
 	"github.com/pkg/errors"
 
 	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 	"github.com/viam-modules/trajex/go/totg"
 )
 
@@ -73,17 +74,17 @@ func New(options *trajex.TensorMap) (*Session, error) {
 // and its number of rotational and translational joints must equal the
 // session's degrees of freedom. The session copies what it needs from the chain while it is being created, so
 // the chain may be released as soon as NewWithKinematics returns.
-func NewWithKinematics(chain *trajex.KinematicChain, options *trajex.TensorMap) (*Session, error) {
+func NewWithKinematics(chain *kinematics.Chain, options *trajex.TensorMap) (*Session, error) {
 	// As in totg.GenerateWithKinematics, a null chain would quietly become a
 	// session without kinematics, which hides a mistake on the caller's part.
-	chainHandle := (*C.viam_trajex_kinematic_chain_t)(chain.UnsafeHandle())
+	chainHandle := (*C.viam_trajex_kinematics_chain_t)(chain.UnsafeHandle())
 	if chainHandle == nil {
 		return nil, errors.New("trajex/totg/streaming: NewWithKinematics requires a kinematic chain that is not nil and has not been released")
 	}
 	return newSession(chainHandle, options)
 }
 
-func newSession(chain *C.viam_trajex_kinematic_chain_t, options *trajex.TensorMap) (*Session, error) {
+func newSession(chain *C.viam_trajex_kinematics_chain_t, options *trajex.TensorMap) (*Session, error) {
 	optHandle := (*C.viam_trajex_tensor_map_t)(options.UnsafeHandle())
 	var errOut *C.char
 	h := C.viam_trajex_totg_streaming_session_create(chain, optHandle, &errOut)

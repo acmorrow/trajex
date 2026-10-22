@@ -10,7 +10,7 @@
 #include <optional>
 #include <utility>
 
-#include <viam/trajex/jacobian/jacobian.hpp>
+#include <viam/trajex/kinematics/chain.hpp>
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_acceleration.hpp>
 #include <viam/trajex/types/arc_length.hpp>
@@ -128,7 +128,7 @@ class trajectory {
         ///        translations per second
         /// @return A limits object whose evaluator computes the ratio from the chain
         ///
-        [[nodiscard]] static tcp_limits from(jacobian::kinematic_chain chain, double max_linear_speed);
+        [[nodiscard]] static tcp_limits from(kinematics::chain chain, double max_linear_speed);
 
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.

@@ -23,7 +23,7 @@ Json::Value json_array(const auto& values) {
 // Writes each joint of a kinematic chain as parse_replay_record reads it back. A moving
 // joint's axis key names how it moves, as the builder overload does, so no kind is recorded.
 struct chain_writer {
-    using chain = jacobian::kinematic_chain;
+    using chain = kinematics::chain;
 
     Json::Value joints{Json::arrayValue};
 
@@ -57,15 +57,15 @@ planner_base::planner_base(struct config cfg) : config_(std::move(cfg)) {
     // Checked here rather than when the limit is built, so a bad config fails where it is
     // accepted. serialize_for_replay relies on it too, since it runs on failure paths to record
     // diagnostics and must not throw.
-    if (config_.tcp_max_linear_speed && !config_.kinematics) {
-        throw std::invalid_argument("planner config tcp_max_linear_speed requires kinematics");
+    if (config_.tcp_max_linear_speed && !config_.kinematics_chain) {
+        throw std::invalid_argument("planner config tcp_max_linear_speed requires kinematics_chain");
     }
 
     // As in the C ABI, a chain must match the joint limits whether or not a cap is set, so that a
     // mismatch is reported by the config that made it rather than partway through the first
     // trajectory that caps, and so that a replay record never carries a chain it could not apply.
-    if (config_.kinematics && config_.kinematics->dof() != config_.velocity_limits->size()) {
-        throw std::invalid_argument("planner config kinematics has " + std::to_string(config_.kinematics->dof()) +
+    if (config_.kinematics_chain && config_.kinematics_chain->dof() != config_.velocity_limits->size()) {
+        throw std::invalid_argument("planner config kinematics_chain has " + std::to_string(config_.kinematics_chain->dof()) +
                                     " rotating or translating joints, but the joint limits describe " +
                                     std::to_string(config_.velocity_limits->size()));
     }
@@ -149,10 +149,10 @@ std::string planner_base::serialize_for_replay(const waypoint_accumulator& waypo
     root["min_blend_curvature"] = path_opts.min_blend_curvature();
     root["max_blend_curvature"] = path_opts.max_blend_curvature();
 
-    if (get_config().kinematics) {
+    if (get_config().kinematics_chain) {
         chain_writer writer;
-        get_config().kinematics->visit_joints(writer);
-        root["kinematic_chain"] = std::move(writer.joints);
+        get_config().kinematics_chain->visit_joints(writer);
+        root["kinematics_chain"] = std::move(writer.joints);
     }
     if (get_config().tcp_max_linear_speed) {
         root["tcp_max_linear_speed"] = *get_config().tcp_max_linear_speed;

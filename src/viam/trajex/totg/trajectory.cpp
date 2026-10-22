@@ -1296,7 +1296,7 @@ void trajectory::integration_event_observer::on_trajectory_extended(const trajec
 // point's motion per unit of arc length, dp/ds and d^2p/ds^2. The cap is on speed, so the evaluator
 // reduces that motion to its magnitude ||dp/ds|| and the derivative of that magnitude,
 // dp/ds . d^2p/ds^2 / ||dp/ds||.
-trajectory::tcp_limits trajectory::tcp_limits::from(jacobian::kinematic_chain chain, double max_linear_speed) {
+trajectory::tcp_limits trajectory::tcp_limits::from(kinematics::chain chain, double max_linear_speed) {
     return tcp_limits{
         .max_linear_speed = max_linear_speed,
         .evaluator = [chain = std::move(chain)](const xvector<>& q,

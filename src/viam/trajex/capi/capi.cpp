@@ -28,7 +28,7 @@
 #include <xtensor/xview.hpp>
 #endif
 
-#include <viam/trajex/jacobian/jacobian.hpp>
+#include <viam/trajex/kinematics/chain.hpp>
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/totg/streaming/session.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
@@ -87,13 +87,13 @@ struct viam_trajex_totg_streaming_session {
 // The opaque kinematic chain builder type. Building consumes the C++ builder, so it is held
 // in an optional that build empties whether or not it succeeds; an empty one is what the
 // header calls a builder that has already been built.
-struct viam_trajex_kinematic_chain_builder {
-    std::optional<viam::trajex::jacobian::kinematic_chain::builder> builder{std::in_place};
+struct viam_trajex_kinematics_chain_builder {
+    std::optional<viam::trajex::kinematics::chain::builder> builder{std::in_place};
 };
 
 // The opaque kinematic chain type.
-struct viam_trajex_kinematic_chain {
-    viam::trajex::jacobian::kinematic_chain chain;
+struct viam_trajex_kinematics_chain {
+    viam::trajex::kinematics::chain chain;
 };
 
 namespace {
@@ -235,7 +235,7 @@ std::array<double, 3> vector3_from(const double* values) {
     return {values[0], values[1], values[2]};
 }
 
-viam::trajex::jacobian::kinematic_chain::joint_origin origin_from(const double* xyz, const double* wxyz) {
+viam::trajex::kinematics::chain::joint_origin origin_from(const double* xyz, const double* wxyz) {
     return {.translation = vector3_from(xyz), .rotation = {wxyz[0], wxyz[1], wxyz[2], wxyz[3]}};
 }
 
@@ -243,7 +243,7 @@ viam::trajex::jacobian::kinematic_chain::joint_origin origin_from(const double* 
 // that a mismatch is reported by the call that made it rather than by the first one that caps.
 // A cap has nothing to apply to without a chain, and is refused rather than ignored.
 std::optional<viam::trajex::totg::trajectory::tcp_limits> tcp_limits_for(const viam_trajex_tensor_map& inputs,
-                                                                         const viam_trajex_kinematic_chain* chain,
+                                                                         const viam_trajex_kinematics_chain* chain,
                                                                          std::size_t n_dof) {
     if (chain && chain->chain.dof() != n_dof) {
         std::ostringstream oss;
@@ -269,7 +269,7 @@ std::optional<viam::trajex::totg::trajectory::tcp_limits> tcp_limits_for(const v
 // fallback to orchestrate, and TOTG handles reversals natively). Throws on
 // any failure; the extern "C" wrapper converts exceptions into the
 // documented error contract.
-viam_trajex_tensor_map totg_generate_impl(const viam_trajex_tensor_map& inputs, const viam_trajex_kinematic_chain* chain) {
+viam_trajex_tensor_map totg_generate_impl(const viam_trajex_tensor_map& inputs, const viam_trajex_kinematics_chain* chain) {
     namespace totg = viam::trajex::totg;
 
     // Required inputs
@@ -371,7 +371,7 @@ viam_trajex_tensor_map totg_generate_impl(const viam_trajex_tensor_map& inputs, 
 // dtype mismatches, or shape mismatches; the extern "C" wrapper converts exceptions to
 // NULL with diagnostic.
 std::unique_ptr<viam_trajex_totg_streaming_session> build_streaming_session(const viam_trajex_tensor_map& options,
-                                                                            const viam_trajex_kinematic_chain* chain) {
+                                                                            const viam_trajex_kinematics_chain* chain) {
     namespace totg = viam::trajex::totg;
 
     const auto& velocity_limits = require_tensor<viam::trajex::xvector<double>>(options, viam_trajex_totg_key_velocity_limits_rads_per_sec);
@@ -634,15 +634,15 @@ void viam_trajex_string_destroy(const char* string) {
     }
 }
 
-viam_trajex_kinematic_chain_builder_t* viam_trajex_kinematic_chain_builder_create(void) {
+viam_trajex_kinematics_chain_builder_t* viam_trajex_kinematics_chain_builder_create(void) {
     try {
-        return new viam_trajex_kinematic_chain_builder;
+        return new viam_trajex_kinematics_chain_builder;
     } catch (...) {
         return nullptr;
     }
 }
 
-void viam_trajex_kinematic_chain_builder_destroy(viam_trajex_kinematic_chain_builder_t* builder) {
+void viam_trajex_kinematics_chain_builder_destroy(viam_trajex_kinematics_chain_builder_t* builder) {
     try {
         delete builder;
     } catch (...) {  // NOLINT(bugprone-empty-catch)
@@ -650,9 +650,9 @@ void viam_trajex_kinematic_chain_builder_destroy(viam_trajex_kinematic_chain_bui
     }
 }
 
-int viam_trajex_kinematic_chain_builder_extend_fixed(viam_trajex_kinematic_chain_builder_t* builder,
-                                                     const double xyz[3],
-                                                     const double wxyz[4]) {
+int viam_trajex_kinematics_chain_builder_extend_fixed(viam_trajex_kinematics_chain_builder_t* builder,
+                                                      const double xyz[3],
+                                                      const double wxyz[4]) {
     try {
         if (!builder || !builder->builder || !xyz || !wxyz) {
             return -1;
@@ -664,38 +664,38 @@ int viam_trajex_kinematic_chain_builder_extend_fixed(viam_trajex_kinematic_chain
     }
 }
 
-int viam_trajex_kinematic_chain_builder_extend_rotational(viam_trajex_kinematic_chain_builder_t* builder,
-                                                          const double xyz[3],
-                                                          const double wxyz[4],
-                                                          const double axis[3]) {
+int viam_trajex_kinematics_chain_builder_extend_rotational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                           const double xyz[3],
+                                                           const double wxyz[4],
+                                                           const double axis[3]) {
     try {
         if (!builder || !builder->builder || !xyz || !wxyz || !axis) {
             return -1;
         }
-        builder->builder->extend(origin_from(xyz, wxyz), viam::trajex::jacobian::kinematic_chain::rotation_axis{vector3_from(axis)});
+        builder->builder->extend(origin_from(xyz, wxyz), viam::trajex::kinematics::chain::rotation_axis{vector3_from(axis)});
         return 0;
     } catch (...) {
         return -1;
     }
 }
 
-int viam_trajex_kinematic_chain_builder_extend_translational(viam_trajex_kinematic_chain_builder_t* builder,
-                                                             const double xyz[3],
-                                                             const double wxyz[4],
-                                                             const double axis[3]) {
+int viam_trajex_kinematics_chain_builder_extend_translational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                              const double xyz[3],
+                                                              const double wxyz[4],
+                                                              const double axis[3]) {
     try {
         if (!builder || !builder->builder || !xyz || !wxyz || !axis) {
             return -1;
         }
-        builder->builder->extend(origin_from(xyz, wxyz), viam::trajex::jacobian::kinematic_chain::translation_axis{vector3_from(axis)});
+        builder->builder->extend(origin_from(xyz, wxyz), viam::trajex::kinematics::chain::translation_axis{vector3_from(axis)});
         return 0;
     } catch (...) {
         return -1;
     }
 }
 
-viam_trajex_kinematic_chain_t* viam_trajex_kinematic_chain_builder_build(viam_trajex_kinematic_chain_builder_t* builder,
-                                                                         const char** error_out) {
+viam_trajex_kinematics_chain_t* viam_trajex_kinematics_chain_builder_build(viam_trajex_kinematics_chain_builder_t* builder,
+                                                                           const char** error_out) {
     if (error_out) {
         *error_out = nullptr;
     }
@@ -709,7 +709,7 @@ viam_trajex_kinematic_chain_t* viam_trajex_kinematic_chain_builder_build(viam_tr
         // Take the builder out before building, so that it is spent even if build throws.
         auto consumed = std::move(*builder->builder);
         builder->builder.reset();
-        return new viam_trajex_kinematic_chain{std::move(consumed).build()};
+        return new viam_trajex_kinematics_chain{std::move(consumed).build()};
     } catch (const std::exception& e) {
         if (error_out) {
             *error_out = duplicate_error_string(e.what());
@@ -723,7 +723,7 @@ viam_trajex_kinematic_chain_t* viam_trajex_kinematic_chain_builder_build(viam_tr
     }
 }
 
-void viam_trajex_kinematic_chain_destroy(viam_trajex_kinematic_chain_t* chain) {
+void viam_trajex_kinematics_chain_destroy(viam_trajex_kinematics_chain_t* chain) {
     try {
         delete chain;
     } catch (...) {  // NOLINT(bugprone-empty-catch)
@@ -731,8 +731,8 @@ void viam_trajex_kinematic_chain_destroy(viam_trajex_kinematic_chain_t* chain) {
     }
 }
 
-int viam_trajex_kinematic_chain_end_position(
-    const viam_trajex_kinematic_chain_t* chain, const double* q, std::size_t n_q, double out[3], const char** error_out) {
+int viam_trajex_kinematics_chain_end_position(
+    const viam_trajex_kinematics_chain_t* chain, const double* q, std::size_t n_q, double out[3], const char** error_out) {
     if (error_out) {
         *error_out = nullptr;
     }
@@ -768,7 +768,7 @@ int viam_trajex_kinematic_chain_end_position(
 // in C++ (per VIAM_TRAJEX_RESTRICT's C++ branch), so the definition
 // signature is the same as the declaration's once preprocessed. The macro
 // itself is not visible here because the header push/pop'd it.
-int viam_trajex_totg_generate(const viam_trajex_kinematic_chain_t* chain,
+int viam_trajex_totg_generate(const viam_trajex_kinematics_chain_t* chain,
                               const viam_trajex_tensor_map_t* inputs,
                               viam_trajex_tensor_map_t* outputs,
                               const char** error_out) {
@@ -802,7 +802,7 @@ int viam_trajex_totg_generate(const viam_trajex_kinematic_chain_t* chain,
     }
 }
 
-viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_kinematic_chain_t* chain,
+viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_kinematics_chain_t* chain,
                                                                                 const viam_trajex_tensor_map_t* options,
                                                                                 const char** error_out) {
     if (error_out) {
