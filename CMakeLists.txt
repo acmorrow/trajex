@@ -560,7 +560,7 @@ if (VIAM_TRAJEX_BUILD_TESTS)
       src/viam/trajex/totg/test/uniform_sampler.cpp
       src/viam/trajex/totg/test/integration.cpp
       src/viam/trajex/totg/test/observers.cpp
-      src/viam/trajex/totg/test/tcp_velocity_limit.cpp
+      src/viam/trajex/totg/test/tcp_limits.cpp
       src/viam/trajex/kinematics/test/chain.cpp
     )
 

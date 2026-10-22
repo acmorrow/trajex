@@ -37,7 +37,7 @@ inline trajectory::options base_2dof_options() {
 
 }  // namespace
 
-BOOST_AUTO_TEST_SUITE(tcp_velocity_limit_tests)
+BOOST_AUTO_TEST_SUITE(tcp_limits_tests)
 
 BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     const path p = make_2dof_path();
