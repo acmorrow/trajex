@@ -48,14 +48,15 @@ class planner_base {
         std::optional<double> max_blend_curvature{};
         bool segment_totg = true;
         trajectory::integration_observer* observer = nullptr;  // totg only; ignored by legacy
-        std::optional<trajectory::tcp_limits> tcp{};           // optional TCP Cartesian speed limit; totg only
-        // Serializable provenance of tcp.linear_jacobian: the (n, 10) model-table tensor (viam::sdk::ModelTable
-        // format) the jacobian was built from. tcp.linear_jacobian is an opaque callback and cannot be
-        // serialized, so serialize_for_replay records this instead and replay rebuilds the callback via
-        // tcp_limits::from. Independent of tcp so a planner using a custom (non-model-table) jacobian can
-        // still set tcp; such a limit simply will not survive a replay round-trip. When set, the shape is
-        // validated at planner construction.
-        std::optional<xrank_checked<xmatrix<>>> model_table{};
+        // The arm and whatever it carries, for a TCP speed limit. Having kinematics is a property of
+        // the caller and wanting a cap is a property of the call, so a chain without a cap is legal
+        // and simply unused. Kept as the chain rather than as a limit built from it, because the
+        // chain is what serialize_for_replay can write down.
+        std::optional<kinematics::chain> kinematics_chain{};
+        // Cap on the speed of the chain's last frame origin, in the length unit of the chain's
+        // translations per second. Totg only, and requires kinematics_chain, which planner construction
+        // checks.
+        std::optional<double> tcp_max_linear_speed{};
     };
 
     ///
@@ -102,9 +103,8 @@ class planner_base {
     /// canonical JSON replay record suitable for replay and regression testing.
     ///
     /// The record contains everything needed to reproduce a trajectory generation
-    /// attempt: waypoints, velocity/acceleration limits, and path options. When the
-    /// config carries both a TCP limit and its model-table provenance, the TCP cap and
-    /// the (n, 10) model-table are recorded too, so replay can rebuild the TCP jacobian.
+    /// attempt: waypoints, velocity/acceleration limits, and path options, plus the
+    /// kinematic chain and TCP cap when the config carries them.
     /// Pass e.what() on failure paths; omit on success paths.
     ///
     /// @param waypoints Waypoints to serialize
@@ -256,10 +256,11 @@ class planner : public planner_base {
     ///         generator cannot enforce a TCP limit, so registering it alongside one
     ///         would let a TOTG failure fall back to a trajectory that silently
     ///         ignores a caller-requested safety cap. A consumer that wants a
-    ///         deliberate uncapped legacy run must clear config.tcp first.
+    ///         deliberate uncapped legacy run must clear config.tcp_max_linear_speed
+    ///         first.
     ///
     planner& with_legacy(legacy_success_fn on_success, algorithm_failure_fn on_failure = nullptr) {
-        if (get_config().tcp) {
+        if (get_config().tcp_max_linear_speed) {
             throw std::logic_error(
                 "planner: cannot register the legacy generator with a TCP speed limit set; "
                 "the legacy generator cannot enforce a TCP limit");
@@ -375,7 +376,9 @@ class planner : public planner_base {
                 topts.max_velocity = get_config().velocity_limits;
                 topts.max_acceleration = get_config().acceleration_limits;
                 topts.observer = get_config().observer;
-                topts.tcp = get_config().tcp;
+                if (get_config().tcp_max_linear_speed) {
+                    topts.tcp = trajectory::tcp_limits::from(get_config().kinematics_chain.value(), *get_config().tcp_max_linear_speed);
+                }
 
                 auto start = std::chrono::steady_clock::now();
                 auto traj = trajectory::create(std::move(p), std::move(topts));

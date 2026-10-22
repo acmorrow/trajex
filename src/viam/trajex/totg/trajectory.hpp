@@ -10,7 +10,7 @@
 #include <optional>
 #include <utility>
 
-#include <viam/trajex/jacobian/jacobian.hpp>
+#include <viam/trajex/kinematics/chain.hpp>
 #include <viam/trajex/totg/path.hpp>
 #include <viam/trajex/types/arc_acceleration.hpp>
 #include <viam/trajex/types/arc_length.hpp>
@@ -92,59 +92,51 @@ class trajectory {
     ///
     /// TCP (tool center point) limits. Currently constrains linear TCP speed.
     ///
-    /// The linear_jacobian callback maps joint config q to the 3xN linear-velocity Jacobian; the
-    /// folded limit is max_linear_velocity / ||J_v(q)*f'(s)||. Forward integration, backward
-    /// integration, and bisection each query at the arc position under examination, so successive
-    /// calls do not advance monotonically along the path.
+    /// The evaluator reports, at a point on the path, the ratio of the TCP's linear speed to the
+    /// arc velocity s_dot. That ratio is ||J_v(q)*f'(s)||, the distance the TCP moves per unit of
+    /// arc length, and the evaluator also reports its derivative along the path. The TCP's limit
+    /// on arc velocity is max_linear_speed divided by the ratio, and the slope of that limit in
+    /// the phase plane follows from the derivative. Forward integration, backward integration,
+    /// and bisection each query at the arc position under examination, so successive calls do
+    /// not advance monotonically along the path.
     ///
-    /// Both callbacks must describe the same kinematic chain. The value decides which curve is
-    /// active and the slope is then taken from the other callback, so a mismatched pair yields a
-    /// slope for one curve and a value for the other, with no diagnostic. from() builds both from
-    /// a single chain.
+    /// Where the TCP does not move relative to the path, the ratio is zero and its derivative does
+    /// not exist, and the evaluator returns nothing. The TCP does not constrain there. Anything the
+    /// evaluator does return must be finite, with a non-negative ratio, and integration throws if it
+    /// is not, since that is a broken evaluator rather than a singularity.
     ///
-    /// Only linear_jacobian may return NaN, which signals a singularity and is treated as
-    /// non-constraining. A non-finite result from linear_velocity_gain where TCP is the binding
-    /// curve throws instead.
-    ///
-    /// Units are the caller's. max_linear_velocity must be expressed in the same length unit as
-    /// the Jacobian's task-space output, per second; nothing here checks that they agree.
+    /// Units are the caller's. max_linear_speed must be expressed in the length unit the evaluator
+    /// measures the TCP's motion in, per second. Nothing here checks that they agree.
     ///
     struct tcp_limits {
-        /// Maps joint config q to the 3xN linear-velocity Jacobian. Used for the limit value.
-        using linear_jacobian_fn = std::function<xrank_checked<xmatrix<>>(const xvector<>&)>;
-
-        /// Maps (q, q_prime, q_double_prime) to the linear velocity gain. Used for the limit slope.
-        using linear_velocity_gain_fn =
-            std::function<jacobian::kinematic_chain::linear_velocity_gain(const xvector<>&, const xvector<>&, const xvector<>&)>;
+        ///
+        /// The ratio of the TCP's linear speed to the arc velocity at a point on the path, and
+        /// its derivative along the path.
+        ///
+        struct linear_speed_per_arc_velocity {
+            double value = 0.0;                  ///< ||J_v(q)*f'(s)||, finite and non-negative
+            double arc_length_derivative = 0.0;  ///< Derivative of value with respect to arc length, finite
+        };
 
         ///
-        /// Builds both callbacks from one kinematic chain parsed from a model table.
+        /// Builds the evaluator from a kinematic chain.
         ///
-        /// @param model_table (n, 10) tensor in the viam::sdk::ModelTable format
-        /// @param max_linear_velocity Cap on TCP linear speed, in the model table's length unit
-        ///        per second
-        /// @return A limits object whose callbacks share a single chain
-        /// @throws std::invalid_argument on a malformed model table
+        /// The capped point is the origin of the chain's last frame.
         ///
-        /// What counts as a model table is kinematic_chain::from's rule rather than one
-        /// restated here, so this accepts exactly what that accepts.
+        /// @param chain Chain describing the arm and whatever it carries
+        /// @param max_linear_speed Cap on TCP linear speed, in the length unit of the chain's
+        ///        translations per second
+        /// @return A limits object whose evaluator computes the ratio from the chain
         ///
-        template <typename T>
-            requires requires(const T& t) { jacobian::kinematic_chain::from(t); }
-        [[nodiscard]] static tcp_limits from(const T& model_table, double max_linear_velocity) {
-            return from_chain_(jacobian::kinematic_chain::from(model_table), max_linear_velocity);
-        }
+        [[nodiscard]] static tcp_limits from(kinematics::chain chain, double max_linear_speed);
 
-       private:
-        // Holds the lambda plumbing in the source file. The chain is already validated.
-        static tcp_limits from_chain_(jacobian::kinematic_chain chain, double max_linear_velocity);
-
-       public:
         /// Zero-initialized so a default-constructed limit fails validation deterministically
         /// instead of reading an indeterminate value.
-        double max_linear_velocity = 0.0;
-        linear_jacobian_fn linear_jacobian;
-        linear_velocity_gain_fn linear_velocity_gain;
+        double max_linear_speed = 0.0;
+
+        /// Maps (q, q_prime, q_double_prime) at a point on the path to the ratio and its derivative,
+        /// or to nothing where the TCP does not move relative to the path.
+        std::function<std::optional<linear_speed_per_arc_velocity>(const xvector<>&, const xvector<>&, const xvector<>&)> evaluator;
     };
 
     ///
@@ -292,7 +284,7 @@ class trajectory {
     /// Combined velocity limits together with their joint and TCP components.
     ///
     /// Equivalent to get_velocity_limits() and get_velocity_limit_components() at the same cursor,
-    /// but evaluates the TCP Jacobian only once. For diagnostics that emit both the combined curve
+    /// but calls the TCP evaluator only once. For diagnostics that emit both the combined curve
     /// and its components.
     ///
     struct velocity_limits_detail {
@@ -400,7 +392,7 @@ class trajectory {
     /// Computes the combined velocity limits and their joint and TCP components in one evaluation.
     ///
     /// Equivalent to calling get_velocity_limits() and get_velocity_limit_components() at the same
-    /// cursor, but evaluates the TCP Jacobian only once. Intended for diagnostics that need both.
+    /// cursor, but calls the TCP evaluator only once. Intended for diagnostics that need both.
     ///
     /// @param cursor Path cursor positioned at query location
     /// @return Acceleration limit, combined velocity limit, and the joint and TCP components

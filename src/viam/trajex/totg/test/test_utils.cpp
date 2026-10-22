@@ -1,5 +1,5 @@
 // Test utility function implementations
-#include "test_utils.hpp"
+#include <viam/trajex/totg/test/test_utils.hpp>
 
 #include <string>
 

@@ -2,10 +2,14 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <optional>
 #include <string>
+#include <utility>
 
 #include <viam/trajex/totg/trajectory.hpp>
+#include <viam/trajex/totg/uniform_sampler.hpp>
 #include <viam/trajex/types/xt.hpp>
 
 namespace viam::trajex::totg::test {
@@ -20,18 +24,34 @@ void verify_path_visits_waypoints(const path& p, const xmatrix<>& waypoints, dou
 /// Example: a 3-waypoint path with a single circular blend yields "LCL".
 std::string path_type_sequence(const path& p);
 
-/// Yaskawa GP12 model table (viam::sdk::ModelTable tensor format): six revolute joints
-/// followed by a fixed tool row, transcribed from gp12.urdf.
-inline xmatrix<> gp12_model_table() {
-    return xmatrix<>{
-        {0, 0, 0.450, 0, 0, 0, 0, 0, 1, 0},
-        {0.155, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-        {0, 0, 0.614, 0, 0, 0, 0, -1, 0, 0},
-        {0.640, 0, 0.200, 0, 0, 0, -1, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, -1, 0, 0},
-        {0, 0, 0, 0, 0, 0, -1, 0, 0, 0},
-        {0.100, 0, 0, 3.14159265, -1.570796, 0, 0, 0, 0, 3},
-    };
+/// The quaternion w, x, y, z for a URDF fixed-axis XYZ rpy, which composes as
+/// Rz(yaw) * Ry(pitch) * Rx(roll).
+inline std::array<double, 4> rpy_to_quaternion(double roll, double pitch, double yaw) {
+    const double cr = std::cos(roll / 2.0);
+    const double sr = std::sin(roll / 2.0);
+    const double cp = std::cos(pitch / 2.0);
+    const double sp = std::sin(pitch / 2.0);
+    const double cy = std::cos(yaw / 2.0);
+    const double sy = std::sin(yaw / 2.0);
+    return {
+        (cr * cp * cy) + (sr * sp * sy), (sr * cp * cy) - (cr * sp * sy), (cr * sp * cy) + (sr * cp * sy), (cr * cp * sy) - (sr * sp * cy)};
+}
+
+/// The Yaskawa GP12: six revolute joints and a fixed tool, transcribed from gp12.urdf. The tool's
+/// origin keeps that file's truncated rpy rather than exact multiples of pi, as the model table it
+/// replaced did, so the regression tests that use it still run the arm they were written against.
+inline kinematics::chain gp12_chain() {
+    using joint_origin = kinematics::chain::joint_origin;
+    using rotation_axis = kinematics::chain::rotation_axis;
+    return kinematics::chain::builder{}
+        .extend(joint_origin{.translation = {0, 0, 0.450}}, rotation_axis{{0, 0, 1}})
+        .extend(joint_origin{.translation = {0.155, 0, 0}}, rotation_axis{{0, 1, 0}})
+        .extend(joint_origin{.translation = {0, 0, 0.614}}, rotation_axis{{0, -1, 0}})
+        .extend(joint_origin{.translation = {0.640, 0, 0.200}}, rotation_axis{{-1, 0, 0}})
+        .extend(joint_origin{}, rotation_axis{{0, -1, 0}})
+        .extend(joint_origin{}, rotation_axis{{-1, 0, 0}})
+        .extend(joint_origin{.translation = {0.100, 0, 0}, .rotation = rpy_to_quaternion(3.14159265, -1.570796, 0)})
+        .build();
 }
 
 /// 3xN linear-velocity Jacobian of a planar 2-link arm at joint angles q=[q1,q2].
@@ -51,11 +71,13 @@ inline xmatrix<> planar_2link_jacobian(double l1, double l2, const xvector<>& q)
     return J;
 }
 
-/// Numerical linear velocity gain for the planar 2-link, for tests that build tcp_limits by hand.
-/// Central-differences ||planar_2link_jacobian(q) * q_prime|| along the path.
-inline jacobian::kinematic_chain::linear_velocity_gain planar_2link_linear_velocity_gain(
+/// The TCP's linear speed per unit of arc velocity for the planar 2-link, and its derivative along
+/// the path, for tests that build tcp_limits by hand. The derivative is a central difference of
+/// ||planar_2link_jacobian(q) * q_prime|| along the path. Empty where that speed is exactly zero,
+/// as the evaluator contract asks, since the derivative does not exist there.
+inline std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> planar_2link_linear_speed_per_arc_velocity(
     double l1, double l2, const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-    const auto gain_at = [&](const xvector<>& qq, const xvector<>& qp) {
+    const auto speed_ratio_at = [&](const xvector<>& qq, const xvector<>& qp) {
         const auto J = planar_2link_jacobian(l1, l2, qq);
         double vx = 0.0;
         double vy = 0.0;
@@ -67,21 +89,24 @@ inline jacobian::kinematic_chain::linear_velocity_gain planar_2link_linear_veloc
         }
         return std::sqrt((vx * vx) + (vy * vy) + (vz * vz));
     };
-    const double g = gain_at(q, q_prime);
+    const double value = speed_ratio_at(q, q_prime);
+    if (value == 0.0) {
+        return std::nullopt;
+    }
     const double h = 1e-6;
-    const double dg =
-        (gain_at(q + h * q_prime, q_prime + h * q_double_prime) - gain_at(q - h * q_prime, q_prime - h * q_double_prime)) / (2.0 * h);
-    return {.gain_per_arc_unit = g, .d_gain_ds = dg};
+    const double derivative =
+        (speed_ratio_at(q + h * q_prime, q_prime + h * q_double_prime) - speed_ratio_at(q - h * q_prime, q_prime - h * q_double_prime)) /
+        (2.0 * h);
+    return trajectory::tcp_limits::linear_speed_per_arc_velocity{.value = value, .arc_length_derivative = derivative};
 }
 
-/// Builds tcp_limits for a planar 2-link (l1 = l2 = 1) with both callbacks set.
-inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_velocity) {
+/// Builds tcp_limits for a planar 2-link (l1 = l2 = 1).
+inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_speed) {
     return trajectory::tcp_limits{
-        .max_linear_velocity = max_linear_velocity,
-        .linear_jacobian = [](const xvector<>& q) { return planar_2link_jacobian(1.0, 1.0, q); },
-        .linear_velocity_gain =
+        .max_linear_speed = max_linear_speed,
+        .evaluator =
             [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
-                return planar_2link_linear_velocity_gain(1.0, 1.0, q, q_prime, q_double_prime);
+                return planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, q_prime, q_double_prime);
             },
     };
 }
@@ -90,21 +115,18 @@ inline trajectory::tcp_limits planar_2link_tcp_limits(double max_linear_velocity
 /// At each sampled instant the realized TCP velocity is J(q)*q_dot; this returns the peak of
 /// its Euclidean norm. Used to verify a TCP-limited trajectory respects its v_TCP cap.
 inline double max_realized_tcp_speed(const trajectory& traj, double l1, double l2, int samples = 1000) {
-    const double duration = traj.duration().count();
     double peak = 0.0;
-    // Sample over [0, duration] inclusive: end-of-path stamping artifacts surface at the terminal
-    // instant, so the exact end of the trajectory must be checked against the cap too. The
-    // clamp matters: the duration * i / samples round trip can land one ulp above the duration on
-    // the last iteration (duration-value dependent, observed on arm64), and sampling past the
-    // duration throws.
-    for (int i = 0; i <= samples; ++i) {
-        const double t = std::min(duration, duration * static_cast<double>(i) / static_cast<double>(samples));
-        const auto smp = traj.sample(trajectory::seconds{t});
-        const auto J = planar_2link_jacobian(l1, l2, smp.configuration);
+    // End-of-path stamping artifacts surface at the terminal instant, so the exact end of the
+    // trajectory must be checked against the cap too. The sampler spaces its samples evenly over
+    // [0, duration] and lands the last one exactly on the duration, never past it.
+    uniform_sampler sampler{static_cast<std::size_t>(samples) + 1};
+    auto cursor = traj.create_cursor();
+    while (const auto smp = sampler.next(cursor)) {
+        const auto J = planar_2link_jacobian(l1, l2, smp->configuration);
         double v[3] = {0.0, 0.0, 0.0};
         for (std::size_t r = 0; r < 3; ++r) {
-            for (std::size_t c = 0; c < smp.velocity.size(); ++c) {
-                v[r] += J(r, c) * smp.velocity(c);
+            for (std::size_t c = 0; c < smp->velocity.size(); ++c) {
+                v[r] += J(r, c) * smp->velocity(c);
             }
         }
         peak = std::max(peak, std::sqrt((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2])));

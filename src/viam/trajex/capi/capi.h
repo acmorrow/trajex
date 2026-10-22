@@ -23,9 +23,9 @@
 ///
 /// ## Error reporting
 ///
-/// Only `viam_trajex_totg_generate` produces a structured diagnostic via its `error_out` parameter. The tensor-map
-/// operations report failure as a coarse-grained `-1` return without diagnostic; documented failure modes are listed
-/// per function.
+/// Entry points that construct something or run an algorithm produce a diagnostic via their `error_out` parameter. The
+/// tensor-map operations and the kinematic chain builder's `extend_*` calls report failure as a coarse-grained `-1`
+/// return without diagnostic; documented failure modes are listed per function.
 ///
 /// ## Threading
 ///
@@ -257,6 +257,156 @@ void viam_trajex_string_destroy(const char* string);
 /// @}
 
 ///
+/// @defgroup viam_trajex_kinematics_chain Kinematic chain
+///
+/// A serial kinematic chain, for limits stated in task space such as a TCP speed cap.
+///
+/// A chain is assembled one joint at a time through a builder, from the base to the end effector, and the `extend_*`
+/// call used for each joint says how it moves. Every joint has an origin, the rigid transform from the previous frame:
+/// a translation `xyz` and a quaternion `wxyz` in w, x, y, z order (Hamilton convention), applied before the joint's
+/// motion. A rotating joint turns about its `axis` by an angle in radians; a translating joint slides along its `axis`
+/// by a displacement in the length unit of the translations. Neither quaternions nor axes need be unit length.
+///
+/// Units are the caller's: whatever length unit the translations use, a TCP speed cap is in that unit per second. The
+/// capped point is the origin of the chain's last frame, so a chain should end at the point the caller wants limited,
+/// with a fixed joint if need be.
+///
+/// Entry points that take a chain read it during the call and do not retain it, so the caller may destroy it as soon
+/// as they return.
+///
+/// @{
+///
+
+///
+/// Opaque kinematic chain builder handle. Construct via `viam_trajex_kinematics_chain_builder_create`; release via
+/// `viam_trajex_kinematics_chain_builder_destroy`.
+///
+typedef struct viam_trajex_kinematics_chain_builder viam_trajex_kinematics_chain_builder_t;
+
+///
+/// Opaque kinematic chain handle. Construct via `viam_trajex_kinematics_chain_builder_build`; release via
+/// `viam_trajex_kinematics_chain_destroy`.
+///
+typedef struct viam_trajex_kinematics_chain viam_trajex_kinematics_chain_t;
+
+///
+/// Construct an empty builder.
+///
+/// @return Newly-allocated builder handle, or NULL on allocation failure.
+///
+viam_trajex_kinematics_chain_builder_t* viam_trajex_kinematics_chain_builder_create(void);
+
+///
+/// Destroy a builder, whether or not it has been built.
+///
+/// @param builder Builder to destroy. NULL is a no-op.
+///
+void viam_trajex_kinematics_chain_builder_destroy(viam_trajex_kinematics_chain_builder_t* builder);
+
+///
+/// Append a fixed joint.
+///
+/// @param builder Builder handle. Must not be NULL.
+///
+/// @param xyz Translation of the joint's origin. Must not be NULL.
+///
+/// @param wxyz Rotation of the joint's origin. Must not be NULL.
+///
+/// @return 0 on success. -1 on a NULL argument, a builder that has already been built, or allocation failure (no
+///         diagnostic). Invalid values are reported by `viam_trajex_kinematics_chain_builder_build`, which knows the
+///         joint's index.
+///
+int viam_trajex_kinematics_chain_builder_extend_fixed(viam_trajex_kinematics_chain_builder_t* builder,
+                                                      const double xyz[3],
+                                                      const double wxyz[4]);
+
+///
+/// Append a revolute or continuous joint.
+///
+/// @param builder Builder handle. Must not be NULL.
+///
+/// @param xyz Translation of the joint's origin. Must not be NULL.
+///
+/// @param wxyz Rotation of the joint's origin. Must not be NULL.
+///
+/// @param axis Axis of rotation in the joint's frame. Must not be NULL.
+///
+/// @return As for `viam_trajex_kinematics_chain_builder_extend_fixed`.
+///
+int viam_trajex_kinematics_chain_builder_extend_rotational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                           const double xyz[3],
+                                                           const double wxyz[4],
+                                                           const double axis[3]);
+
+///
+/// Append a prismatic joint.
+///
+/// @param builder Builder handle. Must not be NULL.
+///
+/// @param xyz Translation of the joint's origin. Must not be NULL.
+///
+/// @param wxyz Rotation of the joint's origin. Must not be NULL.
+///
+/// @param axis Axis of translation in the joint's frame. Must not be NULL.
+///
+/// @return As for `viam_trajex_kinematics_chain_builder_extend_fixed`.
+///
+int viam_trajex_kinematics_chain_builder_extend_translational(viam_trajex_kinematics_chain_builder_t* builder,
+                                                              const double xyz[3],
+                                                              const double wxyz[4],
+                                                              const double axis[3]);
+
+///
+/// Validate the appended joints and build the chain.
+///
+/// Building consumes the builder whether or not it succeeds. Afterwards the only valid call on it is
+/// `viam_trajex_kinematics_chain_builder_destroy`: `extend_*` calls return -1, and a second build returns NULL.
+///
+/// @param builder Builder handle. Must not be NULL.
+///
+/// @param error_out On NULL return, receives a newly-allocated NUL-terminated diagnostic string the caller releases via
+///                  `viam_trajex_string_destroy`. On success, `*error_out` is set to NULL. May be NULL if the caller
+///                  does not need a diagnostic.
+///
+/// @return Newly-allocated chain handle, or NULL if the builder is NULL or already built, if no joints were appended, if
+///         a joint has a non-finite translation, a zero or non-finite quaternion, or a zero or non-finite axis, or on
+///         allocation failure.
+///
+viam_trajex_kinematics_chain_t* viam_trajex_kinematics_chain_builder_build(viam_trajex_kinematics_chain_builder_t* builder,
+                                                                           const char** error_out);
+
+///
+/// Destroy a chain.
+///
+/// @param chain Chain to destroy. NULL is a no-op.
+///
+void viam_trajex_kinematics_chain_destroy(viam_trajex_kinematics_chain_t* chain);
+
+///
+/// Compute the position of the chain's last frame at joint positions q.
+///
+/// Trajex does not need this itself. It exists so that a caller can compare the chain it built against its own forward
+/// kinematics, which is the way to check that origins, axes, orientations and units went in as intended.
+///
+/// @param chain Chain handle. Must not be NULL.
+///
+/// @param q One element per rotating or translating joint, in chain order. May be NULL only if `n_q` is zero.
+///
+/// @param n_q Number of elements in `q`. Must equal the chain's number of rotating and translating joints.
+///
+/// @param out Receives the position, in the length unit of the chain's translations. Must not be NULL.
+///
+/// @param error_out On `-1` return, receives a newly-allocated diagnostic string the caller releases via
+///                  `viam_trajex_string_destroy`. On success, `*error_out` is set to NULL. May be NULL.
+///
+/// @return 0 on success, -1 on a NULL argument, a wrong `n_q`, or a caught exception.
+///
+int viam_trajex_kinematics_chain_end_position(
+    const viam_trajex_kinematics_chain_t* chain, const double* q, size_t n_q, double out[3], const char** error_out);
+
+/// @}
+
+///
 /// @defgroup viam_trajex_totg TOTG: time-optimal trajectory generation
 ///
 /// Stateless one-shot trajectory generation following the Kunz & Stilman TOTG algorithm.
@@ -268,8 +418,9 @@ void viam_trajex_string_destroy(const char* string);
 /// @name Schema key constants
 ///
 /// String constants for the input and output keys honored by `viam_trajex_totg_generate`. Callers can reference these
-/// in place of hard-coded string literals; the underlying string values are 1:1 with the existing trajex
-/// `service::mlmodel::infer` schema and are part of the stable ABI.
+/// in place of hard-coded string literals. The string values are part of the stable ABI. They match the keys of the
+/// trajex `service::mlmodel::infer` schema, except for `viam_trajex_totg_key_tcp_max_linear_speed`, which the service
+/// does not accept because it has no way to receive a kinematic chain.
 ///
 /// @{
 ///
@@ -280,6 +431,7 @@ extern const char viam_trajex_totg_key_configurations_rads[];
 extern const char viam_trajex_totg_key_path_colinearization_ratio[];
 extern const char viam_trajex_totg_key_path_tolerance_delta_rads[];
 extern const char viam_trajex_totg_key_sample_times_sec[];
+extern const char viam_trajex_totg_key_tcp_max_linear_speed[];
 extern const char viam_trajex_totg_key_trajectory_sampling_freq_hz[];
 extern const char viam_trajex_totg_key_velocities_rads_per_sec[];
 extern const char viam_trajex_totg_key_velocity_limits_rads_per_sec[];
@@ -318,6 +470,7 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 /// | `path_colinearization_ratio` | F64 | `[1]` | `0.0` (off) | Colinearization aggressiveness |
 /// | `waypoint_deduplication_tolerance_rads` | F64 | `[1]` | `1e-5` | Waypoints closer than this are merged |
 /// | `trajectory_sampling_freq_hz` | F64 | `[1]` | `100.0` | Output sample rate in Hz |
+/// | `tcp_max_linear_speed` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
 ///
 /// ## Outputs
 ///
@@ -335,6 +488,12 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 /// - DOF is derived from `velocity_limits_rads_per_sec.size()`.
 /// - `acceleration_limits_rads_per_sec2.size()` must equal DOF.
 /// - `waypoints_rads.shape[1]` must equal DOF.
+/// - If `chain` is given, its number of rotating and translating joints must equal DOF, whether or not a cap is set.
+/// - `tcp_max_linear_speed` is an error without `chain`. A chain without it is legal: having kinematics is a property
+///   of the caller, while wanting a cap is a property of the call.
+///
+/// @param chain Kinematics of the arm and whatever it carries, or NULL if the caller has none. Read during the call and
+///              not retained.
 ///
 /// @param inputs Input tensor map carrying the required and optional keys documented above. Must not be NULL.
 ///
@@ -348,7 +507,8 @@ extern const char viam_trajex_totg_key_waypoints_rads[];
 ///
 /// @return 0 on success, -1 on failure.
 ///
-int viam_trajex_totg_generate(const viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT inputs,
+int viam_trajex_totg_generate(const viam_trajex_kinematics_chain_t* chain,
+                              const viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT inputs,
                               viam_trajex_tensor_map_t* VIAM_TRAJEX_RESTRICT outputs,
                               const char** error_out);
 
@@ -401,6 +561,16 @@ typedef struct viam_trajex_totg_streaming_session viam_trajex_totg_streaming_ses
 /// | Key | Dtype | Shape | Default | Meaning |
 /// |-----|-------|-------|---------|---------|
 /// | `path_colinearization_ratio` | F64 | `[1]` | `0.0` (off) | Colinearization aggressiveness |
+/// | `tcp_max_linear_speed` | F64 | `[1]` | none | Cap on the TCP's speed; requires `chain` |
+///
+/// As for `viam_trajex_totg_generate`, the chain is a parameter rather than an entry in `options`,
+/// because a chain reached by string key could be misspelled into silence, and a session that
+/// quietly runs uncapped is the worst way for a safety limit to fail. If `chain` is given, its
+/// number of rotating and translating joints must equal the DOF, whether or not a cap is set, and
+/// `tcp_max_linear_speed` is an error without it. The session copies what it needs from the
+/// chain, so the caller may destroy the chain as soon as this returns.
+///
+/// @param chain Kinematics of the arm and whatever it carries, or NULL if the caller has none.
 ///
 /// @param options Tensor map carrying the configuration keys above. Must not be NULL.
 ///
@@ -411,7 +581,8 @@ typedef struct viam_trajex_totg_streaming_session viam_trajex_totg_streaming_ses
 /// @return Newly-allocated session handle, or NULL on bad arguments, allocation failure,
 ///         or a caught exception during construction.
 ///
-viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_tensor_map_t* options,
+viam_trajex_totg_streaming_session_t* viam_trajex_totg_streaming_session_create(const viam_trajex_kinematics_chain_t* chain,
+                                                                                const viam_trajex_tensor_map_t* options,
                                                                                 const char** error_out);
 
 ///

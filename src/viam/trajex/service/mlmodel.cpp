@@ -80,37 +80,6 @@ double get_scalar_double(const mlmodel::named_tensor_views& inputs, std::string_
     return view.flat(0);
 }
 
-// A parsed TCP limit carries the (n, 10) model-table tensor alongside the callbacks so the
-// planner config can record it as serializable provenance for replay.
-struct parsed_tcp_limits {
-    totg::trajectory::tcp_limits limits;
-    xmatrix<> model_table;
-};
-
-std::optional<parsed_tcp_limits> parse_tcp_limits(const mlmodel::named_tensor_views& inputs) {
-    const bool has_tcp = inputs.find(std::string("tcp_max_linear_velocity")) != inputs.end();
-    const bool has_table = inputs.find(std::string("kinematics_model_table")) != inputs.end();
-
-    if (!has_tcp && !has_table) {
-        return std::nullopt;
-    }
-
-    const double tcp_max_linear_velocity = get_scalar_double(inputs, "tcp_max_linear_velocity");
-    if (!(tcp_max_linear_velocity > 0.0)) {
-        throw std::invalid_argument("tcp_max_linear_velocity must be a positive number");
-    }
-    const auto& table_view = get_double_tensor(inputs, "kinematics_model_table");
-    if (table_view.dimension() != 2 || table_view.shape(1) != 10) {
-        throw std::invalid_argument("kinematics_model_table must be 2-dimensional [n_joints, 10]");
-    }
-
-    xmatrix<> table(table_view);
-    return parsed_tcp_limits{
-        .limits = totg::trajectory::tcp_limits::from(table, tcp_max_linear_velocity),
-        .model_table = std::move(table),
-    };
-}
-
 }  // namespace
 
 std::vector<std::string> mlmodel::validate(const vsdk::ResourceConfig& cfg) {
@@ -152,7 +121,6 @@ mlmodel::mlmodel(vsdk::Dependencies, vsdk::ResourceConfig config)
 mlmodel::config mlmodel::config::from_resource_config(const vsdk::ResourceConfig& cfg) {
     config out;
 
-    // Parse generator_sequence
     auto seq_attr = cfg.attributes().find("generator_sequence");
     if (seq_attr != cfg.attributes().end()) {
         const auto* arr = seq_attr->second.get<std::vector<vsdk::ProtoValue>>();
@@ -172,7 +140,6 @@ mlmodel::config mlmodel::config::from_resource_config(const vsdk::ResourceConfig
         }
     }
 
-    // Parse segment_for_trajex
     auto seg_attr = cfg.attributes().find("segment_for_trajex");
     if (seg_attr != cfg.attributes().end()) {
         const auto* val = seg_attr->second.get<bool>();
@@ -186,7 +153,6 @@ mlmodel::config mlmodel::config::from_resource_config(const vsdk::ResourceConfig
 }
 
 std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_views& inputs, const vsdk::ProtoStruct&) {
-    // Parse inputs
     const auto& waypoints_view = get_double_tensor(inputs, "waypoints_rads");
     if (waypoints_view.dimension() != 2) {
         throw std::invalid_argument("waypoints_rads must be 2-dimensional [n_waypoints, n_dof]");
@@ -204,7 +170,8 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         throw std::invalid_argument("acceleration_limits_rads_per_sec2 must be 1-dimensional [n_dof]");
     }
 
-    // Derive DOF from velocity limits and validate consistency
+    // The velocity limits fix how many degrees of freedom we are working in, and the
+    // acceleration limits and the waypoints must agree with them.
     const auto dof = velocity_limits_view.size();
     if (acceleration_limits_view.size() != dof) {
         throw std::invalid_argument("acceleration_limits size (" + std::to_string(acceleration_limits_view.size()) +
@@ -227,32 +194,12 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
     }
     const auto sampling_freq = static_cast<double>(sampling_freq_view.flat(0));
 
-    // Copy inputs into owned xtensor arrays for the planner
+    // The planner takes ownership of its limits, so copy them out of the caller's views.
     xvector<> velocity_limits(velocity_limits_view);
     xvector<> acceleration_limits(acceleration_limits_view);
 
-    // Optional TCP Cartesian-speed limit
-    auto tcp_input = parse_tcp_limits(inputs);
-
-    // Only the totg generator can enforce a TCP speed limit. When a cap is requested,
-    // reject a sequence with no totg outright, and skip legacy registration below:
-    // falling back to an uncapped legacy trajectory would silently drop a
-    // caller-requested safety limit.
-    const bool tcp_limit_requested = tcp_input.has_value();
-    if (tcp_limit_requested && std::ranges::find(config_.generator_sequence, "totg") == config_.generator_sequence.end()) {
-        throw std::invalid_argument("tcp_max_linear_velocity requires the totg generator, which is not in generator_sequence");
-    }
-
-    // Split the parsed TCP input into the callback limit and its model-table provenance; the
-    // planner records the table in replay records so the limit survives a replay round-trip.
-    std::optional<totg::trajectory::tcp_limits> tcp_limits;
-    std::optional<xmatrix<>> model_table;
-    if (tcp_input) {
-        tcp_limits = std::move(tcp_input->limits);
-        model_table = std::move(tcp_input->model_table);
-    }
-
-    // Build the planner
+    // The inputs are extracted and checked against each other, so we can build the planner and
+    // hang the path construction stages off it.
     auto planner = totg::planner<service_result>({
         .velocity_limits = std::move(velocity_limits),
         .acceleration_limits = std::move(acceleration_limits),
@@ -261,8 +208,6 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         .min_blend_curvature = std::nullopt,
         .max_blend_curvature = std::nullopt,
         .segment_totg = config_.segment_for_trajex,
-        .tcp = std::move(tcp_limits),
-        .model_table = std::move(model_table),
     });
 
     planner
@@ -277,7 +222,9 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         })
         .with_segmenter([](auto&, totg::waypoint_accumulator accumulator) { return totg::segment_at_reversals(std::move(accumulator)); });
 
-    // Register algorithms based on configured sequence
+    // Register a generator for each algorithm the configuration named. Registering one only
+    // decides whether it runs at all: execute always runs totg first and legacy second, and the
+    // decider we hand it picks between the two outcomes.
     for (const auto& algo : config_.generator_sequence) {
         if (algo == "totg") {
             planner.with_totg([&, dof](const auto&, service_result& acc, const totg::waypoint_accumulator&, totg::trajectory&& traj, auto) {
@@ -297,9 +244,6 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
             });
         } else if (algo == "legacy") {
 #if defined(VIAM_TRAJEX_LEGACY_ENABLED)
-            if (tcp_limit_requested) {
-                continue;
-            }
             planner.with_legacy(
                 [&, dof](const auto&, service_result& acc, const totg::waypoint_accumulator&, Path&&, Trajectory&& traj, auto) {
                     acc.dof = dof;
@@ -321,7 +265,9 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
         }
     }
 
-    // Execute the planner
+    // Run the generators and choose among whatever they produced. A totg trajectory wins if we
+    // have one, then a legacy trajectory; with neither, we rethrow whichever error was recorded,
+    // or return nothing when there were too few waypoints to plan from in the first place.
     auto planner_result = planner.execute([](const auto& p, auto totg_out, auto legacy [[maybe_unused]]) -> std::optional<service_result> {
         if (totg_out.receiver) {
             return std::move(totg_out.receiver);
@@ -332,7 +278,8 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
             return std::move(legacy.receiver);
         }
 
-        // Legacy errors are authoritative (stable reference algorithm)
+        // Legacy is the stable reference implementation, so when it reports an error we raise
+        // that in preference to whatever totg had to say.
         if (legacy.error) {
             std::rethrow_exception(legacy.error);
         }
@@ -350,20 +297,22 @@ std::shared_ptr<mlmodel::named_tensor_views> mlmodel::infer(const named_tensor_v
     });
 
     if (!planner_result) {
-        // No waypoints to process -- return empty output
+        // The planner declines to produce a result when fewer than two waypoints survived
+        // preprocessing, in which case there is nothing to sample and we return empty views.
         auto result_holder = std::make_shared<infer_result>();
         auto* views = &result_holder->views;
         return {std::move(result_holder), views};
     }
 
-    // Pack output using aliasing shared_ptr for zero-copy output
     auto result_holder = std::make_shared<infer_result>();
     result_holder->data = std::move(*planner_result);
 
     const auto n_samples = result_holder->data.times.size();
     const auto output_dof = result_holder->data.dof;
 
-    // Validate output consistency: flat vector sizes must be n_samples * dof
+    // These vectors are our own accumulations rather than anything the caller handed us, so a
+    // size mismatch here is a bug in the sampling loops above and not bad input, which is why
+    // these throw logic_error where the checks on the way in throw invalid_argument.
     if (result_holder->data.configurations.size() != n_samples * output_dof ||
         result_holder->data.velocities.size() != n_samples * output_dof) {
         throw std::logic_error("output tensor size mismatch: expected " + std::to_string(n_samples) + " samples x " +
@@ -441,18 +390,9 @@ struct mlmodel::metadata mlmodel::metadata(const vsdk::ProtoStruct&) {
                  .shape = {1},
                  .associated_files = {},
                  .extra = {}},
-                {.name = "tcp_max_linear_velocity",
-                 .description = "Optional max Cartesian TCP speed (in metres per second) [scalar]; requires kinematics_model_table",
-                 .data_type = tensor_info::data_types::k_float64,
-                 .shape = {1},
-                 .associated_files = {},
-                 .extra = {}},
-                {.name = "kinematics_model_table",
-                 .description = "Optional kinematics model table for the TCP jacobian [n_rows, 10]; requires tcp_max_linear_velocity",
-                 .data_type = tensor_info::data_types::k_float64,
-                 .shape = {-1, 10},
-                 .associated_files = {},
-                 .extra = {}},
+                // There are no TCP limit inputs. A TCP limit is wanted per call, but the server
+                // stub requires every tensor we name on every call and drops any we do not name,
+                // so it cannot express an optional input (RSDK-14562).
             },
         .outputs =
             {

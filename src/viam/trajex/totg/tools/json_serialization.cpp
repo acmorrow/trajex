@@ -253,6 +253,9 @@ std::string serialize_trajectory_to_json(const trajectory_integration_event_coll
         metadata["num_integration_points"] = static_cast<Json::Int64>(effective->get_integration_points().size());
         metadata["max_velocity"] = vector_to_json_array(effective->get_options().max_velocity);
         metadata["max_acceleration"] = vector_to_json_array(effective->get_options().max_acceleration);
+        if (const auto& tcp = effective->get_options().tcp) {
+            metadata["tcp_max_linear_speed"] = tcp->max_linear_speed;
+        }
     }
 
     // If there was a failure, annotate metadata with the error message.

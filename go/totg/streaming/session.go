@@ -27,6 +27,7 @@ import (
 	"github.com/pkg/errors"
 
 	trajex "github.com/viam-modules/trajex/go"
+	"github.com/viam-modules/trajex/go/kinematics"
 	"github.com/viam-modules/trajex/go/totg"
 )
 
@@ -44,6 +45,7 @@ var (
 	KeyConfigurationsRads            = totg.KeyConfigurationsRads            //nolint:revive
 	KeyVelocitiesRadsPerSec          = totg.KeyVelocitiesRadsPerSec          //nolint:revive
 	KeyAccelerationsRadsPerSec2      = totg.KeyAccelerationsRadsPerSec2      //nolint:revive
+	KeyTCPMaxLinearSpeed             = totg.KeyTCPMaxLinearSpeed             //nolint:revive
 )
 
 // Session is a Go-owned handle to a CAPI streaming session. Close must be
@@ -60,9 +62,32 @@ type Session struct {
 // for the full schema. The options map is read-only during construction and
 // may be closed by the caller as soon as New returns.
 func New(options *trajex.TensorMap) (*Session, error) {
+	return newSession(nil, options)
+}
+
+// NewWithKinematics behaves like New, but also takes a kinematic chain
+// describing the arm, which is what allows options to carry limits such as
+// KeyTCPMaxLinearSpeed. When options carry no such limit, the session
+// behaves exactly as one made by New would.
+//
+// The chain must not be nil, must not already have been released with Close,
+// and its number of rotational and translational joints must equal the
+// session's degrees of freedom. The session copies what it needs from the chain while it is being created, so
+// the chain may be released as soon as NewWithKinematics returns.
+func NewWithKinematics(chain *kinematics.Chain, options *trajex.TensorMap) (*Session, error) {
+	// As in totg.GenerateWithKinematics, a null chain would quietly become a
+	// session without kinematics, which hides a mistake on the caller's part.
+	chainHandle := (*C.viam_trajex_kinematics_chain_t)(chain.UnsafeHandle())
+	if chainHandle == nil {
+		return nil, errors.New("trajex/totg/streaming: NewWithKinematics requires a kinematic chain that is not nil and has not been released")
+	}
+	return newSession(chainHandle, options)
+}
+
+func newSession(chain *C.viam_trajex_kinematics_chain_t, options *trajex.TensorMap) (*Session, error) {
 	optHandle := (*C.viam_trajex_tensor_map_t)(options.UnsafeHandle())
 	var errOut *C.char
-	h := C.viam_trajex_totg_streaming_session_create(optHandle, &errOut)
+	h := C.viam_trajex_totg_streaming_session_create(chain, optHandle, &errOut)
 	if h == nil {
 		msg := C.GoString(errOut)
 		C.viam_trajex_string_destroy(errOut)

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -14,11 +15,10 @@
 
 #include <viam/trajex/totg/observers.hpp>
 #include <viam/trajex/totg/path.hpp>
+#include <viam/trajex/totg/test/test_utils.hpp>
 #include <viam/trajex/totg/tools/json_serialization.hpp>
 #include <viam/trajex/totg/trajectory.hpp>
 #include <viam/trajex/types/xt.hpp>
-
-#include "test_utils.hpp"
 
 namespace viam::trajex::totg {
 
@@ -37,28 +37,29 @@ inline trajectory::options base_2dof_options() {
 
 }  // namespace
 
-BOOST_AUTO_TEST_SUITE(tcp_velocity_limit_tests)
+BOOST_AUTO_TEST_SUITE(tcp_limits_tests)
 
 BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     const path p = make_2dof_path();
     auto opt = base_2dof_options();
 
-    // non-positive max_velocity
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.0,
-                                     .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
-                                     .linear_velocity_gain = {}};
+    // non-positive or non-finite max_linear_speed
+    for (const double bad : {0.0, -0.5, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        BOOST_TEST_CONTEXT("max_linear_speed=" << bad) {
+            opt.tcp = test::planar_2link_tcp_limits(bad);
+            BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+        }
+    }
+
+    // missing evaluator
+    opt.tcp = trajectory::tcp_limits{.max_linear_speed = 0.5, .evaluator = {}};
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 
-    // missing jacobian
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5, .linear_jacobian = {}, .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
-
-    // default-initialized limit with only the callbacks filled in: max_velocity is
+    // default-initialized limit with only the evaluator filled in: max_linear_speed is
     // zero-initialized, so validation must reject it deterministically
     trajectory::tcp_limits default_init;
-    default_init.linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); };
-    default_init.linear_velocity_gain = [](const xvector<>& q, const xvector<>& qp, const xvector<>& qpp) {
-        return test::planar_2link_linear_velocity_gain(1.0, 1.0, q, qp, qpp);
+    default_init.evaluator = [](const xvector<>& q, const xvector<>& qp, const xvector<>& qpp) {
+        return test::planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, qp, qpp);
     };
     opt.tcp = default_init;
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
@@ -68,7 +69,7 @@ BOOST_AUTO_TEST_CASE(create_rejects_bad_tcp_limit) {
     BOOST_CHECK_NO_THROW(static_cast<void>(trajectory::create(p, opt)));
 }
 
-// The TCP velocity component max_velocity / ||J(q) * tangent|| is exposed per cursor by
+// The TCP velocity component max_linear_speed / ||J(q) * tangent|| is exposed per cursor by
 // get_velocity_limit_components. A straight joint-space path has a constant tangent, so placing a
 // known (q, tangent) pair under the cursor at the path midpoint lets us read the raw component.
 BOOST_AUTO_TEST_CASE(tcp_velocity_component_basic_and_singularity) {
@@ -230,13 +231,12 @@ BOOST_AUTO_TEST_CASE(steep_falling_crossing_respects_tcp_limit) {
     BOOST_TEST(test::max_realized_tcp_speed(traj, 1.0, 1.0, 4000) <= 0.3 + 1e-3);
 }
 
-// Regression (RSDK-13338): generation used to leave the terminal integration point with a NaN
-// acceleration when the trajectory terminated at a path-end switching point that carried no
-// forward_accel (the switching-point cache's path-end sentinel, and forward integration landing
-// exactly on the path end). Sampling at exactly t == duration interpolates from that point with
-// dt == 0; the NaN poisons the interpolated arc length, the path cursor seeks to its sentinel,
-// and the sample query throws "Cannot query cursor at sentinel position". The terminal
-// acceleration must be finite and the trajectory sampleable at its exact duration.
+// The terminal integration point must carry a finite acceleration, and the trajectory must be
+// sampleable at exactly its duration, which interpolates from that point with dt == 0. A NaN there
+// would seek the path cursor to its sentinel and make the sample throw. This was written for
+// RSDK-13338, which reported exactly that on a TCP-capped path, but the failure does not reproduce
+// at any commit of the branch that added it, with or without the fixes that came with it. It is
+// kept as a check of the property across a sweep of caps, not as a regression test.
 BOOST_AUTO_TEST_CASE(terminal_acceleration_finite_and_sampleable_at_exact_duration) {
     for (const double cap : {0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0}) {
         const path p = path::create(xmatrix<>{{0.0, 2.0}, {10.0, 0.0}});
@@ -249,27 +249,6 @@ BOOST_AUTO_TEST_CASE(terminal_acceleration_finite_and_sampleable_at_exact_durati
             BOOST_CHECK_NO_THROW(static_cast<void>(traj.create_cursor().seek(traj.duration()).sample()));
         }
     }
-}
-
-// The TCP velocity limit requires the jacobian callback to return a 3xN matrix (3 Cartesian
-// rows, one column per joint DOF). A callback that violates that contract must be rejected;
-// trajectory::create evaluates the limit during generation, so the bad shape surfaces there.
-BOOST_AUTO_TEST_CASE(tcp_jacobian_callback_wrong_shape_throws) {
-    const path p = make_2dof_path();
-    auto opt = base_2dof_options();
-
-    // Fewer than 3 rows.
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5,
-                                     .linear_jacobian = [](const xvector<>&) { return xmatrix<>{{1.0, 0.0}, {0.0, 1.0}}; },
-                                     .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
-
-    // Right number of rows, wrong column count (3 columns for a 2-DOF tangent).
-    opt.tcp = trajectory::tcp_limits{
-        .max_linear_velocity = 0.5,
-        .linear_jacobian = [](const xvector<>&) { return xmatrix<>{{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}}; },
-        .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
 }
 
 // get_velocity_limit_components exposes the joint and TCP curves separately; the combined
@@ -296,6 +275,32 @@ BOOST_AUTO_TEST_CASE(velocity_limit_components_separate_joint_and_tcp) {
     BOOST_TEST(std::isinf(static_cast<double>(comp_joint.tcp)));
     BOOST_TEST(static_cast<double>(traj_joint.get_velocity_limits(cursor_joint).s_dot_max_vel) == static_cast<double>(comp_joint.joint),
                boost::test_tools::tolerance(1e-12));
+}
+
+// The diagnostic JSON records the TCP cap among the limits the trajectory was generated under, and
+// only when there is one, since a visualizer takes its presence to mean the run was TCP limited.
+BOOST_AUTO_TEST_CASE(serialized_trajectory_records_tcp_cap) {
+    const path p = make_2dof_path();
+    const auto metadata_of = [&](const trajectory::options& opt) {
+        trajectory_integration_event_collector collector;
+        auto observed = opt;
+        observed.observer = &collector;
+        const auto traj = trajectory::create(p, observed);
+        Json::Value root;
+        const Json::CharReaderBuilder reader;
+        std::string errs;
+        std::istringstream in(serialize_trajectory_to_json(collector, &traj));
+        BOOST_REQUIRE_MESSAGE(Json::parseFromStream(reader, in, &root, &errs), errs);
+        return root["metadata"];
+    };
+
+    auto capped = base_2dof_options();
+    capped.tcp = test::planar_2link_tcp_limits(0.1);
+    const auto capped_metadata = metadata_of(capped);
+    BOOST_REQUIRE(capped_metadata.isMember("tcp_max_linear_speed"));
+    BOOST_TEST(capped_metadata["tcp_max_linear_speed"].asDouble() == 0.1);
+
+    BOOST_TEST(!metadata_of(base_2dof_options()).isMember("tcp_max_linear_speed"));
 }
 
 // The diagnostic JSON exposes the joint and TCP limit curves as separate series so the phase
@@ -372,29 +377,66 @@ BOOST_AUTO_TEST_CASE(integration_points_respect_combined_velocity_limit) {
     }
 }
 
-// A linear_velocity_gain that contradicts linear_jacobian (zero gain at a TCP-binding point)
-// makes the TCP slope divide by zero and go non-finite. NaN compares false against everything, so
-// an unguarded non-finite slope silently corrupts every curve-following decision downstream
-// (trap detection, tangent following); the integrator must reject it loudly instead.
+// An evaluator that returns a NaN arc length derivative where the TCP limit is the lower one makes
+// the TCP slope non-finite.
+// NaN compares false against everything, so an unguarded non-finite slope silently corrupts every
+// curve-following decision downstream (trap detection, tangent following); the integrator must
+// reject it loudly instead.
 BOOST_AUTO_TEST_CASE(tcp_non_finite_limit_slope_throws) {
     const path p = path::create(xmatrix<>{{0.0, 2.0}, {10.0, 0.0}});
     auto opt = trajectory::options{.max_velocity = xvector<>{100.0, 100.0}, .max_acceleration = xvector<>{0.05, 0.05}};
     opt.tcp = trajectory::tcp_limits{
-        .max_linear_velocity = 0.3,
-        .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
-        .linear_velocity_gain =
-            [](const xvector<>&, const xvector<>&, const xvector<>&) { return jacobian::kinematic_chain::linear_velocity_gain{0.0, 0.0}; },
+        .max_linear_speed = 0.3,
+        .evaluator =
+            [](const xvector<>& q, const xvector<>& q_prime, const xvector<>& q_double_prime) {
+                auto r = test::planar_2link_linear_speed_per_arc_velocity(1.0, 1.0, q, q_prime, q_double_prime);
+                if (r) {
+                    r->arc_length_derivative = std::numeric_limits<double>::quiet_NaN();
+                }
+                return r;
+            },
     };
     BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
 }
 
-BOOST_AUTO_TEST_CASE(tcp_limit_without_velocity_derivative_throws) {
+// An evaluator says the TCP is not moving relative to the path by returning nothing, so a ratio
+// it does return must be a real one. A NaN, an infinity or a negative ratio is a broken evaluator
+// rather than a singularity, and the integrator refuses it rather than reading it as one.
+BOOST_AUTO_TEST_CASE(tcp_non_finite_or_negative_ratio_throws) {
     const path p = make_2dof_path();
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -1.0}) {
+        BOOST_TEST_CONTEXT("value=" << bad) {
+            auto opt = base_2dof_options();
+            opt.tcp = trajectory::tcp_limits{
+                .max_linear_speed = 0.5,
+                .evaluator = [bad](const xvector<>&,
+                                   const xvector<>&,
+                                   const xvector<>&) -> std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> {
+                    return trajectory::tcp_limits::linear_speed_per_arc_velocity{.value = bad, .arc_length_derivative = 0.0};
+                },
+            };
+            BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::runtime_error);
+        }
+    }
+}
+
+// An evaluator that returns nothing everywhere describes a TCP that never moves relative to the
+// path, so the TCP never constrains, and the trajectory must be exactly the joint-only one.
+BOOST_AUTO_TEST_CASE(tcp_evaluator_returning_nothing_is_joint_only) {
+    const path p = make_2dof_path();
+    const auto joint_only = trajectory::create(p, base_2dof_options());
+
     auto opt = base_2dof_options();
-    opt.tcp = trajectory::tcp_limits{.max_linear_velocity = 0.5,
-                                     .linear_jacobian = [](const xvector<>& q) { return test::planar_2link_jacobian(1.0, 1.0, q); },
-                                     .linear_velocity_gain = {}};
-    BOOST_CHECK_THROW(static_cast<void>(trajectory::create(p, opt)), std::invalid_argument);
+    opt.tcp = trajectory::tcp_limits{
+        .max_linear_speed = 0.5,
+        .evaluator = [](const xvector<>&,
+                        const xvector<>&,
+                        const xvector<>&) -> std::optional<trajectory::tcp_limits::linear_speed_per_arc_velocity> { return std::nullopt; },
+    };
+    const auto never_moving = trajectory::create(p, opt);
+
+    BOOST_TEST(never_moving.duration().count() == joint_only.duration().count());
+    BOOST_TEST(never_moving.get_integration_points().size() == joint_only.get_integration_points().size());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
