@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -64,9 +63,7 @@ class VIAM_TRAJEX_TOTG_API chain {
     ///
     /// @return The chain's degrees of freedom
     ///
-    [[nodiscard]] std::size_t dof() const noexcept {
-        return actuated_count_;
-    }
+    [[nodiscard]] std::size_t dof() const noexcept;
 
     ///
     /// Gets the number of joints in the chain, fixed ones included. There is one for each call
@@ -74,7 +71,6 @@ class VIAM_TRAJEX_TOTG_API chain {
     ///
     /// @return The chain's joint count
     ///
-    // Defined below the joint types, because joints_ cannot be used while they are incomplete.
     [[nodiscard]] std::size_t size() const noexcept;
 
     ///
@@ -373,19 +369,13 @@ class VIAM_TRAJEX_TOTG_API chain::builder {
     ///
     /// @return This builder, as an rvalue
     ///
-    builder&& extend(const joint_origin& origin) && {
-        return std::move(extend(origin));
-    }
+    builder&& extend(const joint_origin& origin) &&;
 
     /// @copydoc extend(const joint_origin&) &&
-    builder&& extend(const joint_origin& origin, const rotation_axis& axis) && {
-        return std::move(extend(origin, axis));
-    }
+    builder&& extend(const joint_origin& origin, const rotation_axis& axis) &&;
 
     /// @copydoc extend(const joint_origin&) &&
-    builder&& extend(const joint_origin& origin, const translation_axis& axis) && {
-        return std::move(extend(origin, axis));
-    }
+    builder&& extend(const joint_origin& origin, const translation_axis& axis) &&;
 
     ///
     /// Validates the joints and builds the chain.
@@ -405,10 +395,6 @@ class VIAM_TRAJEX_TOTG_API chain::builder {
     // with the joint's index.
     std::vector<joint_> joints_;
 };
-
-inline std::size_t chain::size() const noexcept {
-    return joints_.size();
-}
 
 template <typename Visitor>
 void chain::visit_joints(Visitor&& visitor) const {
